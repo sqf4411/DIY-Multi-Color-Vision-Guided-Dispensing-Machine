@@ -18,7 +18,7 @@ def order_points(pts: np.ndarray) -> np.ndarray:
 
 
 def run_path_teach(cell_index: int = 0,
-                   img_path: str = "mold.png") -> bool:
+                   img_path: str = "mold2.png") -> bool:
     """在黄金示教后的某一个小格子中编辑点胶路径。"""
 
     # ---------- 0. 读取黄金模板 ----------
@@ -35,7 +35,7 @@ def run_path_teach(cell_index: int = 0,
         print(f"❌ cell_index 越界: {cell_index}")
         return False
 
-    # ---------- 1. 读入 mold.png 并重新生成“黄金视角”整板 ----------
+    # ---------- 1. 读入 mold2.png 并重新生成“黄金视角”整板 ----------
     gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
         print(f"❌ 无法读取图像: {img_path}")

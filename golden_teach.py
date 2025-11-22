@@ -40,9 +40,9 @@ def run_golden_teach():
     drawing = False
     x1 = y1 = 0
 
-    img = cv2.imread("mold.png", cv2.IMREAD_GRAYSCALE)
+    img = cv2.imread("mold2.png", cv2.IMREAD_GRAYSCALE)
     if img is None:
-        print("❌ 无法读取 mold.png")
+        print("❌ 无法读取 mold2.png")
         return False
 
     # 找大模具框

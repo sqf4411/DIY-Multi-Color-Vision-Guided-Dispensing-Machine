@@ -75,6 +75,20 @@ class MainWindow(QWidget):
 
         self.live_detect = False     # 是否实时识别模具
 
+        # ==== 相机标定 / 去畸变 ====
+        self.K = None          # 内参矩阵
+        self.D = None          # 畸变系数
+        self.map1 = None       # remap 映射
+        self.map2 = None
+        self.calib_size = None # (w, h)
+        self._calib_loaded = False
+
+        # self.init_calibration()  # 读取 calib/camera_matrix.npy 和 dist_coeffs.npy
+
+        # 识别结果
+        self.big_box = None
+
+
         # 识别结果
         self.big_box = None
         self.cell_boxes = []
@@ -381,6 +395,32 @@ class MainWindow(QWidget):
             self.log("读取参数文件失败：", e)
             self.saved_params = {}
 
+    def init_calibration(self):
+        """从 calib 目录加载相机标定参数（camera_matrix.npy / dist_coeffs.npy）"""
+        try:
+            calib_dir = os.path.join(os.path.dirname(__file__), "calib")
+            cam_path = os.path.join(calib_dir, "camera_matrix.npy")
+            dist_path = os.path.join(calib_dir, "dist_coeffs.npy")
+
+            if os.path.exists(cam_path) and os.path.exists(dist_path):
+                self.K = np.load(cam_path)
+                self.D = np.load(dist_path)
+                self._calib_loaded = True
+                msg = "✅ 已加载标定参数 camera_matrix.npy / dist_coeffs.npy"
+            else:
+                self._calib_loaded = False
+                msg = "⚠ calib 目录下未找到 camera_matrix.npy 或 dist_coeffs.npy，将使用原始图像"
+
+        except Exception as e:
+            self._calib_loaded = False
+            msg = f"⚠ 加载标定参数失败：{e}"
+
+        # log_box 还没创建时，用 print，创建后再用 log()
+        if hasattr(self, "log_box"):
+            self.log(msg)
+        else:
+            print(msg)
+
     # ===== 黄金模板 =====
     def load_golden_templates(self):
         try:
@@ -417,19 +457,76 @@ class MainWindow(QWidget):
             self.log("保存参数失败：", e)
 
     # ================== 图像 / 保存 ==================
+
+    # 带棋盘的去畸变参数
+    # def update_image(self, img: np.ndarray):
+    #     # -------- 1. 如有标定参数，先创建 remap 映射 --------
+    #     frame = img
+    #
+    #     if self._calib_loaded:
+    #         h, w = frame.shape
+    #         if self.map1 is None or self.calib_size != (w, h):
+    #             # 只在第一次/分辨率变化时初始化
+    #             self.calib_size = (w, h)
+    #             try:
+    #                 newK, _ = cv2.getOptimalNewCameraMatrix(
+    #                     self.K, self.D, self.calib_size, 1, self.calib_size
+    #                 )
+    #                 self.map1, self.map2 = cv2.initUndistortRectifyMap(
+    #                     self.K, self.D, None, newK, self.calib_size, cv2.CV_16SC2
+    #                 )
+    #                 self.log(f"✅ 已创建去畸变映射，分辨率 = {w} x {h}")
+    #             except Exception as e:
+    #                 self.log(f"⚠ 创建去畸变映射失败：{e}")
+    #                 self.map1, self.map2 = None, None
+    #
+    #         # 真正做一次去畸变
+    #         if self.map1 is not None and self.map2 is not None:
+    #             frame = cv2.remap(frame, self.map1, self.map2, cv2.INTER_LINEAR)
+    #
+    #     # -------- 2. 把“去畸变后的图像”作为 last_frame --------
+    #     self.last_frame = frame.copy()
+    #
+    #     if self.freeze_display:
+    #         return
+    #
+    #     # -------- 3. 后面的逻辑完全保持不变，只是换成 frame --------
+    #     if self.live_detect:
+    #         color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(self.last_frame)
+    #         rgb = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
+    #         h, w, ch = rgb.shape
+    #         bytes_per_line = ch * w
+    #         qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
+    #     else:
+    #         h, w = self.last_frame.shape
+    #         qimg = QImage(self.last_frame.data, w, h, w, QImage.Format_Grayscale8).copy()
+    #
+    #     qpix = QPixmap.fromImage(qimg)
+    #     self.label.setPixmap(qpix.scaled(
+    #         self.label.width(),
+    #         self.label.height(),
+    #         Qt.KeepAspectRatio,
+    #         Qt.SmoothTransformation
+    #     ))
     def update_image(self, img: np.ndarray):
+        """
+        临时关闭相机标定 / 去畸变逻辑，直接使用相机原始图像。
+        """
+        # 直接用原图
         self.last_frame = img.copy()
 
         if self.freeze_display:
             return
 
         if self.live_detect:
+            # 和你原来一样，直接把 last_frame 丢给检测
             color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(self.last_frame)
             rgb = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
             bytes_per_line = ch * w
             qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
         else:
+            # 灰度显示
             h, w = self.last_frame.shape
             qimg = QImage(self.last_frame.data, w, h, w, QImage.Format_Grayscale8).copy()
 
@@ -521,20 +618,20 @@ class MainWindow(QWidget):
 
     # ================== 黄金示教 ==============================
     def on_golden_teach(self):
-        """点击‘黄金示教’，使用本地 mold.png 文件进行示教"""
+        """点击‘黄金示教’，使用本地 mold2.png 文件进行示教"""
 
         # ⭐ 不再停止相机线程，只是冻结左侧画面，避免刷新
         self.freeze_display = True
 
-        # 如果你是用固定的 mold.png，就只检查文件是否存在
-        if not os.path.exists("mold.png"):
-            self.log("❌ 未找到 mold.png，请先准备好这张图片")
+        # 如果你是用固定的 mold2.png，就只检查文件是否存在
+        if not os.path.exists("mold2.png"):
+            self.log("❌ 未找到 mold2.png，请先准备好这张图片")
             self.freeze_display = False
             return
 
         # 如果你想用当前画面当黄金，也可以这样保存（可选）
         # if self.last_frame is not None:
-        #     cv2.imwrite("mold.png", self.last_frame)
+        #     cv2.imwrite("mold2.png", self.last_frame)
 
         # 同步调用黄金示教
         from golden_teach import run_golden_teach
@@ -556,7 +653,7 @@ class MainWindow(QWidget):
         self.log("🧵 打开点胶路径示教窗口（默认小框 index=0）")
         try:
             from path_teach import run_path_teach
-            ok = run_path_teach(cell_index=0, img_path="mold.png")
+            ok = run_path_teach(cell_index=0, img_path="mold2.png")
             if ok:
                 self.log("✅ 点胶路径已保存到 disp_poly_cell0.npy / disp_dots_cell0.npy，已重新加载")
                 # ⭐ 路径更新后，刷新 mold_detector 的缓存

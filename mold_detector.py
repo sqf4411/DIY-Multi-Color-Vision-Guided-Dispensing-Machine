@@ -3,14 +3,16 @@ import cv2
 import numpy as np
 import os
 
-_TEMPLATES = None      # (4,4,2)
-_WARP_SIZE = None      # (2,)
-_PATH_POLY = {}
-_PATH_DOTS = {}
+# ====== 全局缓存：黄金示教数据 / 点胶路径 ======
+_TEMPLATES = None      # (4,4,2)  小框在黄金坐标系里的四点
+_WARP_SIZE = None      # (2,)    [W,H] 黄金图尺寸
+
+_PATH_POLY = None      # (N,2)   只存 cell0 的折线（黄金坐标系）
+_PATH_DOTS = None      # (K,2)   只存 cell0 的点集（黄金坐标系）
 
 
 def _order_points(pts: np.ndarray) -> np.ndarray:
-    """统一将四边形点排序为 tl,tr,br,bl."""
+    """把四边形点统一排序为 tl,tr,br,bl"""
     pts = np.array(pts, dtype=np.float32)
     s = pts.sum(axis=1)
     tl = pts[np.argmin(s)]
@@ -21,95 +23,51 @@ def _order_points(pts: np.ndarray) -> np.ndarray:
     return np.array([tl, tr, br, bl], dtype=np.float32)
 
 
-def _ensure_paths_for_all_cells():
-    """
-    如果只给 cell0 做了路径示教，就自动复制到其它 cell。
-    关键改动：对每个小框先 _order_points，避免 90° 旋转。
-    """
-    global _PATH_POLY, _PATH_DOTS, _TEMPLATES
-    if _TEMPLATES is None:
-        return
-
-    # 如果 0 号本身没有路径，就不用复制
-    if (0 not in _PATH_POLY) and (0 not in _PATH_DOTS):
-        return
-
-    base_box = _order_points(_TEMPLATES[0])   # 0 号小框（排序后的四点）
-
-    for idx in range(len(_TEMPLATES)):
-        if idx == 0:
-            continue
-
-        tgt_box = _order_points(_TEMPLATES[idx])
-        H, status = cv2.findHomography(base_box, tgt_box)
-        if H is None:
-            continue
-
-        # 复制折线
-        if idx not in _PATH_POLY and 0 in _PATH_POLY:
-            pts0 = _PATH_POLY[0].reshape(-1, 1, 2)
-            ptsi = cv2.perspectiveTransform(pts0, H).reshape(-1, 2)
-            _PATH_POLY[idx] = ptsi
-
-        # 复制点
-        if idx not in _PATH_DOTS and 0 in _PATH_DOTS:
-            pts0 = _PATH_DOTS[0].reshape(-1, 1, 2)
-            ptsi = cv2.perspectiveTransform(pts0, H).reshape(-1, 2)
-            _PATH_DOTS[idx] = ptsi
-
-
-def _load_all():
+def _load_golden_and_paths():
+    """第一次调用时加载黄金模板和 cell0 的点胶路径"""
     global _TEMPLATES, _WARP_SIZE, _PATH_POLY, _PATH_DOTS
-
-    if _TEMPLATES is None or _WARP_SIZE is None:
+    if _TEMPLATES is None:
         try:
             _TEMPLATES = np.load("slot_templates.npy")
             _WARP_SIZE = np.load("warp_size.npy").astype(int)
-            print(f"[mold_detector] 加载黄金模板 {_TEMPLATES.shape}, warp={_WARP_SIZE}")
+            print(f"[mold_detector] 黄金模板 slot_templates.npy 已加载 {_TEMPLATES.shape}, warp={_WARP_SIZE}")
         except Exception as e:
             print("[mold_detector] 未找到黄金模板，仅画大框。", e)
             _TEMPLATES = None
             _WARP_SIZE = None
 
-    if not _PATH_POLY and not _PATH_DOTS:
-        for idx in range(4):
-            poly_file = f"disp_poly_cell{idx}.npy"
-            dots_file = f"disp_dots_cell{idx}.npy"
+    # cell0 的折线
+    if _PATH_POLY is None and os.path.exists("disp_poly_cell0.npy"):
+        try:
+            _PATH_POLY = np.load("disp_poly_cell0.npy").astype(np.float32)
+            print(f"[mold_detector] 已加载点胶折线 disp_poly_cell0.npy, 点数={_PATH_POLY.shape[0]}")
+        except Exception as e:
+            print("[mold_detector] 加载 disp_poly_cell0.npy 失败：", e)
 
-            if os.path.exists(poly_file):
-                try:
-                    arr = np.load(poly_file).astype(np.float32)
-                    if arr.size > 0:
-                        _PATH_POLY[idx] = arr.reshape(-1, 2)
-                        print(f"[mold_detector] 加载点胶折线 {poly_file}, 点数={_PATH_POLY[idx].shape[0]}")
-                except Exception as e:
-                    print(f"[mold_detector] 加载 {poly_file} 失败：", e)
-
-            if os.path.exists(dots_file):
-                try:
-                    arr = np.load(dots_file).astype(np.float32)
-                    if arr.size > 0:
-                        _PATH_DOTS[idx] = arr.reshape(-1, 2)
-                        print(f"[mold_detector] 加载点胶点集 {dots_file}, 点数={_PATH_DOTS[idx].shape[0]}")
-                except Exception as e:
-                    print(f"[mold_detector] 加载 {dots_file} 失败：", e)
-
-    # ⭐ 这里会按新的排序逻辑，把 0 号路径复制到 1/2/3
-    _ensure_paths_for_all_cells()
+    # cell0 的点
+    if _PATH_DOTS is None and os.path.exists("disp_dots_cell0.npy"):
+        try:
+            _PATH_DOTS = np.load("disp_dots_cell0.npy").astype(np.float32)
+            print(f"[mold_detector] 已加载点胶点集 disp_dots_cell0.npy, 点数={_PATH_DOTS.shape[0]}")
+        except Exception as e:
+            print("[mold_detector] 加载 disp_dots_cell0.npy 失败：", e)
 
 
 def reload_golden_templates():
+    """UI 调用：黄金示教 / 路径示教之后，强制重新加载所有缓存"""
     global _TEMPLATES, _WARP_SIZE, _PATH_POLY, _PATH_DOTS
     _TEMPLATES = None
     _WARP_SIZE = None
-    _PATH_POLY = {}
-    _PATH_DOTS = {}
-    _load_all()
+    _PATH_POLY = None
+    _PATH_DOTS = None
+    _load_golden_and_paths()
 
 
 def _find_big_mold(gray: np.ndarray):
+    """只负责找大模具轮廓与外接四边形"""
     h_img, w_img = gray.shape
     img_area = h_img * w_img
+
     blur = cv2.GaussianBlur(gray, (7, 7), 0)
     _, th_bg = cv2.threshold(blur, 40, 255, cv2.THRESH_BINARY)
     kernel_big = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
@@ -133,17 +91,21 @@ def _find_big_mold(gray: np.ndarray):
 
 
 def detect_mold_and_cells(gray: np.ndarray):
-    _load_all()
+    """主入口：找到大模具 + 四个小框 + 叠加点胶路径"""
+    _load_golden_and_paths()
 
     color_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    # 1. 大模具
     big_rect, big_box = _find_big_mold(gray)
     if big_box is None:
         print("[mold_detector] 未找到大模具")
         return color_img, None, [], []
 
-    # 画大框
+    # 画大绿框
     cv2.drawContours(color_img, [big_box], 0, (0, 255, 0), 3)
 
+    # 画十字
     pts = big_box.astype(np.float32)
     s = pts.sum(axis=1)
     tl = pts[np.argmin(s)]
@@ -171,6 +133,7 @@ def detect_mold_and_cells(gray: np.ndarray):
                    markerSize=24,
                    thickness=2)
 
+    # 2. 如果没有黄金模板，就到这里结束
     if _TEMPLATES is None or _WARP_SIZE is None:
         return color_img, big_box, [], []
 
@@ -184,14 +147,15 @@ def detect_mold_and_cells(gray: np.ndarray):
         [0, goldH - 1]
     ], dtype=np.float32)
 
+    # 当前帧 <-> 黄金 的透视变换
     M_cur = cv2.getPerspectiveTransform(rect_pts, dst_pts)
     Minv_cur = cv2.getPerspectiveTransform(dst_pts, rect_pts)
 
-    # 画 4 个小框
+    # 3. 把 4 个黄金小框映射到当前图像
     cell_boxes = []
     cell_centers = []
     for idx in range(_TEMPLATES.shape[0]):
-        box_w = _TEMPLATES[idx].astype(np.float32)
+        box_w = _TEMPLATES[idx].astype(np.float32)        # 黄金坐标系
         pts_w = box_w.reshape(-1, 1, 2)
         pts_o = cv2.perspectiveTransform(pts_w, Minv_cur).reshape(-1, 2)
         box_o = pts_o.astype(np.int32)
@@ -207,26 +171,34 @@ def detect_mold_and_cells(gray: np.ndarray):
         cv2.putText(color_img, str(idx), (cx_o + 5, cy_o - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
-    # 折线
-    for idx, poly in _PATH_POLY.items():
-        if poly is None or poly.size == 0:
-            continue
-        pts_w = poly.reshape(-1, 1, 2)
-        pts_o = cv2.perspectiveTransform(pts_w, Minv_cur).reshape(-1, 2)
-        pts = pts_o.astype(np.int32)
-        for i in range(len(pts) - 1):
-            cv2.line(color_img, tuple(pts[i]), tuple(pts[i + 1]),
-                     (255, 0, 0), 1, cv2.LINE_AA)
+    # 4. 叠加点胶路径：从 cell0(黄金) -> 各 cell(当前图像) 做一次完整投影
+    if _PATH_POLY is not None or _PATH_DOTS is not None:
+        if _TEMPLATES.shape[0] > 0:
+            base_box_gold = _order_points(_TEMPLATES[0])  # cell0 在黄金中的四点
 
-    # 点
-    for idx, dots in _PATH_DOTS.items():
-        if dots is None or dots.size == 0:
-            continue
-        pts_w = dots.reshape(-1, 1, 2)
-        pts_o = cv2.perspectiveTransform(pts_w, Minv_cur).reshape(-1, 2)
-        pts = pts_o.astype(np.int32)
-        for (x, y) in pts:
-            cv2.circle(color_img, (int(x), int(y)),
-                       3, (255, 0, 255), -1)
+            for idx, box_img in enumerate(cell_boxes):
+                dst_box_img = _order_points(box_img)
+                # 关键：从「黄金 cell0」直接投影到「当前帧 cell_i」
+                H = cv2.getPerspectiveTransform(base_box_gold, dst_box_img)
+
+                # 折线
+                if _PATH_POLY is not None and _PATH_POLY.size > 0:
+                    pts_w = _PATH_POLY.reshape(-1, 1, 2)
+                    pts_o = cv2.perspectiveTransform(pts_w, H).reshape(-1, 2)
+                    pts = pts_o.astype(np.int32)
+                    for i in range(len(pts) - 1):
+                        cv2.line(color_img,
+                                 tuple(pts[i]),
+                                 tuple(pts[i + 1]),
+                                 (255, 0, 0), 1, cv2.LINE_AA)
+
+                # 点
+                if _PATH_DOTS is not None and _PATH_DOTS.size > 0:
+                    pts_w = _PATH_DOTS.reshape(-1, 1, 2)
+                    pts_o = cv2.perspectiveTransform(pts_w, H).reshape(-1, 2)
+                    pts = pts_o.astype(np.int32)
+                    for (x, y) in pts:
+                        cv2.circle(color_img, (int(x), int(y)),
+                                   3, (255, 0, 255), -1)
 
     return color_img, big_box, cell_boxes, cell_centers

@@ -2,9 +2,9 @@ import cv2
 import numpy as np
 
 # 1. 读取你保存的那张模具图片
-img = cv2.imread("mold.png", cv2.IMREAD_GRAYSCALE)
+img = cv2.imread("mold2.png", cv2.IMREAD_GRAYSCALE)
 if img is None:
-    print("找不到 mold.png，请确认文件名和路径")
+    print("找不到 mold2.png，请确认文件名和路径")
     exit(0)
 
 h_img, w_img = img.shape

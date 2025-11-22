@@ -4,16 +4,15 @@ import numpy as np
 import os
 
 # ====== 全局缓存 ======
-_TEMPLATES = None  # (4,4,2) 黄框坐标 (用户手画的)
+_TEMPLATES = None  # (4,4,2) 黄框坐标
 _WARP_SIZE = None  # (2,)    [W, H]
 
 _PATH_POLY = None  # (N,2)   Cell 0 路径
 _PATH_DOTS = None  # (K,2)   Cell 0 点集
 
-# ⭐ 智能生成的独立模板库 ⭐
-# 结构: { idx: {'img': template_image, 'offset': (dx, dy)} }
-# offset 表示：该模板左上角相对于“标准路径原点”的偏移量
-_SMART_TEMPLATES = {}
+# 0 号【去边缘】主模板
+_CORE_TEMPLATE = None
+_CORE_REF_TL = None  # 核心模板在黄金图的绝对坐标 (x, y)
 
 
 def _order_points(pts: np.ndarray) -> np.ndarray:
@@ -64,8 +63,8 @@ def _get_perspective_matrix(box, w, h):
 
 
 def _load_golden_and_paths():
-    """加载数据并执行【自动校准】生成智能模板"""
-    global _TEMPLATES, _WARP_SIZE, _PATH_POLY, _PATH_DOTS, _SMART_TEMPLATES
+    """加载数据并提取【去边缘】的核心模板"""
+    global _TEMPLATES, _WARP_SIZE, _PATH_POLY, _PATH_DOTS, _CORE_TEMPLATE, _CORE_REF_TL
 
     if _TEMPLATES is None:
         try:
@@ -89,9 +88,8 @@ def _load_golden_and_paths():
         except:
             pass
 
-    # ⭐ 核心：启动时自动校准 ⭐
-    # 这一步解决“手画框不准”和“光照不同”两个问题
-    if not _SMART_TEMPLATES and os.path.exists("mold2.png"):
+    # ⭐ 提取 0 号核心模板 (去除 15% 边缘) ⭐
+    if _CORE_TEMPLATE is None and os.path.exists("mold2.png"):
         try:
             gold_raw = cv2.imread("mold2.png", cv2.IMREAD_GRAYSCALE)
             if gold_raw is None: return
@@ -103,81 +101,41 @@ def _load_golden_and_paths():
             M_gold = _get_perspective_matrix(gold_big_box, goldW, goldH)
             gold_warped = cv2.warpPerspective(gold_raw, M_gold, (goldW, goldH))
 
-            # 1. 提取 0 号作为“基准特征”
+            # 获取 0 号框
             box0 = _order_points(_TEMPLATES[0])
             x0, y0 = int(min(box0[:, 0])), int(min(box0[:, 1]))
             x1, y1 = int(max(box0[:, 0])), int(max(box0[:, 1]))
 
-            # 收缩一点边缘，避免包含边框线，提高匹配准确度
-            margin = 5
-            x0, y0 = max(0, x0 + margin), max(0, y0 + margin)
-            x1, y1 = min(goldW, x1 - margin), min(goldH, y1 - margin)
+            # ⭐ 核心逻辑：内缩裁剪 (去除侧壁干扰) ⭐
+            w_box = x1 - x0
+            h_box = y1 - y0
+            crop_ratio = 0.15  # 每一边切掉 15%
 
-            master_tpl = gold_warped[y0:y1, x0:x1].copy()
-            master_ref_tl = np.array([x0, y0], dtype=np.float32)  # 0号的绝对坐标
+            margin_x = int(w_box * crop_ratio)
+            margin_y = int(h_box * crop_ratio)
 
-            # 2. 遍历所有位置，进行【内部自对齐】
-            for idx in range(_TEMPLATES.shape[0]):
-                # 获取该位置的粗略区域
-                box_i = _order_points(_TEMPLATES[idx])
-                ix, iy = int(min(box_i[:, 0])), int(min(box_i[:, 1]))
+            core_x0 = max(0, x0 + margin_x)
+            core_y0 = max(0, y0 + margin_y)
+            core_x1 = min(goldW, x1 - margin_x)
+            core_y1 = min(goldH, y1 - margin_y)
 
-                # 在该区域附近搜索 0 号模板
-                search_pad = 60
-                sx = max(0, ix - search_pad)
-                sy = max(0, iy - search_pad)
-                sw = (x1 - x0) + 2 * search_pad
-                sh = (y1 - y0) + 2 * search_pad
+            _CORE_TEMPLATE = gold_warped[core_y0:core_y1, core_x0:core_x1].copy()
+            # 记录这个核心模板在黄金图中的绝对坐标，作为基准
+            _CORE_REF_TL = np.array([core_x0, core_y0], dtype=np.float32)
 
-                if sx + sw > goldW: sw = goldW - sx
-                if sy + sh > goldH: sh = goldH - sy
-
-                roi = gold_warped[sy:sy + sh, sx:sx + sw]
-
-                # 在黄金图内部找对齐点
-                res = cv2.matchTemplate(roi, master_tpl, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(res)
-
-                if max_val > 0.4:  # 在黄金图内部，相似度应该很高
-                    match_x = sx + max_loc[0]
-                    match_y = sy + max_loc[1]
-
-                    # 重点：在对齐的位置，提取【该位置独有】的模板
-                    # 这样模板就包含了该位置独特的光照信息
-                    new_tpl = gold_warped[match_y: match_y + (y1 - y0), match_x: match_x + (x1 - x0)].copy()
-
-                    # 计算这个新模板相对于 0 号基准的偏移
-                    # 如果 idx=0，这个偏移应该是 (0,0)
-                    # 这里的 offset 是为了将来把 0 号路径搬过来用的
-                    # 逻辑：Live_Pos + Offset = Path_Pos ? 不对
-                    # 逻辑：路径是基于 master_ref_tl 的。
-                    # 我们找到了 master_tpl 在 idx 处的坐标是 (match_x, match_y)
-                    # 这意味着：(match_x, match_y) 等价于 0号的 (x0, y0)
-                    # 所以，只要我们在 Live 图里找到了这个 new_tpl，那个位置就等价于 (x0, y0)
-                    # 路径偏移量 = (Path - (x0, y0))
-
-                    _SMART_TEMPLATES[idx] = {
-                        'img': new_tpl,
-                        'ref_origin': np.array([x0, y0], dtype=np.float32)  # 始终记录 0 号的原点
-                    }
-                else:
-                    print(f"[mold_detector] 位置 {idx} 自动对齐失败，将使用原始框")
-                    # 降级处理：直接切原始框
-                    pass
-
-            print(f"[mold_detector] 自动校准完成，生成 {len(_SMART_TEMPLATES)} 个智能模板")
+            print(f"[mold_detector] 0号核心模板提取成功 (已去边): {_CORE_TEMPLATE.shape}")
 
         except Exception as e:
-            print(f"[mold_detector] 自动校准出错: {e}")
+            print(f"[mold_detector] 模板生成出错: {e}")
 
 
 def reload_golden_templates():
-    global _TEMPLATES, _WARP_SIZE, _PATH_POLY, _PATH_DOTS, _SMART_TEMPLATES
+    global _TEMPLATES, _WARP_SIZE, _PATH_POLY, _PATH_DOTS, _CORE_TEMPLATE
     _TEMPLATES = None
     _WARP_SIZE = None
     _PATH_POLY = None
     _PATH_DOTS = None
-    _SMART_TEMPLATES = {}
+    _CORE_TEMPLATE = None
     _load_golden_and_paths()
 
 
@@ -215,9 +173,8 @@ def detect_mold_and_cells(gray: np.ndarray):
     cell_boxes = []
     cell_centers = []
 
-    # 3. 绘制搜索区域 (黄框) - 修复之前消失的问题
+    # UI显示黄框
     for idx in range(_TEMPLATES.shape[0]):
-        # 这里依然用手画框做可视化，告诉用户大概在哪里搜
         box_w = _TEMPLATES[idx].astype(np.float32)
         pts_w = box_w.reshape(-1, 1, 2)
         if pts_w.size > 0:
@@ -227,25 +184,23 @@ def detect_mold_and_cells(gray: np.ndarray):
                 cell_boxes.append(box_o)
                 cx, cy = int(box_o[:, 0].mean()), int(box_o[:, 1].mean())
                 cell_centers.append((cx, cy))
-                cv2.drawContours(color_img, [box_o], 0, (0, 255, 255), 1)  # 细黄线
+                cv2.drawContours(color_img, [box_o], 0, (0, 255, 255), 1)
 
-    # 4. 智能匹配与路径绘制
-    if (_PATH_POLY is not None or _PATH_DOTS is not None) and len(_SMART_TEMPLATES) > 0:
+    # 3. 核心模板匹配
+    if (_PATH_POLY is not None or _PATH_DOTS is not None) and _CORE_TEMPLATE is not None:
 
-        search_pad = 50
+        th, tw = _CORE_TEMPLATE.shape[:2]
+        search_pad = 60  # 搜索范围
 
-        for idx, data in _SMART_TEMPLATES.items():
-            tpl = data['img']
-            ref_origin = data['ref_origin']  # 这是 0 号在黄金图里的绝对坐标 (x0, y0)
-
-            th, tw = tpl.shape[:2]
-
-            # 确定搜索区域 (基于手画框中心)
+        for idx in range(_TEMPLATES.shape[0]):
+            # 获取搜索中心 (手画框中心)
             guess_box = _order_points(_TEMPLATES[idx])
-            bx, by = int(min(guess_box[:, 0])), int(min(guess_box[:, 1]))
+            bx = int((min(guess_box[:, 0]) + max(guess_box[:, 0])) / 2)
+            by = int((min(guess_box[:, 1]) + max(guess_box[:, 1])) / 2)
 
-            rx = max(0, bx - search_pad)
-            ry = max(0, by - search_pad)
+            # 确定搜索区域 (以中心向外扩)
+            rx = max(0, bx - search_pad - tw // 2)
+            ry = max(0, by - search_pad - th // 2)
             rw = tw + 2 * search_pad
             rh = th + 2 * search_pad
 
@@ -255,48 +210,56 @@ def detect_mold_and_cells(gray: np.ndarray):
             roi = curr_warped[ry:ry + rh, rx:rx + rw]
 
             match_success = False
+            offset = np.array([0, 0], dtype=np.float32)
+
+            # 尝试匹配
             if roi.shape[0] >= th and roi.shape[1] >= tw:
-                res = cv2.matchTemplate(roi, tpl, cv2.TM_CCOEFF_NORMED)
+                res = cv2.matchTemplate(roi, _CORE_TEMPLATE, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-                if max_val > 0.35:  # 降低阈值，适应性更强
+                # 因为去除了边缘干扰，匹配度应该很高，这里设 0.3 保证检出
+                if max_val > 0.3:
                     match_success = True
-                    live_x = rx + max_loc[0]
-                    live_y = ry + max_loc[1]
+                    # 还原到全图坐标 (模板左上角)
+                    match_x = rx + max_loc[0]
+                    match_y = ry + max_loc[1]
+                    current_live_tl = np.array([match_x, match_y], dtype=np.float32)
 
-                    # 核心逻辑：
-                    # live_x, live_y 是当前模具的特征点位置
-                    # ref_origin 是 0 号模具的特征点位置
-                    # 路径是基于 ref_origin 的
-                    # 所以：Current_Path = Path_Data - ref_origin + (live_x, live_y)
+                    # 计算偏移：当前核心位置 - 0号核心基准位置
+                    offset = current_live_tl - _CORE_REF_TL
+                else:
+                    # 匹配失败，打印日志
+                    pass
 
-                    shift = np.array([live_x, live_y], dtype=np.float32) - ref_origin
+            # 兜底逻辑：如果实在没匹配到，使用手画框的相对位移来估算
+            # (防止画面全空，虽然位置可能不准)
+            if not match_success:
+                # 计算手画框相对于 0 号手画框的偏移
+                box0 = _order_points(_TEMPLATES[0])
+                c0_x = (min(box0[:, 0]) + max(box0[:, 0])) / 2
+                c0_y = (min(box0[:, 1]) + max(box0[:, 1])) / 2
 
-                    # 绘制折线
-                    if _PATH_POLY is not None:
-                        pts_gold = _PATH_POLY + shift
-                        pts_w = pts_gold.reshape(-1, 1, 2)
-                        res_o = cv2.perspectiveTransform(pts_w, Minv_cur)
-                        if res_o is not None:
-                            pts = res_o.reshape(-1, 2).astype(np.int32)
-                            for i in range(len(pts) - 1):
-                                cv2.line(color_img, tuple(pts[i]), tuple(pts[i + 1]), (255, 0, 0), 1, cv2.LINE_AA)
+                manual_offset_x = bx - c0_x
+                manual_offset_y = by - c0_y
+                offset = np.array([manual_offset_x, manual_offset_y], dtype=np.float32)
 
-                    # 绘制点
-                    if _PATH_DOTS is not None:
-                        pts_gold = _PATH_DOTS + shift
-                        pts_w = pts_gold.reshape(-1, 1, 2)
-                        res_o = cv2.perspectiveTransform(pts_w, Minv_cur)
-                        if res_o is not None:
-                            pts = res_o.reshape(-1, 2).astype(np.int32)
-                            for px, py in pts:
-                                cv2.circle(color_img, (int(px), int(py)), 3, (255, 0, 255), -1)
+            # 绘制
+            if _PATH_POLY is not None:
+                pts_gold = _PATH_POLY + offset
+                pts_w = pts_gold.reshape(-1, 1, 2)
+                res_o = cv2.perspectiveTransform(pts_w, Minv_cur)
+                if res_o is not None:
+                    pts = res_o.reshape(-1, 2).astype(np.int32)
+                    for i in range(len(pts) - 1):
+                        cv2.line(color_img, tuple(pts[i]), tuple(pts[i + 1]), (255, 0, 0), 1, cv2.LINE_AA)
 
-            if match_success:
-                # 匹配成功画绿框 (调试用)
-                # p1 = (int(live_x), int(live_y))
-                # p2 = (int(live_x+tw), int(live_y+th))
-                # cv2.rectangle(curr_warped, p1, p2, 255, 2) # 注意这是在 warped 图上画的，外面看不到
-                pass
+            if _PATH_DOTS is not None:
+                pts_gold = _PATH_DOTS + offset
+                pts_w = pts_gold.reshape(-1, 1, 2)
+                res_o = cv2.perspectiveTransform(pts_w, Minv_cur)
+                if res_o is not None:
+                    pts = res_o.reshape(-1, 2).astype(np.int32)
+                    for px, py in pts:
+                        cv2.circle(color_img, (int(px), int(py)), 3, (255, 0, 255), -1)
 
     return color_img, big_box, cell_boxes, cell_centers

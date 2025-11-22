@@ -34,25 +34,27 @@ def run_path_teach(cell_index: int = 0,
     False : 用户按 Q 或中途出错
     """
 
-    # ============ 1. 读整板图 + 用黄金模板找 4 个小格子 ============
+    # ============ 1. 读取图片 & 模具检测 ============
     gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
-        print(f"❌ 无法读取 {img_path} ，请确认路径和文件是否存在")
+        print(f"❌ 无法读取图像: {img_path}")
         return False
 
-    color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(gray)
-    if not cell_boxes or big_box is None:
-        print("❌ detect_mold_and_cells 未找到小黄框，请先做好黄金示教")
+    color, big_box, cell_boxes, cell_centers = detect_mold_and_cells(gray)
+    if big_box is None or cell_boxes is None:
+        print("❌ 未检测到模具或小格子，请先完成黄金示教和模具识别")
         return False
 
     if not (0 <= cell_index < len(cell_boxes)):
-        print(f"❌ cell_index={cell_index} 越界，目前只有 {len(cell_boxes)} 个小格子")
+        print(f"❌ cell_index 超出范围: {cell_index}")
         return False
 
-    box = cell_boxes[cell_index].astype(np.float32)
-    rect = order_points(box)
+    cell_box = cell_boxes[cell_index]  # (4,2)
 
-    # ============ 2. 对该小格子做透视矫正，得到正向小图 ============
+    # ============ 2. 透视矫正，把该小格子单独拉正 ============
+    rect = order_points(cell_box)
+
+    # 计算目标宽高
     widthA = np.linalg.norm(rect[2] - rect[3])
     widthB = np.linalg.norm(rect[1] - rect[0])
     maxW = int(max(widthA, widthB))
@@ -73,17 +75,17 @@ def run_path_teach(cell_index: int = 0,
 
     # -------- 缩放到合适大小（只影响显示，不影响保存坐标） --------
     max_display = 700  # 窗口最长边不超过 700 像素
-    scale = min(max_display / maxW, max_display / maxH, 1.0)
+    scale = min(max_display / maxW, max_display / maxH, 2.0)
     disp_w = int(maxW * scale)
     disp_h = int(maxH * scale)
 
-    # ============ 3. 载入之前保存的路径（如果有的话） ============
-    poly_file = f"disp_poly_cell{cell_index}.npy"
-    dots_file = f"disp_dots_cell{cell_index}.npy"
+    # ============ 3. 尝试加载历史路径（折线 + 点） ============
+    poly_file = f"cell_{cell_index}_polylines.npy"
+    dots_file = f"cell_{cell_index}_dots.npy"
 
-    polylines = []      # list[np.ndarray(N,2)]
-    current_line = []   # 正在画的这一条线（列表）
-    dots = []           # list[(x,y)]
+    polylines = []  # list of (N,2) np.ndarray
+    dots = []       # list of (x, y)
+    current_line = []
 
     try:
         arr = np.load(poly_file, allow_pickle=True)
@@ -153,7 +155,7 @@ def run_path_teach(cell_index: int = 0,
         # 顶部提示
         head = np.zeros((30, disp_w, 3), dtype=np.uint8)
         cv2.putText(head, "L: line   R: dot   N: new line   "
-                          "C: clear   S: save   Q: quit",
+                          "C: clear   Z: undo   S: save   Q: quit",
                     (10, 22), cv2.FONT_HERSHEY_SIMPLEX,
                     0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
@@ -207,6 +209,19 @@ def run_path_teach(cell_index: int = 0,
             polylines.clear()
             current_line = []
             dots.clear()
+        elif key in (ord('z'), ord('Z')):
+            # 回撤一步
+            if mode == 'line':
+                if current_line:
+                    # 撤掉当前线最后一个点
+                    current_line.pop()
+                elif polylines:
+                    # 当前线为空，就撤掉最后一条线
+                    polylines.pop()
+            elif mode == 'dot':
+                if dots:
+                    # 点模式撤掉最后一个点
+                    dots.pop()
         elif key in (ord('q'), ord('Q')):
             print("⚠ 用户取消，不保存点胶路径")
             cv2.destroyWindow(WINDOW_NAME)
@@ -231,4 +246,3 @@ def run_path_teach(cell_index: int = 0,
             cv2.destroyWindow(WINDOW_NAME)
             return True
         # 其它按键忽略
-

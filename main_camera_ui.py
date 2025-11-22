@@ -558,7 +558,10 @@ class MainWindow(QWidget):
             from path_teach import run_path_teach
             ok = run_path_teach(cell_index=0, img_path="mold.png")
             if ok:
-                self.log("✅ 点胶路径已保存到 disp_poly_cell0.npy / disp_dots_cell0.npy")
+                self.log("✅ 点胶路径已保存到 disp_poly_cell0.npy / disp_dots_cell0.npy，已重新加载")
+                # ⭐ 路径更新后，刷新 mold_detector 的缓存
+                from mold_detector import reload_golden_templates
+                reload_golden_templates()
             else:
                 self.log("⚠ 点胶路径编辑已取消或未保存")
         except Exception as e:

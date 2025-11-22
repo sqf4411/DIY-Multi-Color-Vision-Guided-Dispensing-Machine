@@ -3,106 +3,113 @@ import cv2
 import numpy as np
 import os
 
-# mold_detector.py
-import cv2
-import numpy as np
-import os
-
-# ====== 全局缓存：黄金示教数据 / 点胶路径 ======
 _TEMPLATES = None      # (4,4,2)
-_WARP_SIZE = None      # (2,)  [W,H]
+_WARP_SIZE = None      # (2,)
+_PATH_POLY = {}
+_PATH_DOTS = {}
 
-_PATH_POLY = None      # (N,2)  cell0 的折线路径
-_PATH_DOTS = None      # (K,2)  cell0 的点集
+
+def _order_points(pts: np.ndarray) -> np.ndarray:
+    """统一将四边形点排序为 tl,tr,br,bl."""
+    pts = np.array(pts, dtype=np.float32)
+    s = pts.sum(axis=1)
+    tl = pts[np.argmin(s)]
+    br = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    tr = pts[np.argmin(diff)]
+    bl = pts[np.argmax(diff)]
+    return np.array([tl, tr, br, bl], dtype=np.float32)
 
 
-# ====================================================
-#  加载 黄金四小框 + warp_size + 点胶路径
-# ====================================================
-def _load_golden_and_paths():
+def _ensure_paths_for_all_cells():
+    """
+    如果只给 cell0 做了路径示教，就自动复制到其它 cell。
+    关键改动：对每个小框先 _order_points，避免 90° 旋转。
+    """
+    global _PATH_POLY, _PATH_DOTS, _TEMPLATES
+    if _TEMPLATES is None:
+        return
+
+    # 如果 0 号本身没有路径，就不用复制
+    if (0 not in _PATH_POLY) and (0 not in _PATH_DOTS):
+        return
+
+    base_box = _order_points(_TEMPLATES[0])   # 0 号小框（排序后的四点）
+
+    for idx in range(len(_TEMPLATES)):
+        if idx == 0:
+            continue
+
+        tgt_box = _order_points(_TEMPLATES[idx])
+        H, status = cv2.findHomography(base_box, tgt_box)
+        if H is None:
+            continue
+
+        # 复制折线
+        if idx not in _PATH_POLY and 0 in _PATH_POLY:
+            pts0 = _PATH_POLY[0].reshape(-1, 1, 2)
+            ptsi = cv2.perspectiveTransform(pts0, H).reshape(-1, 2)
+            _PATH_POLY[idx] = ptsi
+
+        # 复制点
+        if idx not in _PATH_DOTS and 0 in _PATH_DOTS:
+            pts0 = _PATH_DOTS[0].reshape(-1, 1, 2)
+            ptsi = cv2.perspectiveTransform(pts0, H).reshape(-1, 2)
+            _PATH_DOTS[idx] = ptsi
+
+
+def _load_all():
     global _TEMPLATES, _WARP_SIZE, _PATH_POLY, _PATH_DOTS
 
-    # ---------- 1. 黄金模板 ----------
-    if _TEMPLATES is None:
+    if _TEMPLATES is None or _WARP_SIZE is None:
         try:
             _TEMPLATES = np.load("slot_templates.npy")
             _WARP_SIZE = np.load("warp_size.npy").astype(int)
-            print(f"✅ 黄金模板 slot_templates.npy 已加载 {_TEMPLATES.shape}, warp={_WARP_SIZE}")
+            print(f"[mold_detector] 加载黄金模板 {_TEMPLATES.shape}, warp={_WARP_SIZE}")
         except Exception as e:
-            print("⚠ 未找到黄金模板，仅画大框。", e)
+            print("[mold_detector] 未找到黄金模板，仅画大框。", e)
             _TEMPLATES = None
             _WARP_SIZE = None
 
-    # ---------- 2. 点胶折线 ----------
-    if _PATH_POLY is None and os.path.exists("disp_poly_cell0.npy"):
-        try:
-            _PATH_POLY = np.load("disp_poly_cell0.npy").astype(np.float32)
-            print(f"✅ 已加载点胶折线 disp_poly_cell0.npy，点数 = {_PATH_POLY.shape[0]}")
-        except Exception as e:
-            print("⚠ 加载 disp_poly_cell0.npy 失败：", e)
+    if not _PATH_POLY and not _PATH_DOTS:
+        for idx in range(4):
+            poly_file = f"disp_poly_cell{idx}.npy"
+            dots_file = f"disp_dots_cell{idx}.npy"
 
-    # ---------- 3. 点胶点 ----------
-    if _PATH_DOTS is None and os.path.exists("disp_dots_cell0.npy"):
-        try:
-            _PATH_DOTS = np.load("disp_dots_cell0.npy").astype(np.float32)
-            print(f"✅ 已加载点胶点集 disp_dots_cell0.npy，点数 = {_PATH_DOTS.shape[0]}")
-        except Exception as e:
-            print("⚠ 加载 disp_dots_cell0.npy 失败：", e)
+            if os.path.exists(poly_file):
+                try:
+                    arr = np.load(poly_file).astype(np.float32)
+                    if arr.size > 0:
+                        _PATH_POLY[idx] = arr.reshape(-1, 2)
+                        print(f"[mold_detector] 加载点胶折线 {poly_file}, 点数={_PATH_POLY[idx].shape[0]}")
+                except Exception as e:
+                    print(f"[mold_detector] 加载 {poly_file} 失败：", e)
+
+            if os.path.exists(dots_file):
+                try:
+                    arr = np.load(dots_file).astype(np.float32)
+                    if arr.size > 0:
+                        _PATH_DOTS[idx] = arr.reshape(-1, 2)
+                        print(f"[mold_detector] 加载点胶点集 {dots_file}, 点数={_PATH_DOTS[idx].shape[0]}")
+                except Exception as e:
+                    print(f"[mold_detector] 加载 {dots_file} 失败：", e)
+
+    # ⭐ 这里会按新的排序逻辑，把 0 号路径复制到 1/2/3
+    _ensure_paths_for_all_cells()
 
 
 def reload_golden_templates():
-    """UI 调用：强制重新加载（黄金示教或路径编辑后）"""
     global _TEMPLATES, _WARP_SIZE, _PATH_POLY, _PATH_DOTS
     _TEMPLATES = None
     _WARP_SIZE = None
-    _PATH_POLY = None
-    _PATH_DOTS = None
-    _load_golden_and_paths()
+    _PATH_POLY = {}
+    _PATH_DOTS = {}
+    _load_all()
 
 
-def _load_golden_templates():
-    """只在第一次调用时加载一次黄金示教数据"""
-    global _TEMPLATES, _WARP_SIZE
-    if _TEMPLATES is not None:
-        return
-
-    try:
-        _TEMPLATES = np.load("slot_templates.npy")          # (4,4,2)
-        _WARP_SIZE = np.load("warp_size.npy").astype(int)   # (2,)
-        print(f"✅ 黄金模板 slot_templates.npy 加载成功, 形状: {_TEMPLATES.shape},{_WARP_SIZE}")
-        print(f"✅ 黄金坐标系尺寸 warp_size = {_WARP_SIZE}")
-    except Exception as e:
-        print("⚠ 未找到黄金示教文件，仅识别大框。错误：", e)
-        _TEMPLATES = None
-        _WARP_SIZE = None
-
-def reload_golden_templates():
-    """
-    外部调用：强制重新从硬盘加载黄金示教数据。
-    黄金示教完成后，在 UI 里调用一次即可。
-    """
-    global _TEMPLATES, _WARP_SIZE
-    _TEMPLATES = None
-    _WARP_SIZE = None
-    _load_golden_templates()
-
-def detect_mold_and_cells(gray: np.ndarray):
-    """
-    输入:
-        gray: 单通道灰度图 (H, W)
-
-    输出:
-        color_img   : 画好大绿框 + 十字 + (可选)小黄框 的 BGR 图
-        big_box     : 大模具外框四点，shape (4,2)，np.int32
-        cell_boxes  : 小方框列表，每个 (4,2) np.int32   —— 若没黄金模板则为空列表
-        cell_centers: 小方框中心点列表，每个是 (x,y) 元组
-    """
-    _load_golden_templates()  # 先尝试加载黄金模板
-
+def _find_big_mold(gray: np.ndarray):
     h_img, w_img = gray.shape
     img_area = h_img * w_img
-
-    # ================== 1. 找大模具轮廓 ==================
     blur = cv2.GaussianBlur(gray, (7, 7), 0)
     _, th_bg = cv2.threshold(blur, 40, 255, cv2.THRESH_BINARY)
     kernel_big = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
@@ -117,20 +124,27 @@ def detect_mold_and_cells(gray: np.ndarray):
             max_area = area
             big_mold_cnt = c
 
-    color_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-
     if big_mold_cnt is None:
-        print("❌ 未找到大模具，请调整光照/视野")
+        return None, None
+
+    big_rect = cv2.minAreaRect(big_mold_cnt)
+    big_box = cv2.boxPoints(big_rect).astype(np.int32)
+    return big_rect, big_box
+
+
+def detect_mold_and_cells(gray: np.ndarray):
+    _load_all()
+
+    color_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    big_rect, big_box = _find_big_mold(gray)
+    if big_box is None:
+        print("[mold_detector] 未找到大模具")
         return color_img, None, [], []
 
-    # 外接旋转矩形
-    big_rect = cv2.minAreaRect(big_mold_cnt)      # ((cx,cy),(w,h),angle)
-    big_box = cv2.boxPoints(big_rect).astype(np.int32)
-    cv2.drawContours(color_img, [big_box], 0, (0, 255, 0), 3)  # 绿色大框
+    # 画大框
+    cv2.drawContours(color_img, [big_box], 0, (0, 255, 0), 3)
 
-    # ================== 2. 画“跟着大框转”的十字 ==================
     pts = big_box.astype(np.float32)
-
     s = pts.sum(axis=1)
     tl = pts[np.argmin(s)]
     br = pts[np.argmax(s)]
@@ -157,13 +171,11 @@ def detect_mold_and_cells(gray: np.ndarray):
                    markerSize=24,
                    thickness=2)
 
-    # ================== 3. 若没有黄金模板，只返回大框 ==================
     if _TEMPLATES is None or _WARP_SIZE is None:
         return color_img, big_box, [], []
 
     goldW, goldH = int(_WARP_SIZE[0]), int(_WARP_SIZE[1])
 
-    # 当前图像中的大模具四个点 -> 黄金坐标系 (0~goldW-1, 0~goldH-1)
     rect_pts = np.array([tl, tr, br, bl], dtype=np.float32)
     dst_pts = np.array([
         [0, 0],
@@ -172,33 +184,49 @@ def detect_mold_and_cells(gray: np.ndarray):
         [0, goldH - 1]
     ], dtype=np.float32)
 
-    # 当前帧的 透视矩阵 / 逆矩阵
     M_cur = cv2.getPerspectiveTransform(rect_pts, dst_pts)
     Minv_cur = cv2.getPerspectiveTransform(dst_pts, rect_pts)
 
-    # ================== 4. 把 4 个黄金小框映射回当前画面 ==================
+    # 画 4 个小框
     cell_boxes = []
     cell_centers = []
-
-    for idx in range(4):
-        box_w = _TEMPLATES[idx].astype(np.float32)   # (4,2) in 黄金坐标系
-
-        # 4 个点 -> 当前图像
+    for idx in range(_TEMPLATES.shape[0]):
+        box_w = _TEMPLATES[idx].astype(np.float32)
         pts_w = box_w.reshape(-1, 1, 2)
         pts_o = cv2.perspectiveTransform(pts_w, Minv_cur).reshape(-1, 2)
         box_o = pts_o.astype(np.int32)
         cell_boxes.append(box_o)
 
-        # 中心点
         cx_o = int(box_o[:, 0].mean())
         cy_o = int(box_o[:, 1].mean())
         cell_centers.append((cx_o, cy_o))
 
-        # 画黄框 + 红十字 + 序号
         cv2.drawContours(color_img, [box_o], 0, (0, 255, 255), 2)
         cv2.drawMarker(color_img, (cx_o, cy_o), (0, 0, 255),
                        cv2.MARKER_CROSS, 18, 2)
         cv2.putText(color_img, str(idx), (cx_o + 5, cy_o - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+    # 折线
+    for idx, poly in _PATH_POLY.items():
+        if poly is None or poly.size == 0:
+            continue
+        pts_w = poly.reshape(-1, 1, 2)
+        pts_o = cv2.perspectiveTransform(pts_w, Minv_cur).reshape(-1, 2)
+        pts = pts_o.astype(np.int32)
+        for i in range(len(pts) - 1):
+            cv2.line(color_img, tuple(pts[i]), tuple(pts[i + 1]),
+                     (255, 0, 0), 1, cv2.LINE_AA)
+
+    # 点
+    for idx, dots in _PATH_DOTS.items():
+        if dots is None or dots.size == 0:
+            continue
+        pts_w = dots.reshape(-1, 1, 2)
+        pts_o = cv2.perspectiveTransform(pts_w, Minv_cur).reshape(-1, 2)
+        pts = pts_o.astype(np.int32)
+        for (x, y) in pts:
+            cv2.circle(color_img, (int(x), int(y)),
+                       3, (255, 0, 255), -1)
 
     return color_img, big_box, cell_boxes, cell_centers

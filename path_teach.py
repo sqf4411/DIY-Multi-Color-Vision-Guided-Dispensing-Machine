@@ -1,7 +1,6 @@
 # path_teach.py
 import cv2
 import numpy as np
-from mold_detector import detect_mold_and_cells
 
 WINDOW_NAME = "点胶路径示教窗口"
 
@@ -20,71 +19,110 @@ def order_points(pts: np.ndarray) -> np.ndarray:
 
 def run_path_teach(cell_index: int = 0,
                    img_path: str = "mold.png") -> bool:
-    """
-    在黄金示教的某一个小格子里编辑点胶路径
+    """在黄金示教后的某一个小格子中编辑点胶路径。"""
 
-    参数
-    ----
-    cell_index : 0~3  对应 4 个小黄框
-    img_path   : 黄金示教时拍的整板图片（mold.png）
+    # ---------- 0. 读取黄金模板 ----------
+    try:
+        templates = np.load("slot_templates.npy")          # (4,4,2) in 黄金
+        warp_size = np.load("warp_size.npy").astype(int)   # [W,H]
+    except Exception as e:
+        print("❌ 需要先完成黄金示教，未找到 slot_templates.npy / warp_size.npy：", e)
+        return False
 
-    返回
-    ----
-    True  : 用户按 S 保存
-    False : 用户按 Q 或中途出错
-    """
+    goldW, goldH = int(warp_size[0]), int(warp_size[1])
 
-    # ============ 1. 读取图片 & 模具检测 ============
+    if not (0 <= cell_index < templates.shape[0]):
+        print(f"❌ cell_index 越界: {cell_index}")
+        return False
+
+    # ---------- 1. 读入 mold.png 并重新生成“黄金视角”整板 ----------
     gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
         print(f"❌ 无法读取图像: {img_path}")
         return False
 
-    color, big_box, cell_boxes, cell_centers = detect_mold_and_cells(gray)
-    if big_box is None or cell_boxes is None:
-        print("❌ 未检测到模具或小格子，请先完成黄金示教和模具识别")
+    # 找大模具（和 mold_detector._find_big_mold 一致）
+    h_img, w_img = gray.shape
+    img_area = h_img * w_img
+    blur = cv2.GaussianBlur(gray, (7, 7), 0)
+    _, th_bg = cv2.threshold(blur, 40, 255, cv2.THRESH_BINARY)
+    kernel_big = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+    closed_bg = cv2.morphologyEx(th_bg, cv2.MORPH_CLOSE, kernel_big)
+    cnts_bg, _ = cv2.findContours(closed_bg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    big_mold_cnt = None
+    max_area = 0
+    for c in cnts_bg:
+        area = cv2.contourArea(c)
+        if area > img_area * 0.15 and area > max_area:
+            max_area = area
+            big_mold_cnt = c
+
+    if big_mold_cnt is None:
+        print("❌ 未找到大模具，无法生成黄金视角")
         return False
 
-    if not (0 <= cell_index < len(cell_boxes)):
-        print(f"❌ cell_index 超出范围: {cell_index}")
-        return False
+    big_rect = cv2.minAreaRect(big_mold_cnt)
+    big_box = cv2.boxPoints(big_rect).astype(np.float32)  # (4,2)
 
-    cell_box = cell_boxes[cell_index]  # (4,2)
+    # 排序 tl,tr,br,bl
+    s = big_box.sum(axis=1)
+    tl = big_box[np.argmin(s)]
+    br = big_box[np.argmax(s)]
+    diff = np.diff(big_box, axis=1)
+    tr = big_box[np.argmin(diff)]
+    bl = big_box[np.argmax(diff)]
+    rect_big = np.array([tl, tr, br, bl], dtype=np.float32)
 
-    # ============ 2. 透视矫正，把该小格子单独拉正 ============
-    rect = order_points(cell_box)
+    dst_big = np.array([
+        [0, 0],
+        [goldW - 1, 0],
+        [goldW - 1, goldH - 1],
+        [0, goldH - 1]
+    ], dtype=np.float32)
 
-    # 计算目标宽高
-    widthA = np.linalg.norm(rect[2] - rect[3])
-    widthB = np.linalg.norm(rect[1] - rect[0])
+    # 原图 -> 黄金整板
+    M_big = cv2.getPerspectiveTransform(rect_big, dst_big)
+    warped_full = cv2.warpPerspective(gray, M_big, (goldW, goldH))
+
+    # ---------- 2. 取出该 cell 的黄金坐标四边形，并单独拉正 ----------
+    cell_box_gold = templates[cell_index].astype(np.float32)  # (4,2) in 黄金
+
+    rect_cell = order_points(cell_box_gold)
+
+    widthA = np.linalg.norm(rect_cell[2] - rect_cell[3])
+    widthB = np.linalg.norm(rect_cell[1] - rect_cell[0])
     maxW = int(max(widthA, widthB))
 
-    heightA = np.linalg.norm(rect[1] - rect[2])
-    heightB = np.linalg.norm(rect[0] - rect[3])
+    heightA = np.linalg.norm(rect_cell[1] - rect_cell[2])
+    heightB = np.linalg.norm(rect_cell[0] - rect_cell[3])
     maxH = int(max(heightA, heightB))
 
-    dst = np.array([
+    dst_cell = np.array([
         [0, 0],
         [maxW - 1, 0],
         [maxW - 1, maxH - 1],
         [0, maxH - 1]
     ], dtype=np.float32)
 
-    M = cv2.getPerspectiveTransform(rect, dst)
-    warped = cv2.warpPerspective(gray, M, (maxW, maxH))
+    # 黄金整板 -> 小格局部图
+    M_cell = cv2.getPerspectiveTransform(rect_cell, dst_cell)
+    warped_cell = cv2.warpPerspective(warped_full, M_cell, (maxW, maxH))
+    # 小格局部图 -> 黄金整板
+    Minv_cell = cv2.getPerspectiveTransform(dst_cell, rect_cell)
 
-    # -------- 缩放到合适大小（只影响显示，不影响保存坐标） --------
-    max_display = 700  # 窗口最长边不超过 700 像素
+    # ---------- 3. 缩放显示 ----------
+    max_display = 700
     scale = min(max_display / maxW, max_display / maxH, 2.0)
     disp_w = int(maxW * scale)
     disp_h = int(maxH * scale)
 
-    # ============ 3. 尝试加载历史路径（折线 + 点） ============
+    # ---------- 4. 尝试加载小格坐标下的历史路径 ----------
     poly_file = f"cell_{cell_index}_polylines.npy"
     dots_file = f"cell_{cell_index}_dots.npy"
 
-    polylines = []  # list of (N,2) np.ndarray
-    dots = []       # list of (x, y)
+    polylines = []  # list of (N,2)
+    dots = []       # list of (2,)
     current_line = []
 
     try:
@@ -104,16 +142,22 @@ def run_path_teach(cell_index: int = 0,
     except Exception:
         print("ℹ 未找到历史点文件，重新开始绘制")
 
-    # ============ 4. 交互绘制 ============
-    mode = "line"  # "line" 或 "dot"
+    # ---------- 4.5 工具：小格坐标 -> 黄金坐标 ----------
+    def local_to_golden(points: np.ndarray) -> np.ndarray:
+        if points is None or len(points) == 0:
+            return np.zeros((0, 2), dtype=np.float32)
+        pts_local = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+        pts_gold = cv2.perspectiveTransform(pts_local, Minv_cell)
+        return pts_gold.reshape(-1, 2)
+
+    # ---------- 5. 交互绘制 ----------
+    mode = "line"  # "line" or "dot"
 
     def draw_canvas():
-        """把 warped + 点 + 线 + 文字 画出来"""
-        base = cv2.resize(warped, (disp_w, disp_h),
+        base = cv2.resize(warped_cell, (disp_w, disp_h),
                           interpolation=cv2.INTER_LINEAR)
         base_color = cv2.cvtColor(base, cv2.COLOR_GRAY2BGR)
 
-        # 多条线
         idx = 1
         for seg in polylines:
             if len(seg) < 2:
@@ -127,14 +171,12 @@ def run_path_teach(cell_index: int = 0,
                             (pts[i][0] + 3, pts[i][1] - 3),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
                 idx += 1
-            # 最后一个点
             cv2.circle(base_color, tuple(pts[-1]), 3, (0, 0, 255), -1)
             cv2.putText(base_color, str(idx),
                         (pts[-1][0] + 3, pts[-1][1] - 3),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
             idx += 1
 
-        # 当前正在画的这条线
         if len(current_line) >= 1:
             seg = np.array(current_line, dtype=np.float32)
             pts = (seg * scale).astype(int)
@@ -144,7 +186,6 @@ def run_path_teach(cell_index: int = 0,
             for p in pts:
                 cv2.circle(base_color, tuple(p), 3, (0, 255, 255), -1)
 
-        # 点胶点
         for i, (x, y) in enumerate(dots, start=1):
             px = int(x * scale)
             py = int(y * scale)
@@ -152,16 +193,14 @@ def run_path_teach(cell_index: int = 0,
             cv2.putText(base_color, f"P{i}", (px + 3, py - 3),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
 
-        # 顶部提示
         head = np.zeros((30, disp_w, 3), dtype=np.uint8)
-        cv2.putText(head, "L: line   R: dot   N: new line   "
-                          "C: clear   Z: undo   S: save   Q: quit",
+        cv2.putText(head,
+                    "L: line   R: dot   N: new line   "
+                    "C: clear   Z: undo   S: save   Q: quit",
                     (10, 22), cv2.FONT_HERSHEY_SIMPLEX,
                     0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
         canvas = np.vstack([head, base_color])
-
-        # 底部模式提示
         cv2.putText(canvas, f"Mode: {mode}",
                     (10, canvas.shape[0] - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -171,11 +210,9 @@ def run_path_teach(cell_index: int = 0,
     def on_mouse(event, x, y, flags, param):
         nonlocal mode, current_line
 
-        # 头部 30 像素是黑条，点击那一块忽略
         if y < 30:
             return
 
-        # 显示坐标 -> warped 坐标
         wx = x / scale
         wy = (y - 30) / scale
 
@@ -189,7 +226,7 @@ def run_path_teach(cell_index: int = 0,
     cv2.resizeWindow(WINDOW_NAME, disp_w, disp_h + 30)
     cv2.setMouseCallback(WINDOW_NAME, on_mouse)
 
-    print(f"🧵 打开点胶路径示教窗口 (使用 {img_path}, 小格 index={cell_index})")
+    print(f"🧵 打开点胶路径示教窗口 (cell_index={cell_index})")
 
     while True:
         canvas = draw_canvas()
@@ -201,7 +238,6 @@ def run_path_teach(cell_index: int = 0,
         elif key in (ord('r'), ord('R')):
             mode = "dot"
         elif key in (ord('n'), ord('N')):
-            # 把当前线收进 polylines，开启新线
             if len(current_line) >= 2:
                 polylines.append(np.array(current_line, dtype=np.float32))
             current_line = []
@@ -210,17 +246,13 @@ def run_path_teach(cell_index: int = 0,
             current_line = []
             dots.clear()
         elif key in (ord('z'), ord('Z')):
-            # 回撤一步
-            if mode == 'line':
+            if mode == "line":
                 if current_line:
-                    # 撤掉当前线最后一个点
                     current_line.pop()
                 elif polylines:
-                    # 当前线为空，就撤掉最后一条线
                     polylines.pop()
-            elif mode == 'dot':
+            elif mode == "dot":
                 if dots:
-                    # 点模式撤掉最后一个点
                     dots.pop()
         elif key in (ord('q'), ord('Q')):
             print("⚠ 用户取消，不保存点胶路径")
@@ -232,14 +264,32 @@ def run_path_teach(cell_index: int = 0,
                 polylines.append(np.array(current_line, dtype=np.float32))
                 current_line = []
 
-            # 保存折线（object 数组）
+            # 1) 保存小格坐标数据（编辑用）
             np.save(poly_file, np.array(polylines, dtype=object))
-            # 保存点
             if dots:
                 np.save(dots_file, np.array(dots, dtype=np.float32))
             else:
-                # 没有点就保存一个空数组
                 np.save(dots_file, np.zeros((0, 2), dtype=np.float32))
+
+            # 2) 生成黄金坐标系下的显示路径
+            try:
+                if polylines:
+                    merged = np.concatenate(polylines, axis=0)
+                    poly_disp = local_to_golden(merged)
+                else:
+                    poly_disp = np.zeros((0, 2), dtype=np.float32)
+
+                if dots:
+                    dots_arr = np.array(dots, dtype=np.float32)
+                    dots_disp = local_to_golden(dots_arr)
+                else:
+                    dots_disp = np.zeros((0, 2), dtype=np.float32)
+
+                np.save(f"disp_poly_cell{cell_index}.npy", poly_disp)
+                np.save(f"disp_dots_cell{cell_index}.npy", dots_disp)
+                print(f"✅ 已保存显示路径 disp_poly_cell{cell_index}.npy / disp_dots_cell{cell_index}.npy")
+            except Exception as e:
+                print("⚠ 生成显示路径失败：", e)
 
             print(f"✅ 已保存折线到 {poly_file}，条数 = {len(polylines)}")
             print(f"✅ 已保存点集到 {dots_file}，点数 = {len(dots)}")

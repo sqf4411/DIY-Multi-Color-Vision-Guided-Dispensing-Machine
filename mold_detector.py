@@ -3,9 +3,61 @@ import cv2
 import numpy as np
 import os
 
-# ====== 全局缓存：黄金示教数据 ======
+# mold_detector.py
+import cv2
+import numpy as np
+import os
+
+# ====== 全局缓存：黄金示教数据 / 点胶路径 ======
 _TEMPLATES = None      # (4,4,2)
 _WARP_SIZE = None      # (2,)  [W,H]
+
+_PATH_POLY = None      # (N,2)  cell0 的折线路径
+_PATH_DOTS = None      # (K,2)  cell0 的点集
+
+
+# ====================================================
+#  加载 黄金四小框 + warp_size + 点胶路径
+# ====================================================
+def _load_golden_and_paths():
+    global _TEMPLATES, _WARP_SIZE, _PATH_POLY, _PATH_DOTS
+
+    # ---------- 1. 黄金模板 ----------
+    if _TEMPLATES is None:
+        try:
+            _TEMPLATES = np.load("slot_templates.npy")
+            _WARP_SIZE = np.load("warp_size.npy").astype(int)
+            print(f"✅ 黄金模板 slot_templates.npy 已加载 {_TEMPLATES.shape}, warp={_WARP_SIZE}")
+        except Exception as e:
+            print("⚠ 未找到黄金模板，仅画大框。", e)
+            _TEMPLATES = None
+            _WARP_SIZE = None
+
+    # ---------- 2. 点胶折线 ----------
+    if _PATH_POLY is None and os.path.exists("disp_poly_cell0.npy"):
+        try:
+            _PATH_POLY = np.load("disp_poly_cell0.npy").astype(np.float32)
+            print(f"✅ 已加载点胶折线 disp_poly_cell0.npy，点数 = {_PATH_POLY.shape[0]}")
+        except Exception as e:
+            print("⚠ 加载 disp_poly_cell0.npy 失败：", e)
+
+    # ---------- 3. 点胶点 ----------
+    if _PATH_DOTS is None and os.path.exists("disp_dots_cell0.npy"):
+        try:
+            _PATH_DOTS = np.load("disp_dots_cell0.npy").astype(np.float32)
+            print(f"✅ 已加载点胶点集 disp_dots_cell0.npy，点数 = {_PATH_DOTS.shape[0]}")
+        except Exception as e:
+            print("⚠ 加载 disp_dots_cell0.npy 失败：", e)
+
+
+def reload_golden_templates():
+    """UI 调用：强制重新加载（黄金示教或路径编辑后）"""
+    global _TEMPLATES, _WARP_SIZE, _PATH_POLY, _PATH_DOTS
+    _TEMPLATES = None
+    _WARP_SIZE = None
+    _PATH_POLY = None
+    _PATH_DOTS = None
+    _load_golden_and_paths()
 
 
 def _load_golden_templates():

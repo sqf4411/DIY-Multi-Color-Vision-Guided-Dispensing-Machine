@@ -16,7 +16,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QImage, QPixmap
 
 # 你的检测函数
-from mold_detector import detect_mold_and_cells
+from mold_detector import detect_mold_and_cells, reload_golden_templates
+
 
 # ---- 按你的实际路径修改 ----
 sys.path.append(r"H:\MVS\Development\Samples\Python\MvImport")
@@ -483,11 +484,37 @@ class MainWindow(QWidget):
             self.log("当前无图像，先启动相机")
             return
 
+        # 切换实时识别开关
         self.live_detect = not self.live_detect
 
         if self.live_detect:
             self.btn_detect.setText("停止识别")
             self.log("✅ 已开启实时识别（每帧都会画大框+小框）")
+
+            # ⭐ 关键：刚刚打开识别时，立刻对当前帧跑一次识别，
+            # 避免黄金示教后第一次点击看不到大小框
+            try:
+                color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(
+                    self.last_frame
+                )
+                rgb = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb.shape
+                bytes_per_line = ch * w
+                qimg = QImage(
+                    rgb.data, w, h, bytes_per_line, QImage.Format_RGB888
+                ).copy()
+                qpix = QPixmap.fromImage(qimg)
+                self.label.setPixmap(
+                    qpix.scaled(
+                        self.label.width(),
+                        self.label.height(),
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    )
+                )
+            except Exception as e:
+                self.log(f"首次识别出错：{e}")
+
         else:
             self.btn_detect.setText("识别模具")
             self.log("⏹ 已关闭实时识别")
@@ -495,34 +522,33 @@ class MainWindow(QWidget):
     # ================== 黄金示教 ==============================
     def on_golden_teach(self):
         """点击‘黄金示教’，使用本地 mold.png 文件进行示教"""
-        # 停止相机线程
-        if self.thread:
-            self.thread.stop()
-            self.thread.wait()
-            self.thread = None
-            self.log("⏸ 已停止相机取流（准备黄金示教）")
 
-        # 不再保存当前帧，只用本地 mold.png
+        # ⭐ 不再停止相机线程，只是冻结左侧画面，避免刷新
+        self.freeze_display = True
+
+        # 如果你是用固定的 mold.png，就只检查文件是否存在
         if not os.path.exists("mold.png"):
             self.log("❌ 未找到 mold.png，请先准备好这张图片")
+            self.freeze_display = False
             return
 
-        # 直接调用黄金示教（同步运行）
+        # 如果你想用当前画面当黄金，也可以这样保存（可选）
+        # if self.last_frame is not None:
+        #     cv2.imwrite("mold.png", self.last_frame)
+
+        # 同步调用黄金示教
         from golden_teach import run_golden_teach
-        ok = run_golden_teach()  # ★★ 就是这个 ★★
+        ok = run_golden_teach()
+
+        # ⭐ 黄金示教结束，解除冻结，让画面继续刷新
+        self.freeze_display = False
 
         if ok:
             self.log("✅ 黄金示教完成，重新加载模板")
-            self.load_golden_templates()
+            # 刷新 mold_detector 里的缓存，保证识别用最新模板
+            reload_golden_templates()
         else:
             self.log("⚠ 黄金示教取消或失败")
-
-        # 重启相机
-        if self.cam:
-            self.thread = CameraThread(self.cam)
-            self.thread.frame_signal.connect(self.update_image)
-            self.thread.start()
-            self.log("▶ 相机取流已重新启动")
 
     # ================== 点胶路径编辑 ==================
     def on_edit_path(self):

@@ -33,7 +33,12 @@ def mouse_callback(event, x, y, flags, param):
 
 
 def run_golden_teach():
-    global warped, draw_img, slot_boxes
+    global warped, draw_img, slot_boxes, drawing, x1, y1
+
+    # ⭐⭐ 每次黄金示教前，清空所有缓存 ⭐⭐
+    slot_boxes = []
+    drawing = False
+    x1 = y1 = 0
 
     img = cv2.imread("mold.png", cv2.IMREAD_GRAYSCALE)
     if img is None:
@@ -90,9 +95,12 @@ def run_golden_teach():
                 continue
 
             np.save("slot_templates.npy", np.array(slot_boxes))
-            print("✅ 已保存 slot_templates.npy")
+            np.save("warp_size.npy", np.array([W, H], dtype=np.int32))
+
+            print("✅ 已保存 slot_templates.npy 和 warp_size.npy")
             cv2.destroyAllWindows()
             return True
+
 
 
 if __name__ == "__main__":

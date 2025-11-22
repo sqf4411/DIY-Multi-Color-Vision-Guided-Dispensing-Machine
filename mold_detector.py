@@ -184,7 +184,7 @@ def detect_mold_and_cells(gray: np.ndarray):
                 cell_boxes.append(box_o)
                 cx, cy = int(box_o[:, 0].mean()), int(box_o[:, 1].mean())
                 cell_centers.append((cx, cy))
-                cv2.drawContours(color_img, [box_o], 0, (0, 255, 255), 1)
+                cv2.drawContours(color_img, [box_o], 0, (0, 255, 0), 5)
 
     # 3. 核心模板匹配
     if (_PATH_POLY is not None or _PATH_DOTS is not None) and _CORE_TEMPLATE is not None:
@@ -251,7 +251,7 @@ def detect_mold_and_cells(gray: np.ndarray):
                 if res_o is not None:
                     pts = res_o.reshape(-1, 2).astype(np.int32)
                     for i in range(len(pts) - 1):
-                        cv2.line(color_img, tuple(pts[i]), tuple(pts[i + 1]), (255, 0, 0), 1, cv2.LINE_AA)
+                        cv2.line(color_img, tuple(pts[i]), tuple(pts[i + 1]), (0, 255, 0), 5, cv2.LINE_AA)
 
             if _PATH_DOTS is not None:
                 pts_gold = _PATH_DOTS + offset
@@ -260,6 +260,6 @@ def detect_mold_and_cells(gray: np.ndarray):
                 if res_o is not None:
                     pts = res_o.reshape(-1, 2).astype(np.int32)
                     for px, py in pts:
-                        cv2.circle(color_img, (int(px), int(py)), 3, (255, 0, 255), -1)
+                        cv2.circle(color_img, (int(px), int(py)), 10, (0, 255, 0), -1)
 
     return color_img, big_box, cell_boxes, cell_centers

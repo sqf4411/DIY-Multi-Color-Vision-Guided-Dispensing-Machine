@@ -2,12 +2,13 @@ import sys
 import os
 import ctypes
 from datetime import datetime
+from machine_client import MachineClient
 
 import numpy as np
 import cv2
 import json
 
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
     QVBoxLayout, QHBoxLayout, QFileDialog, QSlider,
@@ -109,9 +110,22 @@ class MainWindow(QWidget):
         self.gamma_min = 0.5
         self.gamma_max = 2.0
 
+        # ==== 运动 / 坐标相关 ====
+        # 运动控制客户端（现在是本地假实现，将来换成真实 Klipper 实现）
+        self.machine = MachineClient()
+        self.machine.connect()
+
+        # 当前坐标（mm）
+        self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
+
+        # 点动步长（mm）
+        self.jog_step_mm = 1.0
+
         self.init_ui()
         self.load_saved_params()
         self.load_golden_templates()
+
+
 
     # ================== UI ==================
     def init_ui(self):
@@ -128,12 +142,14 @@ class MainWindow(QWidget):
         self.lbl_cam_fps = QLabel("-")
         self.lbl_cam_fmt = QLabel("-")
 
+
         info_group = QGroupBox("相机信息")
         info_form = QFormLayout()
         info_form.addRow("分辨率：", self.lbl_cam_res)
         info_form.addRow("帧率：", self.lbl_cam_fps)
         info_form.addRow("像素格式：", self.lbl_cam_fmt)
         info_group.setLayout(info_form)
+
 
         # ---- 控制按钮 ----
         self.btn_start = QPushButton("启动相机")
@@ -201,6 +217,69 @@ class MainWindow(QWidget):
         form.addRow(self.lbl_gamma, row_gamma)
         param_group.setLayout(form)
 
+        # ---- XYZ 运动控制 ----
+        motion_group = QGroupBox("XYZ 运动控制")
+        motion_layout = QVBoxLayout()
+
+        # 当前坐标显示
+        coord_layout = QHBoxLayout()
+        self.lbl_pos_x = QLabel("X: 0.000")
+        self.lbl_pos_y = QLabel("Y: 0.000")
+        self.lbl_pos_z = QLabel("Z: 0.000")
+        coord_layout.addWidget(self.lbl_pos_x)
+        coord_layout.addWidget(self.lbl_pos_y)
+        coord_layout.addWidget(self.lbl_pos_z)
+        motion_layout.addLayout(coord_layout)
+
+        # 各轴归位按钮
+        home_layout = QHBoxLayout()
+        self.btn_home_x = QPushButton("X归位")
+        self.btn_home_y = QPushButton("Y归位")
+        self.btn_home_z = QPushButton("Z归位")
+        home_layout.addWidget(self.btn_home_x)
+        home_layout.addWidget(self.btn_home_y)
+        home_layout.addWidget(self.btn_home_z)
+        motion_layout.addLayout(home_layout)
+
+        # 步长设置
+        step_layout = QHBoxLayout()
+        lbl_step = QLabel("步长 (mm)")
+        self.spn_step = QDoubleSpinBox()
+        self.spn_step.setRange(0.01, 100.0)
+        self.spn_step.setDecimals(3)
+        self.spn_step.setSingleStep(0.1)
+        self.spn_step.setValue(self.jog_step_mm)
+        step_layout.addWidget(lbl_step)
+        step_layout.addWidget(self.spn_step)
+        motion_layout.addLayout(step_layout)
+
+        # X 轴按钮
+        row_x = QHBoxLayout()
+        self.btn_x_minus = QPushButton("X-")
+        self.btn_x_plus = QPushButton("X+")
+        row_x.addWidget(self.btn_x_minus)
+        row_x.addWidget(self.btn_x_plus)
+        motion_layout.addLayout(row_x)
+
+        # Y 轴按钮
+        row_y = QHBoxLayout()
+        self.btn_y_minus = QPushButton("Y-")
+        self.btn_y_plus = QPushButton("Y+")
+        row_y.addWidget(self.btn_y_minus)
+        row_y.addWidget(self.btn_y_plus)
+        motion_layout.addLayout(row_y)
+
+        # Z 轴按钮
+        row_z = QHBoxLayout()
+        self.btn_z_minus = QPushButton("Z-")
+        self.btn_z_plus = QPushButton("Z+")
+        row_z.addWidget(self.btn_z_minus)
+        row_z.addWidget(self.btn_z_plus)
+        motion_layout.addLayout(row_z)
+
+        motion_group.setLayout(motion_layout)
+        self.motion_group = motion_group
+
         # ---- 日志窗口 ----
         self.log_box = QTextEdit()
         self.log_box.setReadOnly(True)
@@ -209,10 +288,12 @@ class MainWindow(QWidget):
         # ---- 右侧整体布局 ----
         right_layout = QVBoxLayout()
         right_layout.addWidget(info_group)
+        right_layout.addWidget(self.motion_group)   # ⭐ 新增：XYZ 控制
         right_layout.addLayout(btn_layout)
         right_layout.addWidget(param_group)
         right_layout.addWidget(self.log_box)
         right_layout.addStretch(1)
+
 
         # ---- 总布局 ----
         main_layout = QHBoxLayout()
@@ -237,6 +318,94 @@ class MainWindow(QWidget):
         self.spn_exp.valueChanged.connect(self.on_exp_spin_changed)
         self.spn_gain.valueChanged.connect(self.on_gain_spin_changed)
         self.spn_gamma.valueChanged.connect(self.on_gamma_spin_changed)
+
+        # XYZ 点动按钮
+        self.btn_x_minus.clicked.connect(lambda: self.on_jog('x', -1))
+        self.btn_x_plus.clicked.connect(lambda: self.on_jog('x', +1))
+        self.btn_y_minus.clicked.connect(lambda: self.on_jog('y', -1))
+        self.btn_y_plus.clicked.connect(lambda: self.on_jog('y', +1))
+        self.btn_z_minus.clicked.connect(lambda: self.on_jog('z', -1))
+        self.btn_z_plus.clicked.connect(lambda: self.on_jog('z', +1))
+
+        # 归位按钮
+        self.btn_home_x.clicked.connect(lambda: self.on_home_axis('x'))
+        self.btn_home_y.clicked.connect(lambda: self.on_home_axis('y'))
+        self.btn_home_z.clicked.connect(lambda: self.on_home_axis('z'))
+
+        # 初始化一次坐标显示
+        self.update_xyz_display()
+
+
+
+
+    # ================== 运动 / 坐标相关 ==================
+    def on_jog(self, axis: str, direction: int):
+        """X± / Y± / Z± 点动按钮的回调，direction 为 +1 或 -1。"""
+        step = float(self.spn_step.value())
+        dx = dy = dz = 0.0
+
+        if axis == 'x':
+            dx = direction * step
+        elif axis == 'y':
+            dy = direction * step
+        elif axis == 'z':
+            dz = direction * step
+
+        self.move_machine_rel(dx, dy, dz)
+
+    def move_machine_rel(self, dx: float, dy: float, dz: float):
+        """
+        相对运动（单位 mm）
+        -> 委托给 MachineClient，再从 MachineClient 读回真实坐标。
+        """
+        if dx == 0 and dy == 0 and dz == 0:
+            return
+
+        # 交给 MachineClient，后面你把这里改成“真实发指令”
+        self.machine.move_rel(dx, dy, dz)
+
+        # 从 MachineClient 读回位置（将来就是设备报告的真实坐标）
+        self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
+
+        self.update_xyz_display()
+        self.log(
+            "JOG:",
+            f"dX={dx:.3f}, dY={dy:.3f}, dZ={dz:.3f} -> "
+            f"X={self.pos_x:.3f}, Y={self.pos_y:.3f}, Z={self.pos_z:.3f}"
+        )
+
+    def update_xyz_display(self, x=None, y=None, z=None):
+        """
+        更新 UI 上的坐标显示。
+        如果传入 x/y/z，则顺便更新内部 pos_x/pos_y/pos_z。
+        """
+        if x is not None:
+            self.pos_x = float(x)
+        if y is not None:
+            self.pos_y = float(y)
+        if z is not None:
+            self.pos_z = float(z)
+
+        self.lbl_pos_x.setText(f"X: {self.pos_x:.3f}")
+        self.lbl_pos_y.setText(f"Y: {self.pos_y:.3f}")
+        self.lbl_pos_z.setText(f"Z: {self.pos_z:.3f}")
+
+    def on_home_axis(self, axis: str):
+        """单轴归位：X/Y/Z"""
+        if axis == 'x':
+            self.machine.home_x()
+        elif axis == 'y':
+            self.machine.home_y()
+        elif axis == 'z':
+            self.machine.home_z()
+        else:
+            return
+
+        # 从 MachineClient 读回最新坐标（某一轴被置 0）
+        self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
+        self.update_xyz_display()
+        self.log("HOME:", f"Axis {axis.upper()} -> "
+                           f"X={self.pos_x:.3f}, Y={self.pos_y:.3f}, Z={self.pos_z:.3f}")
 
     # ================== 日志 ==================
     def log(self, *args):

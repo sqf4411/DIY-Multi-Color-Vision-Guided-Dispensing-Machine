@@ -1,3 +1,21 @@
+import os
+import sys
+
+def add_mvs_dll_path():
+    dll_dir = os.getenv("MVS_DLL_DIR")
+    if dll_dir and os.path.isdir(dll_dir):
+        # Windows 10+ 推荐用这个
+        if sys.platform == "win32":
+            os.add_dll_directory(dll_dir)
+        else:
+            # 理论上不会走到这里，预防一下
+            os.environ["PATH"] = dll_dir + os.pathsep + os.environ.get("PATH", "")
+        print(f"[INFO] MVS DLL directory added: {dll_dir}")
+    else:
+        print("[WARN] 环境变量 MVS_DLL_DIR 未设置或路径不存在，请检查。")
+
+add_mvs_dll_path()
+
 import sys
 import os
 import ctypes
@@ -8,25 +26,21 @@ import numpy as np
 import cv2
 import json
 
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
+from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
     QVBoxLayout, QHBoxLayout, QFileDialog, QSlider,
-    QGroupBox, QFormLayout, QDoubleSpinBox, QTextEdit
+    QGroupBox, QFormLayout, QDoubleSpinBox, QTextEdit,
+    QMessageBox,
 )
 from PyQt5.QtGui import QImage, QPixmap
 
 # 你的检测函数
 from mold_detector import detect_mold_and_cells, reload_golden_templates
 
-
 # ---- 按你的实际路径修改 ----
 sys.path.append(r"H:\MVS\Development\Samples\Python\MvImport")
-from MvCameraControl_class import *
-
-
-# ================== 线程：黄金示教 ==================
-
+from MvImport.MvCameraControl_class import *
 
 # ================== 线程：相机取流 ==================
 class CameraThread(QThread):
@@ -62,12 +76,90 @@ class CameraThread(QThread):
                 img = img.reshape((h, w))
                 self.frame_signal.emit(img)
 
-
 # ================== 主窗口 ==================
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("HikRobot Camera (Python + Qt)")
+        self.setStyleSheet("""
+        QWidget {
+            background-color: #111827;        /* 整体深灰背景 */
+            color: #E5E7EB;                   /* 文字偏亮 */
+            font-family: "Microsoft YaHei";
+            font-size: 10pt;
+        }
+
+        /* 分组卡片 */
+        QGroupBox {
+            font-weight: bold;
+            border: 1px solid #374151;
+            border-radius: 8px;
+            margin-top: 10px;
+            background-color: #1F2933;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 12px;
+            padding: 0 6px 0 6px;
+        }
+
+        /* 普通标签 */
+        QLabel {
+            color: #E5E7EB;
+        }
+
+        /* 文本框 / 数值框 / 下拉框 */
+        QLineEdit,
+        QDoubleSpinBox,
+        QComboBox {
+            background-color: #020617;
+            border: 1px solid #4B5563;
+            border-radius: 4px;
+            padding: 2px 6px;
+        }
+
+        /* 日志框 */
+        QTextEdit {
+            background-color: #020617;
+            border: 1px solid #4B5563;
+            border-radius: 6px;
+        }
+
+        /* 按钮：蓝色主按钮风格 */
+        QPushButton {
+            min-height: 26px;
+            padding: 4px 12px;
+            border-radius: 4px;
+            border: none;
+            background-color: #2563EB;       /* 主色 */
+            color: #F9FAFB;
+        }
+        QPushButton:hover {
+            background-color: #1D4ED8;
+        }
+        QPushButton:pressed {
+            background-color: #1E40AF;
+        }
+        QPushButton:disabled {
+            background-color: #4B5563;
+            color: #9CA3AF;
+        }
+
+        /* 滑块 */
+        QSlider::groove:horizontal {
+            border: 1px solid #4B5563;
+            height: 4px;
+            background: #374151;
+            margin: 0 4px;
+            border-radius: 2px;
+        }
+        QSlider::handle:horizontal {
+            background: #F97316;             /* 橙色小圆点 */
+            border: 1px solid #F97316;
+            width: 14px;
+            margin: -5px 0;
+            border-radius: 7px;
+        }
+        """)
 
         self.cam = None
         self.thread = None
@@ -83,12 +175,6 @@ class MainWindow(QWidget):
         self.map2 = None
         self.calib_size = None # (w, h)
         self._calib_loaded = False
-
-        # self.init_calibration()  # 读取 calib/camera_matrix.npy 和 dist_coeffs.npy
-
-        # 识别结果
-        self.big_box = None
-
 
         # 识别结果
         self.big_box = None
@@ -111,7 +197,6 @@ class MainWindow(QWidget):
         self.gamma_max = 2.0
 
         # ==== 运动 / 坐标相关 ====
-        # 运动控制客户端（现在是本地假实现，将来换成真实 Klipper 实现）
         self.machine = MachineClient()
         self.machine.connect()
 
@@ -121,18 +206,34 @@ class MainWindow(QWidget):
         # 点动步长（mm）
         self.jog_step_mm = 1.0
 
+        # 针头相对「相机参考点」的 XY 偏移量（mm）
+        self.nozzle_offset_x = 0.0
+        self.nozzle_offset_y = 0.0
+
+        # 相机像素 -> 机器 XY 的映射矩阵
+        self.cam2mach_matrix = None
+
+        # 安全高度（Z）
+        self.safe_z = 10.0
+        self.feedrate_xy = 50.0   # XY 速度
+        self.feedrate_z = 20.0    # Z 速度
+
         self.init_ui()
         self.load_saved_params()
         self.load_golden_templates()
-
-
 
     # ================== UI ==================
     def init_ui(self):
         # ---- 左侧大画面 ----
         self.label = QLabel("无图像")
         self.label.setAlignment(Qt.AlignCenter)
-        self.label.setMinimumSize(600, 450)
+        self.label.setMinimumSize(800, 600)
+        self.label.setStyleSheet("""
+            background-color: #000000;
+            color: #9CA3AF;
+            border-radius: 8px;
+            border: 1px solid #374151;
+        """)
 
         left_layout = QVBoxLayout()
         left_layout.addWidget(self.label)
@@ -142,14 +243,12 @@ class MainWindow(QWidget):
         self.lbl_cam_fps = QLabel("-")
         self.lbl_cam_fmt = QLabel("-")
 
-
         info_group = QGroupBox("相机信息")
         info_form = QFormLayout()
         info_form.addRow("分辨率：", self.lbl_cam_res)
         info_form.addRow("帧率：", self.lbl_cam_fps)
         info_form.addRow("像素格式：", self.lbl_cam_fmt)
         info_group.setLayout(info_form)
-
 
         # ---- 控制按钮 ----
         self.btn_start = QPushButton("启动相机")
@@ -160,9 +259,17 @@ class MainWindow(QWidget):
         self.btn_resume = QPushButton("恢复预览")
         self.btn_path = QPushButton("编辑点胶路径")
 
+        # 点胶任务相关按钮
+        self.btn_calibrate = QPushButton("标定坐标系")
+        self.btn_virtual = QPushButton("虚拟跑")
+        self.btn_dry_run = QPushButton("空跑")
+        self.btn_real_run = QPushButton("开始点胶")
+        self.btn_test_valve = QPushButton("测试出胶")
+
         self.btn_stop.setEnabled(False)
         self.btn_save.setEnabled(False)
 
+        # 第一排：相机 & 示教
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(self.btn_start)
         btn_layout.addWidget(self.btn_stop)
@@ -171,6 +278,14 @@ class MainWindow(QWidget):
         btn_layout.addWidget(self.btn_golden)
         btn_layout.addWidget(self.btn_resume)
         btn_layout.addWidget(self.btn_path)
+
+        # 第二排：点胶任务
+        task_layout = QHBoxLayout()
+        task_layout.addWidget(self.btn_calibrate)
+        task_layout.addWidget(self.btn_virtual)
+        task_layout.addWidget(self.btn_dry_run)
+        task_layout.addWidget(self.btn_real_run)
+        task_layout.addWidget(self.btn_test_valve)
 
         # ---- 曝光 ----
         self.lbl_exp = QLabel("曝光(us)")
@@ -280,6 +395,29 @@ class MainWindow(QWidget):
         motion_group.setLayout(motion_layout)
         self.motion_group = motion_group
 
+        # ---- 针头偏移显示 & 标定 ----
+        offset_group = QGroupBox("针头偏移 (相机 → 针头)")
+        offset_layout = QVBoxLayout()
+        self.lbl_offset_x = QLabel("ΔX: 0.000 mm")
+        self.lbl_offset_y = QLabel("ΔY: 0.000 mm")
+        self.btn_calib_nozzle = QPushButton("标定针头偏移")
+
+        offset_layout.addWidget(self.lbl_offset_x)
+        offset_layout.addWidget(self.lbl_offset_y)
+        offset_layout.addWidget(self.btn_calib_nozzle)
+        offset_group.setLayout(offset_layout)
+        self.offset_group = offset_group
+
+        # ---- Z 高度 / 对刀 ----
+        z_group = QGroupBox("Z 高度 / 对刀")
+        z_layout = QVBoxLayout()
+        self.lbl_z_ref = QLabel("当前 Z 基准: -.- mm")
+        self.btn_tool_probe = QPushButton("一键对刀")
+        z_layout.addWidget(self.lbl_z_ref)
+        z_layout.addWidget(self.btn_tool_probe)
+        z_group.setLayout(z_layout)
+        self.z_group = z_group
+
         # ---- 日志窗口 ----
         self.log_box = QTextEdit()
         self.log_box.setReadOnly(True)
@@ -288,17 +426,21 @@ class MainWindow(QWidget):
         # ---- 右侧整体布局 ----
         right_layout = QVBoxLayout()
         right_layout.addWidget(info_group)
-        right_layout.addWidget(self.motion_group)   # ⭐ 新增：XYZ 控制
+        right_layout.addWidget(self.motion_group)   # XYZ 控制
+        right_layout.addWidget(self.offset_group)   # 针头偏移
+        right_layout.addWidget(self.z_group)        # Z 高度 / 对刀
         right_layout.addLayout(btn_layout)
+        right_layout.addLayout(task_layout)         # 点胶任务按钮排
         right_layout.addWidget(param_group)
         right_layout.addWidget(self.log_box)
         right_layout.addStretch(1)
-
 
         # ---- 总布局 ----
         main_layout = QHBoxLayout()
         main_layout.addLayout(left_layout, stretch=3)
         main_layout.addLayout(right_layout, stretch=2)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(12)
         self.setLayout(main_layout)
 
         # ================== 信号连接 ==================
@@ -311,6 +453,20 @@ class MainWindow(QWidget):
         self.btn_resume.clicked.connect(self.resume_preview)
         self.btn_path.clicked.connect(self.on_edit_path)
 
+        # 针头偏移标定
+        self.btn_calib_nozzle.clicked.connect(self.on_calibrate_nozzle_offset)
+
+        # 一键对刀
+        self.btn_tool_probe.clicked.connect(self.on_tool_probe_clicked)
+
+        # 点胶任务按钮
+        self.btn_calibrate.clicked.connect(self.on_calibrate_coords)
+        self.btn_virtual.clicked.connect(self.on_virtual_run)
+        self.btn_dry_run.clicked.connect(self.on_dry_run)
+        self.btn_real_run.clicked.connect(self.on_real_run)
+        self.btn_test_valve.clicked.connect(self.on_test_valve)
+
+        # 相机参数联动
         self.sld_exp.valueChanged.connect(self.on_exp_slider_changed)
         self.sld_gain.valueChanged.connect(self.on_gain_slider_changed)
         self.sld_gamma.valueChanged.connect(self.on_gamma_slider_changed)
@@ -332,11 +488,9 @@ class MainWindow(QWidget):
         self.btn_home_y.clicked.connect(lambda: self.on_home_axis('y'))
         self.btn_home_z.clicked.connect(lambda: self.on_home_axis('z'))
 
-        # 初始化一次坐标显示
+        # 初始化一次坐标显示 & 针头偏移显示
         self.update_xyz_display()
-
-
-
+        self.update_nozzle_offset_display()
 
     # ================== 运动 / 坐标相关 ==================
     def on_jog(self, axis: str, direction: int):
@@ -361,10 +515,7 @@ class MainWindow(QWidget):
         if dx == 0 and dy == 0 and dz == 0:
             return
 
-        # 交给 MachineClient，后面你把这里改成“真实发指令”
         self.machine.move_rel(dx, dy, dz)
-
-        # 从 MachineClient 读回位置（将来就是设备报告的真实坐标）
         self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
 
         self.update_xyz_display()
@@ -401,11 +552,47 @@ class MainWindow(QWidget):
         else:
             return
 
-        # 从 MachineClient 读回最新坐标（某一轴被置 0）
         self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
         self.update_xyz_display()
         self.log("HOME:", f"Axis {axis.upper()} -> "
                            f"X={self.pos_x:.3f}, Y={self.pos_y:.3f}, Z={self.pos_z:.3f}")
+
+    # ---- 一键对刀（占位） ----
+    def on_tool_probe_clicked(self):
+        """
+        一键对刀入口（当前是占位实现，后续对接 Klipper 对刀宏）。
+        """
+        QMessageBox.information(
+            self,
+            "一键对刀（占位）",
+            "对刀仪一键对刀功能尚未与 Klipper 宏联动，\n"
+            "当前版本仅作为 UI 按钮和日志占位。"
+        )
+        self.log("TODO", "一键对刀逻辑将在后续版本中与 Klipper 对刀宏对接。")
+
+    # ================== 针头偏移相关 ==================
+    def update_nozzle_offset_display(self):
+        """根据当前 self.nozzle_offset_x/y 刷新界面显示。"""
+        if hasattr(self, "lbl_offset_x"):
+            self.lbl_offset_x.setText(f"ΔX: {self.nozzle_offset_x:.3f} mm")
+        if hasattr(self, "lbl_offset_y"):
+            self.lbl_offset_y.setText(f"ΔY: {self.nozzle_offset_y:.3f} mm")
+
+    def on_calibrate_nozzle_offset(self):
+        """
+        标定针头偏移的入口（目前先做占位，不真的去标定，只是保证按钮正常工作）。
+        下一步我们会把“相机先对点，再针头对同一点”那套流程写进来。
+        """
+        QMessageBox.information(
+            self,
+            "标定针头偏移（占位）",
+            "UI 已支持针头偏移显示，当前版本只是占位实现。\n\n"
+            "后续步骤我们会实现：\n"
+            "1. 先用相机对准一个物理点，并记录当前 XY；\n"
+            "2. 再用针头对准同一个点，记录 XY；\n"
+            "3. 计算相机→针头的 ΔX, ΔY 并保存。"
+        )
+        self.log("TODO", "标定针头偏移逻辑将在下一步实现。")
 
     # ================== 日志 ==================
     def log(self, *args):
@@ -449,7 +636,6 @@ class MainWindow(QWidget):
         self.apply_saved_params()
 
         self.cam.MV_CC_StartGrabbing()
-
         self.sync_from_camera_to_ui()
 
         self.thread = CameraThread(self.cam)
@@ -584,7 +770,6 @@ class MainWindow(QWidget):
             self._calib_loaded = False
             msg = f"⚠ 加载标定参数失败：{e}"
 
-        # log_box 还没创建时，用 print，创建后再用 log()
         if hasattr(self, "log_box"):
             self.log(msg)
         else:
@@ -625,70 +810,17 @@ class MainWindow(QWidget):
         except Exception as e:
             self.log("保存参数失败：", e)
 
-    # ================== 图像 / 保存 ==================
-
-    # 带棋盘的去畸变参数
-    # def update_image(self, img: np.ndarray):
-    #     # -------- 1. 如有标定参数，先创建 remap 映射 --------
-    #     frame = img
-    #
-    #     if self._calib_loaded:
-    #         h, w = frame.shape
-    #         if self.map1 is None or self.calib_size != (w, h):
-    #             # 只在第一次/分辨率变化时初始化
-    #             self.calib_size = (w, h)
-    #             try:
-    #                 newK, _ = cv2.getOptimalNewCameraMatrix(
-    #                     self.K, self.D, self.calib_size, 1, self.calib_size
-    #                 )
-    #                 self.map1, self.map2 = cv2.initUndistortRectifyMap(
-    #                     self.K, self.D, None, newK, self.calib_size, cv2.CV_16SC2
-    #                 )
-    #                 self.log(f"✅ 已创建去畸变映射，分辨率 = {w} x {h}")
-    #             except Exception as e:
-    #                 self.log(f"⚠ 创建去畸变映射失败：{e}")
-    #                 self.map1, self.map2 = None, None
-    #
-    #         # 真正做一次去畸变
-    #         if self.map1 is not None and self.map2 is not None:
-    #             frame = cv2.remap(frame, self.map1, self.map2, cv2.INTER_LINEAR)
-    #
-    #     # -------- 2. 把“去畸变后的图像”作为 last_frame --------
-    #     self.last_frame = frame.copy()
-    #
-    #     if self.freeze_display:
-    #         return
-    #
-    #     # -------- 3. 后面的逻辑完全保持不变，只是换成 frame --------
-    #     if self.live_detect:
-    #         color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(self.last_frame)
-    #         rgb = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
-    #         h, w, ch = rgb.shape
-    #         bytes_per_line = ch * w
-    #         qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
-    #     else:
-    #         h, w = self.last_frame.shape
-    #         qimg = QImage(self.last_frame.data, w, h, w, QImage.Format_Grayscale8).copy()
-    #
-    #     qpix = QPixmap.fromImage(qimg)
-    #     self.label.setPixmap(qpix.scaled(
-    #         self.label.width(),
-    #         self.label.height(),
-    #         Qt.KeepAspectRatio,
-    #         Qt.SmoothTransformation
-    #     ))
     def update_image(self, img: np.ndarray):
         """
         临时关闭相机标定 / 去畸变逻辑，直接使用相机原始图像。
         """
-        # 直接用原图
         self.last_frame = img.copy()
 
         if self.freeze_display:
             return
 
         if self.live_detect:
-            # 和你原来一样，直接把 last_frame 丢给检测
+            # 识别并画框
             color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(self.last_frame)
             rgb = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
@@ -750,15 +882,13 @@ class MainWindow(QWidget):
             self.log("当前无图像，先启动相机")
             return
 
-        # 切换实时识别开关
         self.live_detect = not self.live_detect
 
         if self.live_detect:
             self.btn_detect.setText("停止识别")
             self.log("✅ 已开启实时识别（每帧都会画大框+小框）")
 
-            # ⭐ 关键：刚刚打开识别时，立刻对当前帧跑一次识别，
-            # 避免黄金示教后第一次点击看不到大小框
+            # 打开识别时立刻对当前帧跑一次
             try:
                 color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(
                     self.last_frame
@@ -780,38 +910,27 @@ class MainWindow(QWidget):
                 )
             except Exception as e:
                 self.log(f"首次识别出错：{e}")
-
         else:
             self.btn_detect.setText("识别模具")
             self.log("⏹ 已关闭实时识别")
 
-    # ================== 黄金示教 ==============================
+    # ================== 黄金示教 ==========================
     def on_golden_teach(self):
         """点击‘黄金示教’，使用本地 mold2.png 文件进行示教"""
-
-        # ⭐ 不再停止相机线程，只是冻结左侧画面，避免刷新
         self.freeze_display = True
 
-        # 如果你是用固定的 mold2.png，就只检查文件是否存在
         if not os.path.exists("mold2.png"):
             self.log("❌ 未找到 mold2.png，请先准备好这张图片")
             self.freeze_display = False
             return
 
-        # 如果你想用当前画面当黄金，也可以这样保存（可选）
-        # if self.last_frame is not None:
-        #     cv2.imwrite("mold2.png", self.last_frame)
-
-        # 同步调用黄金示教
         from golden_teach import run_golden_teach
         ok = run_golden_teach()
 
-        # ⭐ 黄金示教结束，解除冻结，让画面继续刷新
         self.freeze_display = False
 
         if ok:
             self.log("✅ 黄金示教完成，重新加载模板")
-            # 刷新 mold_detector 里的缓存，保证识别用最新模板
             reload_golden_templates()
         else:
             self.log("⚠ 黄金示教取消或失败")
@@ -825,13 +944,57 @@ class MainWindow(QWidget):
             ok = run_path_teach(cell_index=0, img_path="mold2.png")
             if ok:
                 self.log("✅ 点胶路径已保存到 disp_poly_cell0.npy / disp_dots_cell0.npy，已重新加载")
-                # ⭐ 路径更新后，刷新 mold_detector 的缓存
                 from mold_detector import reload_golden_templates
                 reload_golden_templates()
             else:
                 self.log("⚠ 点胶路径编辑已取消或未保存")
         except Exception as e:
             self.log(f"❌ 打开路径示教失败：{e}")
+
+    # ================== 点胶任务按钮（占位） ==================
+    def on_calibrate_coords(self):
+        """
+        按钮：标定坐标系（相机像素 → 机器 XY）
+        当前为占位，后面会实现 4 点标定。
+        """
+        self.log("🧮 标定坐标系：暂时只是占位，下一步我们会专门实现标定流程。")
+
+    def on_virtual_run(self):
+        """
+        按钮：相机虚拟跑
+        思路：在当前画面上，把4个产品的点胶路径按顺序“画一遍”，不动机器，只用于视觉检查。
+        当前先占位。
+        """
+        if self.last_frame is None:
+            self.log("❌ 当前没有画面，先启动相机或载入示例图再虚拟跑。")
+            return
+        self.log("👁️ 虚拟跑：后续会在画面上动态显示点胶路径（当前为占位）。")
+
+    def on_dry_run(self):
+        """
+        按钮：空跑
+        只走 XYZ，不打开点胶阀。
+        """
+        if self.cam2mach_matrix is None:
+            self.log("⚠ 还没有做坐标标定（cam2mach_matrix 为 None），暂不执行空跑。")
+            return
+        self.log("🏃 空跑：将来会发送 Gcode/运动指令给 MachineClient（当前为占位）。")
+
+    def on_real_run(self):
+        """
+        按钮：开始点胶
+        """
+        if self.cam2mach_matrix is None:
+            self.log("⚠ 还没有做坐标标定（cam2mach_matrix 为 None），不能开始真实点胶。")
+            return
+        self.log("💧 开始点胶：将来会真正控制 XYZ 和点胶阀（当前为占位）。")
+
+    def on_test_valve(self):
+        """
+        按钮：测试出胶
+        将来会通过 MachineClient 触发继电器 / MOS，控制电磁阀 ON/OFF。
+        """
+        self.log("🔧 测试出胶：后续会接继电器/MOS 控制信号（当前为占位，只打印日志）。")
 
     # ================== 相机参数联动 ==================
     def sync_from_camera_to_ui(self):

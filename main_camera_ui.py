@@ -29,10 +29,15 @@ import json
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
-    QVBoxLayout, QHBoxLayout, QFileDialog, QSlider,
+    QVBoxLayout, QHBoxLayout, QGridLayout,
+    QFileDialog, QSlider,
     QGroupBox, QFormLayout, QDoubleSpinBox, QTextEdit,
-    QMessageBox,
+    QMessageBox, QLineEdit, QScrollArea,
 )
+
+
+
+
 from PyQt5.QtGui import QImage, QPixmap
 
 # 你的检测函数
@@ -75,6 +80,52 @@ class CameraThread(QThread):
                 img = np.frombuffer(data_buff, dtype=np.uint8)[: w * h]
                 img = img.reshape((h, w))
                 self.frame_signal.emit(img)
+
+
+######## 滚轮
+class ImageLabel(QLabel):
+    """支持滚轮缩放 + 左键拖拽的 QLabel"""
+    wheel_zoom = pyqtSignal(int)          # 滚轮：传 deltaY
+    pan_delta = pyqtSignal(int, int)      # 拖拽：传 dx, dy
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._dragging = False
+        self._last_pos = None
+
+    def wheelEvent(self, event):
+        self.wheel_zoom.emit(event.angleDelta().y())
+        event.accept()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._dragging = True
+            self._last_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._dragging and self._last_pos is not None:
+            delta = event.pos() - self._last_pos
+            self._last_pos = event.pos()
+            # 注意：向右拖动，内容向右移动 => 滚动条减少
+            self.pan_delta.emit(delta.x(), delta.y())
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._dragging = False
+            self._last_pos = None
+            self.setCursor(Qt.ArrowCursor)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+
 
 # ================== 主窗口 ==================
 class MainWindow(QWidget):
@@ -165,8 +216,13 @@ class MainWindow(QWidget):
         self.thread = None
         self.last_frame = None
         self.freeze_display = False  # 是否冻结画面
-
         self.live_detect = False     # 是否实时识别模具
+        # 缩放相关
+        self.zoom_scale = 1.0        # 在“自适应基准”上的倍数
+        self.base_scale = None       # 适配窗口的基准比例（首帧或窗口变化时计算）
+
+        # 新增：缩放比例
+        self.zoom_scale = 1.0
 
         # ==== 相机标定 / 去畸变 ====
         self.K = None          # 内参矩阵
@@ -198,10 +254,13 @@ class MainWindow(QWidget):
 
         # ==== 运动 / 坐标相关 ====
         self.machine = MachineClient()
-        self.machine.connect()
+        self.machine.logger = self.log    # 👉 把 UI 的 log 函数塞给 MachineClient
+
+        self.default_base_url = "http://192.168.60.26:7125"  # 按你实际端口改
 
         # 当前坐标（mm）
         self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
+
 
         # 点动步长（mm）
         self.jog_step_mm = 1.0
@@ -212,6 +271,16 @@ class MainWindow(QWidget):
 
         # 相机像素 -> 机器 XY 的映射矩阵
         self.cam2mach_matrix = None
+
+        # ===== 坐标标定相关 =====
+        # 是否在画面中心显示十字线（标定时用）
+        self.show_crosshair = False
+        # 标定时记录的图像坐标 & 机器坐标
+        self._calib_img_pts = []
+        self._calib_mach_pts = []
+        # 为了在画面上画出将要标定的腔体中心点和编号
+        self.calib_points_for_ui = None
+
 
         # 安全高度（Z）
         self.safe_z = 10.0
@@ -225,9 +294,8 @@ class MainWindow(QWidget):
     # ================== UI ==================
     def init_ui(self):
         # ---- 左侧大画面 ----
-        self.label = QLabel("无图像")
+        self.label = ImageLabel("无图像")
         self.label.setAlignment(Qt.AlignCenter)
-        self.label.setMinimumSize(800, 600)
         self.label.setStyleSheet("""
             background-color: #000000;
             color: #9CA3AF;
@@ -235,8 +303,26 @@ class MainWindow(QWidget):
             border: 1px solid #374151;
         """)
 
+        # 用 QScrollArea 包起来，放大后可以拖动查看
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidget(self.label)
+        self.scroll_area.setWidgetResizable(False)
+
+        # 居中显示
+        self.scroll_area.setAlignment(Qt.AlignCenter)
+
+        # 初始隐藏滚动条（缩放>1 时再打开）
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
         left_layout = QVBoxLayout()
-        left_layout.addWidget(self.label)
+        left_layout.addWidget(self.scroll_area)
+
+        # 信号：滚轮缩放 + 拖拽平移
+        self.label.wheel_zoom.connect(self.on_wheel_zoom)
+        self.label.pan_delta.connect(self.on_pan_delta)
+
+
 
         # ---- 相机信息 ----
         self.lbl_cam_res = QLabel("-")
@@ -249,6 +335,29 @@ class MainWindow(QWidget):
         info_form.addRow("帧率：", self.lbl_cam_fps)
         info_form.addRow("像素格式：", self.lbl_cam_fmt)
         info_group.setLayout(info_form)
+
+        # ---- Klipper 连接 ----
+        conn_group = QGroupBox("Klipper 连接")
+        conn_layout = QHBoxLayout()
+
+        # 地址输入框：例如 http://192.168.60.26 或 http://192.168.60.26:7125
+        self.edit_base_url = QLineEdit(self.default_base_url)
+        self.edit_base_url.setPlaceholderText("例如: http://192.168.60.26:7125")
+
+        self.btn_connect_klipper = QPushButton("连接")
+        self.lbl_klipper_status = QLabel("未连接")
+        self.lbl_klipper_status.setMinimumWidth(80)
+
+        conn_layout.addWidget(QLabel("地址:"))
+        conn_layout.addWidget(self.edit_base_url)
+        conn_layout.addWidget(self.btn_connect_klipper)
+        conn_layout.addWidget(self.lbl_klipper_status)
+
+        conn_group.setLayout(conn_layout)
+
+
+
+
 
         # ---- 控制按钮 ----
         self.btn_start = QPushButton("启动相机")
@@ -332,68 +441,89 @@ class MainWindow(QWidget):
         form.addRow(self.lbl_gamma, row_gamma)
         param_group.setLayout(form)
 
+
         # ---- XYZ 运动控制 ----
         motion_group = QGroupBox("XYZ 运动控制")
         motion_layout = QVBoxLayout()
 
-        # 当前坐标显示
+        # 当前坐标显示（2 位小数）
         coord_layout = QHBoxLayout()
-        self.lbl_pos_x = QLabel("X: 0.000")
-        self.lbl_pos_y = QLabel("Y: 0.000")
-        self.lbl_pos_z = QLabel("Z: 0.000")
+        self.lbl_pos_x = QLabel("X: 0.00")
+        self.lbl_pos_y = QLabel("Y: 0.00")
+        self.lbl_pos_z = QLabel("Z: 0.00")
         coord_layout.addWidget(self.lbl_pos_x)
         coord_layout.addWidget(self.lbl_pos_y)
         coord_layout.addWidget(self.lbl_pos_z)
         motion_layout.addLayout(coord_layout)
 
-        # 各轴归位按钮
-        home_layout = QHBoxLayout()
-        self.btn_home_x = QPushButton("X归位")
-        self.btn_home_y = QPushButton("Y归位")
-        self.btn_home_z = QPushButton("Z归位")
-        home_layout.addWidget(self.btn_home_x)
-        home_layout.addWidget(self.btn_home_y)
-        home_layout.addWidget(self.btn_home_z)
-        motion_layout.addLayout(home_layout)
+        # 步长设置 + 预设按钮
+        step_layout = QVBoxLayout()
 
-        # 步长设置
-        step_layout = QHBoxLayout()
+        step_top = QHBoxLayout()
         lbl_step = QLabel("步长 (mm)")
         self.spn_step = QDoubleSpinBox()
         self.spn_step.setRange(0.01, 100.0)
-        self.spn_step.setDecimals(3)
-        self.spn_step.setSingleStep(0.1)
+        self.spn_step.setDecimals(2)        # ★ 只保留 2 位小数
+        self.spn_step.setSingleStep(0.01)
         self.spn_step.setValue(self.jog_step_mm)
-        step_layout.addWidget(lbl_step)
-        step_layout.addWidget(self.spn_step)
+        step_top.addWidget(lbl_step)
+        step_top.addWidget(self.spn_step)
+        step_layout.addLayout(step_top)
+
+        # 常用步长按钮
+        preset_layout = QHBoxLayout()
+        for val in [0.01, 0.1, 1, 5, 10, 25, 50, 100]:
+            text = f"{val}".rstrip("0").rstrip(".")  # 1.0 -> "1"
+            btn = QPushButton(text)
+            btn.setCheckable(False)
+            btn.clicked.connect(lambda _, v=val: self.spn_step.setValue(v))
+            preset_layout.addWidget(btn)
+        step_layout.addLayout(preset_layout)
+
         motion_layout.addLayout(step_layout)
 
-        # X 轴按钮
-        row_x = QHBoxLayout()
-        self.btn_x_minus = QPushButton("X-")
-        self.btn_x_plus = QPushButton("X+")
-        row_x.addWidget(self.btn_x_minus)
-        row_x.addWidget(self.btn_x_plus)
-        motion_layout.addLayout(row_x)
 
-        # Y 轴按钮
-        row_y = QHBoxLayout()
-        self.btn_y_minus = QPushButton("Y-")
-        self.btn_y_plus = QPushButton("Y+")
-        row_y.addWidget(self.btn_y_minus)
-        row_y.addWidget(self.btn_y_plus)
-        motion_layout.addLayout(row_y)
+     # 现在 XYZ 控制那块里你应该有这样的布局（精简版）：
+        grid = QGridLayout()
 
-        # Z 轴按钮
-        row_z = QHBoxLayout()
-        self.btn_z_minus = QPushButton("Z-")
+        self.btn_y_plus = QPushButton("↑")
+        self.btn_x_minus = QPushButton("←")
+        self.btn_x_plus = QPushButton("→")
+        self.btn_y_minus = QPushButton("↓")
+
+        grid.addWidget(self.btn_y_plus, 0, 1)
+        grid.addWidget(self.btn_x_minus, 1, 0)
+        grid.addWidget(self.btn_x_plus, 1, 2)
+        grid.addWidget(self.btn_y_minus, 2, 1)
+
         self.btn_z_plus = QPushButton("Z+")
-        row_z.addWidget(self.btn_z_minus)
-        row_z.addWidget(self.btn_z_plus)
-        motion_layout.addLayout(row_z)
+        self.btn_z_minus = QPushButton("Z-")
+        grid.addWidget(self.btn_z_plus, 0, 3)
+        grid.addWidget(self.btn_z_minus, 2, 3)
+
+        self.btn_home_all = QPushButton("全部归位")
+        self.btn_home_x = QPushButton("归位 X")
+        self.btn_home_y = QPushButton("归位 Y")
+        self.btn_home_z = QPushButton("归位 Z")
+        grid.addWidget(self.btn_home_all, 0, 4)
+        grid.addWidget(self.btn_home_x,   1, 4)
+        grid.addWidget(self.btn_home_y,   2, 4)
+        grid.addWidget(self.btn_home_z, 1, 3)
+
+        motion_layout.addLayout(grid)
+
+
+        # # Z 归位单独一行
+        # home_z_layout = QHBoxLayout()
+        # self.btn_home_z = QPushButton("归位 Z")
+        # home_z_layout.addStretch(1)
+        # home_z_layout.addWidget(self.btn_home_z)
+        # home_z_layout.addStretch(1)
+        # motion_layout.addLayout(home_z_layout)
 
         motion_group.setLayout(motion_layout)
         self.motion_group = motion_group
+
 
         # ---- 针头偏移显示 & 标定 ----
         offset_group = QGroupBox("针头偏移 (相机 → 针头)")
@@ -426,6 +556,7 @@ class MainWindow(QWidget):
         # ---- 右侧整体布局 ----
         right_layout = QVBoxLayout()
         right_layout.addWidget(info_group)
+        right_layout.addWidget(conn_group)          # ✅ 新增：Klipper 连接
         right_layout.addWidget(self.motion_group)   # XYZ 控制
         right_layout.addWidget(self.offset_group)   # 针头偏移
         right_layout.addWidget(self.z_group)        # Z 高度 / 对刀
@@ -437,7 +568,7 @@ class MainWindow(QWidget):
 
         # ---- 总布局 ----
         main_layout = QHBoxLayout()
-        main_layout.addLayout(left_layout, stretch=3)
+        main_layout.addLayout(left_layout, stretch=4) #左侧视窗大小占比
         main_layout.addLayout(right_layout, stretch=2)
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(12)
@@ -447,6 +578,7 @@ class MainWindow(QWidget):
         self.btn_start.clicked.connect(self.start_cam)
         self.btn_stop.clicked.connect(self.stop_cam)
         self.btn_save.clicked.connect(self.save_image)
+        self.btn_connect_klipper.clicked.connect(self.on_connect_klipper)
 
         self.btn_detect.clicked.connect(self.detect_mold)
         self.btn_golden.clicked.connect(self.on_golden_teach)
@@ -484,6 +616,7 @@ class MainWindow(QWidget):
         self.btn_z_plus.clicked.connect(lambda: self.on_jog('z', +1))
 
         # 归位按钮
+        self.btn_home_all.clicked.connect(lambda: self.on_home_axis('all'))
         self.btn_home_x.clicked.connect(lambda: self.on_home_axis('x'))
         self.btn_home_y.clicked.connect(lambda: self.on_home_axis('y'))
         self.btn_home_z.clicked.connect(lambda: self.on_home_axis('z'))
@@ -492,20 +625,59 @@ class MainWindow(QWidget):
         self.update_xyz_display()
         self.update_nozzle_offset_display()
 
+    def on_connect_klipper(self):
+        """
+        点击“连接”按钮：
+        - 读取 base_url
+        - configure + connect
+        - 成功则可以用 XYZ 按钮发 G-code
+        """
+        base_url = self.edit_base_url.text().strip()
+        if not base_url:
+            QMessageBox.warning(self, "错误", "请先输入 Klipper/Moonraker 地址")
+            return
+
+        # 配置 MachineClient
+        self.machine.configure(base_url)
+
+        ok = self.machine.connect()
+        if ok:
+            self.lbl_klipper_status.setText("已连接")
+            self.log(f"✅ 已连接到 Klipper: {base_url}")
+        else:
+            self.lbl_klipper_status.setText("未连接")
+            self.log(f"⚠ 连接 Klipper 失败: {base_url}")
+            QMessageBox.critical(
+                self, "连接失败",
+                f"无法连接到 {base_url}\n\n"
+                f"请检查：\n"
+                f"1. Klipper/Moonraker 是否运行\n"
+                f"2. 地址是否正确（是否需要端口号）\n"
+                f"3. PC 与树莓派是否在同一网段，防火墙是否放行"
+            )
+
     # ================== 运动 / 坐标相关 ==================
     def on_jog(self, axis: str, direction: int):
-        """X± / Y± / Z± 点动按钮的回调，direction 为 +1 或 -1。"""
+        """
+        axis: 'x' / 'y' / 'z'
+        direction: +1 表示按了 "正向" 按钮（X+ / Y+ / Z+），-1 表示 "负向"
+        我们这里把 X/Y 反向，让画面看起来：按 ↑，画面往上走。
+        """
         step = float(self.spn_step.value())
         dx = dy = dz = 0.0
 
         if axis == 'x':
-            dx = direction * step
+            # 左右方向反转
+            dx = -direction * step
         elif axis == 'y':
-            dy = direction * step
+            # 上下方向反转
+            dy = -direction * step
         elif axis == 'z':
+            # Z 方向保持原来的逻辑
             dz = direction * step
 
         self.move_machine_rel(dx, dy, dz)
+
 
     def move_machine_rel(self, dx: float, dy: float, dz: float):
         """
@@ -521,8 +693,8 @@ class MainWindow(QWidget):
         self.update_xyz_display()
         self.log(
             "JOG:",
-            f"dX={dx:.3f}, dY={dy:.3f}, dZ={dz:.3f} -> "
-            f"X={self.pos_x:.3f}, Y={self.pos_y:.3f}, Z={self.pos_z:.3f}"
+            f"dX={dx:.2f}, dY={dy:.2f}, dZ={dz:.2f} -> "
+            f"X={self.pos_x:.2f}, Y={self.pos_y:.2f}, Z={self.pos_z:.2f}"
         )
 
     def update_xyz_display(self, x=None, y=None, z=None):
@@ -537,25 +709,27 @@ class MainWindow(QWidget):
         if z is not None:
             self.pos_z = float(z)
 
-        self.lbl_pos_x.setText(f"X: {self.pos_x:.3f}")
-        self.lbl_pos_y.setText(f"Y: {self.pos_y:.3f}")
-        self.lbl_pos_z.setText(f"Z: {self.pos_z:.3f}")
+        self.lbl_pos_x.setText(f"X: {self.pos_x:.2f}")
+        self.lbl_pos_y.setText(f"Y: {self.pos_y:.2f}")
+        self.lbl_pos_z.setText(f"Z: {self.pos_z:.2f}")
 
     def on_home_axis(self, axis: str):
-        """单轴归位：X/Y/Z"""
+        """单轴 / 全部归位：X / Y / Z / all"""
         if axis == 'x':
             self.machine.home_x()
         elif axis == 'y':
             self.machine.home_y()
         elif axis == 'z':
             self.machine.home_z()
+        elif axis == 'all':
+            self.machine.home_all()
         else:
             return
 
         self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
         self.update_xyz_display()
         self.log("HOME:", f"Axis {axis.upper()} -> "
-                           f"X={self.pos_x:.3f}, Y={self.pos_y:.3f}, Z={self.pos_z:.3f}")
+                          f"X={self.pos_x:.2f}, Y={self.pos_y:.2f}, Z={self.pos_z:.2f}")
 
     # ---- 一键对刀（占位） ----
     def on_tool_probe_clicked(self):
@@ -593,6 +767,58 @@ class MainWindow(QWidget):
             "3. 计算相机→针头的 ΔX, ΔY 并保存。"
         )
         self.log("TODO", "标定针头偏移逻辑将在下一步实现。")
+
+    def on_wheel_zoom(self, delta_y: int):
+        """
+        鼠标滚轮缩放：向上放大，向下缩小
+        """
+        if self.last_frame is None:
+            return
+
+        # 每次滚轮调整 10%
+        if delta_y > 0:
+            self.zoom_scale *= 1.1
+        else:
+            self.zoom_scale /= 1.1
+
+        # 如果缩回 1 倍以下，我们就锁在 1 倍，并重新按窗口适配
+        if self.zoom_scale <= 1.0:
+            self.zoom_scale = 1.0
+            self.base_scale = None  # 下次渲染按窗口重新计算“fit”比例
+
+        # 根据倍数切换滚动条显示
+        if self.zoom_scale > 1.0:
+            # 放大时允许出现滚动条
+            self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        else:
+            # 1 倍时不显示滚动条，画面居中
+            self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            # 顺便把滚动条位置调回“中间”
+            hbar = self.scroll_area.horizontalScrollBar()
+            vbar = self.scroll_area.verticalScrollBar()
+            hbar.setValue((hbar.minimum() + hbar.maximum()) // 2)
+            vbar.setValue((vbar.minimum() + vbar.maximum()) // 2)
+
+        self.render_current_frame()
+
+    def on_pan_delta(self, dx: int, dy: int):
+        """
+        鼠标左键拖拽 -> 平移视图
+        dx, dy 是鼠标移动量（像素）
+        """
+        hbar = self.scroll_area.horizontalScrollBar()
+        vbar = self.scroll_area.verticalScrollBar()
+
+        # 鼠标向右拖动，希望看到右边内容 => 滚动条减少
+        hbar.setValue(hbar.value() - dx)
+        vbar.setValue(vbar.value() - dy)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # 下次渲染时重新计算 base_scale
+        self.base_scale = None
+        self.render_current_frame()
 
     # ================== 日志 ==================
     def log(self, *args):
@@ -811,33 +1037,60 @@ class MainWindow(QWidget):
             self.log("保存参数失败：", e)
 
     def update_image(self, img: np.ndarray):
-        """
-        临时关闭相机标定 / 去畸变逻辑，直接使用相机原始图像。
-        """
         self.last_frame = img.copy()
-
         if self.freeze_display:
             return
+        self.render_current_frame()
 
+    def render_current_frame(self):
+        """根据 last_frame + live_detect + 基准缩放 + zoom_scale 画图"""
+        if self.last_frame is None:
+            return
+
+        # 1. 先得到原始 QPixmap
         if self.live_detect:
-            # 识别并画框
-            color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(self.last_frame)
+            color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(
+                self.last_frame
+            )
             rgb = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
             bytes_per_line = ch * w
             qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
         else:
-            # 灰度显示
             h, w = self.last_frame.shape
-            qimg = QImage(self.last_frame.data, w, h, w, QImage.Format_Grayscale8).copy()
+            qimg = QImage(self.last_frame.data, w, h, w,
+                          QImage.Format_Grayscale8).copy()
 
         qpix = QPixmap.fromImage(qimg)
-        self.label.setPixmap(qpix.scaled(
-            self.label.width(),
-            self.label.height(),
+
+        # 2. 计算“适配窗口”的基准比例（只在第一次或窗口尺寸变动后重算）
+        if self.base_scale is None:
+            vp = self.scroll_area.viewport().size()
+            if qpix.width() == 0 or qpix.height() == 0:
+                return
+
+            sx = vp.width() / qpix.width()
+            sy = vp.height() / qpix.height()
+            self.base_scale = min(sx, sy, 1.0)  # 不放大，只在窗口比图小的时候缩小
+            if self.base_scale <= 0:
+                self.base_scale = 1.0
+            # 首次显示时，用户缩放倍数从 1 开始
+            # self.zoom_scale 保留用户滚轮操作
+
+        # 3. 最终缩放比例 = 基准 * 用户缩放
+        scale = self.base_scale * self.zoom_scale
+        scale = max(0.2, min(5.0, scale))  # 安全限制
+        scaled_w = int(qpix.width() * scale)
+        scaled_h = int(qpix.height() * scale)
+
+        qpix_scaled = qpix.scaled(
+            scaled_w, scaled_h,
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation
-        ))
+        )
+
+        self.label.setPixmap(qpix_scaled)
+        self.label.resize(qpix_scaled.size())
 
     def save_image(self):
         if self.last_frame is None:
@@ -887,32 +1140,12 @@ class MainWindow(QWidget):
         if self.live_detect:
             self.btn_detect.setText("停止识别")
             self.log("✅ 已开启实时识别（每帧都会画大框+小框）")
-
-            # 打开识别时立刻对当前帧跑一次
-            try:
-                color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(
-                    self.last_frame
-                )
-                rgb = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
-                h, w, ch = rgb.shape
-                bytes_per_line = ch * w
-                qimg = QImage(
-                    rgb.data, w, h, bytes_per_line, QImage.Format_RGB888
-                ).copy()
-                qpix = QPixmap.fromImage(qimg)
-                self.label.setPixmap(
-                    qpix.scaled(
-                        self.label.width(),
-                        self.label.height(),
-                        Qt.KeepAspectRatio,
-                        Qt.SmoothTransformation,
-                    )
-                )
-            except Exception as e:
-                self.log(f"首次识别出错：{e}")
         else:
             self.btn_detect.setText("识别模具")
             self.log("⏹ 已关闭实时识别")
+
+        # 切换状态后，用当前帧重新渲染一次
+        self.render_current_frame()
 
     # ================== 黄金示教 ==========================
     def on_golden_teach(self):
@@ -1155,6 +1388,6 @@ class MainWindow(QWidget):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     w = MainWindow()
-    w.resize(1100, 700)
+    w.resize(1600, 950)   # 或者 1800,1000 自己看感觉
     w.show()
     sys.exit(app.exec_())

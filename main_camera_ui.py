@@ -1043,54 +1043,39 @@ class MainWindow(QWidget):
         self.render_current_frame()
 
     def render_current_frame(self):
-        """根据 last_frame + live_detect + 基准缩放 + zoom_scale 画图"""
+        """稳定版本：只根据 last_frame + live_detect 显示图像。"""
         if self.last_frame is None:
             return
 
-        # 1. 先得到原始 QPixmap
-        if self.live_detect:
-            color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(
-                self.last_frame
-            )
-            rgb = cv2.cvtColor(color_img, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb.shape
-            bytes_per_line = ch * w
-            qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
-        else:
-            h, w = self.last_frame.shape
-            qimg = QImage(self.last_frame.data, w, h, w,
-                          QImage.Format_Grayscale8).copy()
+        img = self.last_frame
+
+        try:
+            if self.live_detect:
+                # 识别并画框
+                color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(img)
+                bgr = color_img
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb.shape
+                bytes_per_line = ch * w
+                qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
+            else:
+                # 灰度显示
+                h, w = img.shape
+                qimg = QImage(img.data, w, h, w, QImage.Format_Grayscale8).copy()
+        except Exception as e:
+            # 任何异常都打印一下，避免整个显示挂掉
+            self.log("[render_current_frame] 出错：", e)
+            return
 
         qpix = QPixmap.fromImage(qimg)
-
-        # 2. 计算“适配窗口”的基准比例（只在第一次或窗口尺寸变动后重算）
-        if self.base_scale is None:
-            vp = self.scroll_area.viewport().size()
-            if qpix.width() == 0 or qpix.height() == 0:
-                return
-
-            sx = vp.width() / qpix.width()
-            sy = vp.height() / qpix.height()
-            self.base_scale = min(sx, sy, 1.0)  # 不放大，只在窗口比图小的时候缩小
-            if self.base_scale <= 0:
-                self.base_scale = 1.0
-            # 首次显示时，用户缩放倍数从 1 开始
-            # self.zoom_scale 保留用户滚轮操作
-
-        # 3. 最终缩放比例 = 基准 * 用户缩放
-        scale = self.base_scale * self.zoom_scale
-        scale = max(0.2, min(5.0, scale))  # 安全限制
-        scaled_w = int(qpix.width() * scale)
-        scaled_h = int(qpix.height() * scale)
-
-        qpix_scaled = qpix.scaled(
-            scaled_w, scaled_h,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation
+        self.label.setPixmap(
+            qpix.scaled(
+                self.label.width(),
+                self.label.height(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
         )
-
-        self.label.setPixmap(qpix_scaled)
-        self.label.resize(qpix_scaled.size())
 
     def save_image(self):
         if self.last_frame is None:

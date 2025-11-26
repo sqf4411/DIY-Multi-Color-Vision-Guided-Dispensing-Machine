@@ -239,6 +239,8 @@ class MainWindow(QWidget):
 
         # ====== 坐标标定相关 ======
         self.calib_step = 0  # 0=闲置, 10=微调视觉点, 1-4=记录机器点
+        self.verify_mode = False  # ✅ 新增：默认为关闭状态
+        self.verify_click_pt = None  # ✅ 新增：用于记录验证模式下点击的坐标
         self.calib_vision_pts = []  # 视觉坐标 (4,2)
         self.calib_machine_pts = []
         self.calib_sel_idx = 0  # 当前正在微调哪个角 (0-3)
@@ -301,7 +303,19 @@ class MainWindow(QWidget):
         self.init_ui()
         self.load_saved_params()
         self.load_golden_templates()
-
+        # ====== ✅ 新增：启动时自动加载标定矩阵 ======
+        if os.path.exists("cam2mach_matrix.npy"):
+            try:
+                self.cam2mach_matrix = np.load("cam2mach_matrix.npy")
+                # 这里因为 log_box 已经初始化了，可以直接打印到界面日志
+                # 为了防止 log 函数还未准备好（极端情况），加个简单判断
+                if hasattr(self, 'log'):
+                    self.log("✅ 已自动加载历史标定矩阵，无需重新标定！")
+                else:
+                    print("✅ 已自动加载历史标定矩阵")
+            except Exception as e:
+                print(f"⚠ 加载标定矩阵失败: {e}")
+        # ==========================================
     # ================== UI ==================
     def init_ui(self):
         # ---- 左侧大画面 ----
@@ -435,6 +449,10 @@ class MainWindow(QWidget):
 
         # 点胶任务相关按钮
         self.btn_calibrate = QPushButton("标定坐标系")
+        # ====== ✅ 新增：验证精度按钮 ======
+        self.btn_verify = QPushButton("验证精度")
+        self.btn_verify.setToolTip("点击开启/关闭【点击定位】功能")
+        # ================================
         self.btn_virtual = QPushButton("虚拟跑")
         self.btn_dry_run = QPushButton("空跑")
         self.btn_real_run = QPushButton("开始点胶")
@@ -456,6 +474,7 @@ class MainWindow(QWidget):
         # 第二排：点胶任务
         task_layout = QHBoxLayout()
         task_layout.addWidget(self.btn_calibrate)
+        task_layout.addWidget(self.btn_verify)  # ✅ 验证精度按钮
         task_layout.addWidget(self.btn_virtual)
         task_layout.addWidget(self.btn_dry_run)
         task_layout.addWidget(self.btn_real_run)
@@ -667,6 +686,9 @@ class MainWindow(QWidget):
         self.btn_resume.clicked.connect(self.resume_preview)
         self.btn_path.clicked.connect(self.on_edit_path)
 
+        # 标定精度确认
+        self.btn_verify.clicked.connect(self.on_toggle_verify_mode)
+
         # 针头偏移标定
         self.btn_calib_nozzle.clicked.connect(self.on_calibrate_nozzle_offset)
 
@@ -710,7 +732,8 @@ class MainWindow(QWidget):
     def on_connect_klipper(self):
         """
         连接 Klipper：
-        拼接 IP 和 Port，连接成功后直接修改按钮文字。
+        1. 拼接 IP 和 Port
+        2. 连接成功后，立即同步 Klipper 的真实坐标到界面
         """
         ip = self.edit_ip.text().strip()
         port = self.edit_port.text().strip()
@@ -719,19 +742,17 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, "错误", "IP 或 端口不能为空")
             return
 
-        # 拼接完整地址
         full_url = f"http://{ip}:{port}"
 
-        # 配置并连接
         self.machine.configure(full_url)
         ok = self.machine.connect()
 
         if ok:
-            # ✅ 连接成功：按钮变绿，文字变“已连接”
+            # 1. 样式变绿
             self.btn_connect_klipper.setText("已连接")
             self.btn_connect_klipper.setStyleSheet("""
                 QPushButton {
-                    background-color: #10B981;  /* 绿色 */
+                    background-color: #10B981;
                     color: white;
                     border-radius: 4px;
                     font-weight: bold;
@@ -741,9 +762,19 @@ class MainWindow(QWidget):
                 }
             """)
 
+            # ====== ✅ 新增：连接成功后，立即同步坐标 ======
+            # 从 machine_client 里读取刚刚从 Klipper 抓回来的坐标
+            mx, my, mz = self.machine.get_position()
+
+            # 刷新界面显示 (这会自动应用你之前的正负号显示逻辑)
+            self.update_xyz_display(mx, my, mz)
+
+            self.log(f"🔄 已同步 Klipper 坐标: X={mx:.2f}, Y={my:.2f}, Z={mz:.2f}")
+            # ===========================================
+
             self.log(f"✅ 已连接到 Klipper: {full_url}")
         else:
-            # ❌ 连接失败：按钮恢复灰色，提示重试
+            # 连接失败逻辑
             self.btn_connect_klipper.setText("重试")
             self.btn_connect_klipper.setStyleSheet("""
                 QPushButton {
@@ -1156,27 +1187,15 @@ class MainWindow(QWidget):
         self.render_current_frame()
 
     def render_current_frame(self):
-        """硬编码翻转版：让画面移动方向符合直觉"""
+        """硬编码翻转版 + 验证显示增强 + 修复标定点不显示BUG"""
         if self.last_frame is None:
             return
 
-        # 1. 拷贝一份
+        # 1. 拷贝 & 翻转 (保持 -1)
         img = self.last_frame.copy()
-
-        # ====== 🛠️ 在这里强制翻转画面 ======
-        # flipCode 参数说明:
-        #  1 = 水平翻转 (解决左右反)
-        #  0 = 垂直翻转 (解决上下反)
-        # -1 = 水平+垂直同时翻转 (相当于旋转180度)
-
-        # 根据你的描述“按左键画面向右移”，你需要水平翻转：
         img = cv2.flip(img, -1)
 
-        # 如果你发现上下也是反的（按上键画面向下移），就改成 -1
-        # img = cv2.flip(img, -1)
-        # =================================
-
-        # 2. 转成 BGR (后面的代码保持不变)
+        # 2. 转成 BGR
         if len(img.shape) == 2:
             vis_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         else:
@@ -1185,12 +1204,30 @@ class MainWindow(QWidget):
         h, w = vis_img.shape[:2]
         cx, cy = w // 2, h // 2
 
-        # ====== A. 标定阶段 1 (视觉微调) ======
-        if self.calib_step == 10:
+        # ====== 🎨 A. 验证模式显示逻辑 ======
+        if self.verify_mode:
+            # 画中心十字
+            cv2.line(vis_img, (cx, 0), (cx, h), (0, 0, 255), 1)
+            cv2.line(vis_img, (0, cy), (w, cy), (0, 0, 255), 1)
+            cv2.circle(vis_img, (cx, cy), 15, (0, 0, 255), 2)
+
+            # 画点击的目标点
+            if self.verify_click_pt is not None:
+                vx, vy = int(self.verify_click_pt[0]), int(self.verify_click_pt[1])
+                cv2.drawMarker(vis_img, (vx, vy), (0, 255, 0), cv2.MARKER_CROSS, 20, 2)
+                cv2.circle(vis_img, (vx, vy), 5, (0, 255, 0), -1)
+                cv2.putText(vis_img, "Target", (vx + 10, vy - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+            cv2.putText(vis_img, "VERIFY MODE: Click any point to move center here", (20, h - 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+
+        # ====== 🛠️ B. 标定阶段 1 (视觉微调模式) - 【找回丢失的代码！】 ======
+        elif self.calib_step == 10:
             if len(self.calib_vision_pts) == 4:
                 for i, pt in enumerate(self.calib_vision_pts):
                     px, py = int(pt[0]), int(pt[1])
                     if i == self.calib_sel_idx:
+                        # 选中态：红色实心 + 黄色大圈 + 辅助十字
                         cv2.circle(vis_img, (px, py), 6, (0, 0, 255), -1)
                         cv2.circle(vis_img, (px, py), 20, (0, 255, 255), 2)
                         cv2.line(vis_img, (px - 30, py), (px + 30, py), (0, 255, 255), 1)
@@ -1198,6 +1235,7 @@ class MainWindow(QWidget):
                         cv2.putText(vis_img, f"#{i + 1} Moving", (px + 20, py - 20),
                                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
                     else:
+                        # 普通态：绿色空心
                         cv2.circle(vis_img, (px, py), 6, (0, 255, 0), 2)
                         cv2.putText(vis_img, f"#{i + 1}", (px + 10, py - 10),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
@@ -1205,7 +1243,7 @@ class MainWindow(QWidget):
                 msg = "ADJUST: Press [1-4] to Switch | [WASD] to Move"
                 cv2.putText(vis_img, msg, (30, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
 
-        # ====== B. 标定阶段 2 (机器对位) ======
+        # ====== C. 标定阶段 2 (机器对位模式) ======
         elif 1 <= self.calib_step <= 4:
             if self.show_crosshair:
                 cv2.line(vis_img, (cx, 0), (cx, h), (0, 0, 255), 1)
@@ -1217,7 +1255,7 @@ class MainWindow(QWidget):
                 cv2.arrowedLine(vis_img, (cx, cy), (tx, ty), (0, 255, 0), 3)
                 cv2.circle(vis_img, (tx, ty), 10, (0, 255, 255), 2)
 
-        # ====== C. 正常检测模式 ======
+        # ====== D. 正常检测模式 ======
         elif self.live_detect:
             from mold_detector import detect_mold_and_cells
             detected_img, _, _, _ = detect_mold_and_cells(img)
@@ -1358,10 +1396,16 @@ class MainWindow(QWidget):
                 self.log("❌ 请先启动相机")
                 return
 
-            # 1. 先尝试自动识别
-            # 注意：这里调用 mold_detector 里的检测
+            # ====== 🛠️ 关键修改：识别前先翻转图像 ======
+            # 必须与 render_current_frame 里的翻转逻辑完全一致！
+            # 之前我们用了 cv2.flip(img, -1)，这里也要用 -1
+            img_to_detect = self.last_frame.copy()
+            img_to_detect = cv2.flip(img_to_detect, -1)
+            # =========================================
+
+            # 1. 使用翻转后的图去识别
             from mold_detector import detect_mold_and_cells
-            _, big_box, _, _ = detect_mold_and_cells(self.last_frame)
+            _, big_box, _, _ = detect_mold_and_cells(img_to_detect)
 
             if big_box is not None:
                 self.calib_vision_pts = big_box.astype(np.float32)
@@ -1370,19 +1414,21 @@ class MainWindow(QWidget):
                 self.calib_vision_pts = _order_points(self.calib_vision_pts)
                 self.log("✅ 自动识别到大框，进入微调模式。")
             elif os.path.exists("golden_corners.npy"):
+                # 如果没有识别到，加载旧数据。注意：旧数据如果是翻转前保存的，可能也会不对。
+                # 建议第一次都重新自动识别一遍。
                 self.calib_vision_pts = np.load("golden_corners.npy")
                 self.log("⚠ 自动识别失败，加载上次保存的角点。")
             else:
                 QMessageBox.warning(self, "失败", "无法识别模具且无历史数据。\n请确保模具在画面中，或先进行示教。")
                 return
 
+            # ... (后续弹出微调对话框的代码保持不变) ...
             # 进入微调状态 (状态码设为 10)
             self.calib_step = 10
             self.calib_sel_idx = 0
             self.btn_calibrate.setText("确认视觉角点 (下一步)")
-            self.btn_calibrate.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold;")  # 紫色
+            self.btn_calibrate.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold;")
 
-            # =========== 修改开始：支持取消 ===========
             reply = QMessageBox.information(
                 self,
                 "微调模式",
@@ -1390,16 +1436,15 @@ class MainWindow(QWidget):
                 "1. 滚动滚轮放大画面。\n"
                 "2. 点击画面中的红圈选中角点，使用【WASD】键微调位置。\n"
                 "3. 确保 4 个角点都精准对齐后，再次点击按钮进入下一步。",
-                QMessageBox.Ok | QMessageBox.Cancel  # <--- 添加取消按钮
+                QMessageBox.Ok | QMessageBox.Cancel
             )
 
             if reply == QMessageBox.Cancel:
-                # 如果点击取消，马上回退状态
                 self.calib_step = 0
                 self.btn_calibrate.setText("标定坐标系")
-                self.btn_calibrate.setStyleSheet("")  # 恢复默认样式
+                self.btn_calibrate.setStyleSheet("")
                 self.log("🚫 标定操作已取消")
-                self.render_current_frame()  # 刷新画面，去除红点辅助线
+                self.render_current_frame()
                 return
             # =========== 修改结束 ===========
 
@@ -1435,36 +1480,85 @@ class MainWindow(QWidget):
             else:
                 self.finish_calibration()
 
-    # --- 新增：处理点击选点 ---
-    def on_label_clicked(self, widget_x, widget_y):
-        """鼠标点击画面时，选中最近的角点 (仅在微调模式下有效)"""
-        if self.calib_step != 10:
+    # 精确确认
+    def on_toggle_verify_mode(self):
+        """切换验证模式的开关"""
+        if self.cam2mach_matrix is None:
+            QMessageBox.warning(self, "无法验证", "请先完成【标定坐标系】！")
             return
 
-        # 将组件坐标映射回图像坐标
-        # 公式: img_x = widget_x / zoom_scale (大概估算)
-        # 更严谨的做法是结合 scrollbar，但这里只要算相对距离最近的即可
+        self.verify_mode = not self.verify_mode
 
-        # 简单反算：
-        # 我们直接遍历 4 个点，把它们投影到 widget 坐标，看谁离鼠标最近
-        min_dist = float('inf')
-        sel = -1
+        if self.verify_mode:
+            self.btn_verify.setText("停止验证")
+            self.btn_verify.setStyleSheet("background-color: #10B981; color: white;")  # 变绿
+            QMessageBox.information(self, "验证模式开启",
+                                    "点击画面任意点，机器将尝试将其移至中心。\n\n目标：绿色标记应与红色十字重合。")
+        else:
+            self.btn_verify.setText("验证精度")
+            self.btn_verify.setStyleSheet("")  # 恢复默认
+            self.verify_click_pt = None  # ✅ 清空点击记录
+            self.log("验证模式已关闭。")
 
-        # 获取当前显示的缩放比例
+        self.render_current_frame()  # ✅ 立即刷新画面
+    # --- 新增：处理点击选点 ---
+    def on_label_clicked(self, widget_x, widget_y):
+        """
+        [修复版] 相对移动逻辑：
+        无论机器在哪，计算点击点与屏幕中心的【相对距离】，控制机器去追。
+        """
         if self.last_frame is None: return
+
+        # 1. 坐标换算
         h_img, w_img = self.last_frame.shape[:2]
+        h_widget = self.label.height()
+        w_widget = self.label.width()
+        if h_widget == 0 or w_widget == 0: return
 
-        # 重新走一遍 render 里的逻辑算显示尺寸 (为了代码简洁，这里做个简化估算)
-        # 实际上因为有点麻烦，我们可以反过来：把点击位置当作参考
-        # 最简单的体验优化：不需要太精准，只要点在那个大概方位就行
+        click_img_x = widget_x * (w_img / w_widget)
+        click_img_y = widget_y * (h_img / h_widget)
 
-        # 这种情况下，直接根据逻辑位置判断：
-        # 点击 左上区域->0, 右上->1 ...
-        # 但为了严谨，我们用 WASD 切换也是可以的。
-        # 这里为了简化，我们只实现 "WASD 移动当前选中的点"，切换点可以用数字键 1-4
-        pass
+        # ====== 情况 A：标定微调 (保持不变) ======
+        if self.calib_step == 10:
+            min_dist = float('inf')
+            best_idx = -1
+            for i, pt in enumerate(self.calib_vision_pts):
+                px, py = pt[0], pt[1]
+                dist = ((px - click_img_x)**2 + (py - click_img_y)**2)**0.5
+                if dist < min_dist:
+                    min_dist = dist
+                    best_idx = i
+            if best_idx != -1:
+                self.calib_sel_idx = best_idx
+                self.render_current_frame()
+            return
 
-        # --- 新增：键盘控制 WASD ---
+        # ====== 情况 B：验证模式 (核心修改) ======
+        if self.verify_mode and self.cam2mach_matrix is not None:
+            # 1. 记录点击点 (画图用)
+            self.verify_click_pt = (click_img_x, click_img_y)
+            self.render_current_frame()
+
+            # 2. 计算【相对像素偏移】 (点击点 - 屏幕中心)
+            center_x, center_y = w_img / 2, h_img / 2
+            dx_pix = click_img_x - center_x
+            dy_pix = click_img_y - center_y
+
+            # 3. 利用矩阵的线性部分 (2x2) 计算【相对毫米偏移】
+            # 矩阵 M = [[m00, m01, tx], [m10, m11, ty]]
+            # dx_mm = m00*dx_pix + m01*dy_pix
+            # dy_mm = m10*dx_pix + m11*dy_pix
+            m = self.cam2mach_matrix
+            dx_mm = m[0, 0] * dx_pix + m[0, 1] * dy_pix
+            dy_mm = m[1, 0] * dx_pix + m[1, 1] * dy_pix
+
+            self.log(f"🎯 [验证] 像素偏差({dx_pix:.1f}, {dy_pix:.1f}) -> 机器需移动({dx_mm:.2f}, {dy_mm:.2f})")
+
+            # 4. 发送相对移动指令 (G91)
+            # 速度稍慢一点方便观察，例如 3000
+            speed = 3000
+            script = f"G91\nG0 X{dx_mm:.3f} Y{dy_mm:.3f} F{speed}\nG90" # 动完切回绝对模式
+            self.machine._post_gcode(script)
 
     def keyPressEvent(self, event):
         """键盘事件：WASD 微调，1234 切换选中点"""
@@ -1533,13 +1627,103 @@ class MainWindow(QWidget):
 
     def on_dry_run(self):
         """
-        按钮：空跑
-        只走 XYZ，不打开点胶阀。
+        按钮：空跑 (修复版 - 使用相对逻辑)
+        无论相机停在哪里，只要画面里有模具，就以当前位置为基准进行空跑。
         """
         if self.cam2mach_matrix is None:
-            self.log("⚠ 还没有做坐标标定（cam2mach_matrix 为 None），暂不执行空跑。")
+            QMessageBox.warning(self, "未标定", "请先完成坐标系标定！")
             return
-        self.log("🏃 空跑：将来会发送 Gcode/运动指令给 MachineClient（当前为占位）。")
+        if self.last_frame is None:
+            QMessageBox.warning(self, "无图像", "请先启动相机！")
+            return
+
+        # 1. 获取翻转后的图像 (保持视觉一致性)
+        from mold_detector import get_calculated_paths
+        img_dry = self.last_frame.copy()
+        img_dry = cv2.flip(img_dry, -1)  # 必须翻转！
+
+        # 2. 获取路径数据 (像素坐标)
+        paths_px = get_calculated_paths(img_dry)
+
+        if not paths_px:
+            QMessageBox.warning(self, "未识别", "未识别到模具路径！\n请调整光照或检查模具位置。")
+            return
+
+        # ====== 🛠️ 核心算法修改：相对坐标计算 ======
+        # 获取当前机器所在的物理坐标 (基准点)
+        cur_x, cur_y, _ = self.machine.get_position()
+
+        # 获取屏幕中心 (像素基准)
+        h_img, w_img = img_dry.shape[:2]
+        center_x, center_y = w_img / 2, h_img / 2
+
+        # 提取矩阵的线性部分 (2x2)，只负责旋转和缩放，忽略平移
+        # M = [[m00, m01, tx], [m10, m11, ty]]
+        m = self.cam2mach_matrix
+
+        paths_machine = []
+
+        for p_px in paths_px:
+            # p_px 是 (N, 2) 的数组
+            # 计算相对于屏幕中心的像素偏移
+            delta_px = p_px - np.array([center_x, center_y])
+
+            # 应用矩阵线性变换 (像素差 -> 毫米差)
+            # dx_mm = m00*dx_p + m01*dy_p
+            # dy_mm = m10*dx_p + m11*dy_p
+            delta_mm_x = delta_px[:, 0] * m[0, 0] + delta_px[:, 1] * m[0, 1]
+            delta_mm_y = delta_px[:, 0] * m[1, 0] + delta_px[:, 1] * m[1, 1]
+
+            # 加上当前机器坐标 = 绝对目标坐标
+            abs_x = cur_x + delta_mm_x
+            abs_y = cur_y + delta_mm_y
+
+            # 组合回 (N, 2)
+            path_mm = np.column_stack((abs_x, abs_y))
+            paths_machine.append(path_mm)
+        # ===========================================
+
+        self.log(f"✅ 生成 {len(paths_machine)} 条路径，基于当前坐标 X{cur_x:.1f}, Y{cur_y:.1f}")
+
+        # 4. 生成 G-code 脚本
+        # ⚠️ 注意：Z轴高度一定要确认好！
+        SAFE_Z = 0.0  # 抬刀高度 (最高点)
+        WORK_Z = -5.0  # 工作高度 (根据你的模具深度调整)
+        SPEED_XY = 6000
+        SPEED_Z = 1000
+
+        gcode_lines = []
+        gcode_lines.append("G90")  # 绝对坐标模式
+        gcode_lines.append(f"G0 Z{SAFE_Z} F{SPEED_Z}")
+
+        for path in paths_machine:
+            if len(path) == 0: continue
+
+            # 4.1 移动到起点
+            start_x, start_y = path[0]
+            # 加上针头偏移 (如果有标定过)
+            start_x += self.nozzle_offset_x
+            start_y += self.nozzle_offset_y
+
+            gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{SPEED_XY}")
+            gcode_lines.append(f"G0 Z{WORK_Z} F{SPEED_Z}")  # 下刀
+
+            # 4.2 走路径
+            for pt in path[1:]:
+                pt_x, pt_y = pt
+                pt_x += self.nozzle_offset_x
+                pt_y += self.nozzle_offset_y
+                gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{SPEED_XY}")
+
+            gcode_lines.append(f"G0 Z{SAFE_Z} F{SPEED_Z}")  # 抬刀
+
+        # 5. 发送
+        full_script = "\n".join(gcode_lines)
+        ok = self.machine._post_gcode(full_script)
+        if ok:
+            self.log(f"🚀 空跑指令已发送")
+        else:
+            QMessageBox.critical(self, "发送失败", "无法发送 G-code")
 
     def on_real_run(self):
         """

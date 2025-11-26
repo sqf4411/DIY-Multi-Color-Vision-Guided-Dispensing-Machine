@@ -498,6 +498,21 @@ class MainWindow(QWidget):
         row_gamma.addWidget(self.sld_gamma)
         row_gamma.addWidget(self.spn_gamma)
 
+        # ====== ✅ 第一步：加回翻转勾选框 ======
+        from PyQt5.QtWidgets import QCheckBox
+
+        row_flip = QHBoxLayout()
+        self.chk_flip_x = QCheckBox("水平翻转 (Flip X)")
+        self.chk_flip_y = QCheckBox("垂直翻转 (Flip Y)")
+
+        # 连接信号：一点击就刷新画面
+        self.chk_flip_x.stateChanged.connect(self.render_current_frame)
+        self.chk_flip_y.stateChanged.connect(self.render_current_frame)
+
+        row_flip.addWidget(self.chk_flip_x)
+        row_flip.addWidget(self.chk_flip_y)
+        # ====================================
+
 
         # ---- 右边参数组 ----
         param_group = QGroupBox("相机参数")
@@ -758,20 +773,18 @@ class MainWindow(QWidget):
     # ================== 运动 / 坐标相关 ==================
     def on_jog(self, axis: str, direction: int):
         """
-        [回滚版本] 视觉优先逻辑：
-        为了让画面移动符合直觉（点右画面向右），这里故意保留了反向逻辑。
+        [标准版] 正向逻辑：
+        点右键(Dir=1) -> 坐标增加(X+)
+        点上键(Dir=1) -> 坐标增加(Y+)
         """
         step = float(self.spn_step.value())
         dx = dy = dz = 0.0
 
         if axis == 'x':
-            # 恢复反向：点右键(Dir=1) -> 发送 X- -> 画面看起来向右移
-            dx = -direction * step
+            dx = direction * step  # ✅ 去掉负号，正向移动
         elif axis == 'y':
-            # 恢复反向：点上键(Dir=1) -> 发送 Y- -> 画面看起来向上移
-            dy = -direction * step
+            dy = direction * step  # ✅ 去掉负号，正向移动
         elif axis == 'z':
-            # Z轴保持正向
             dz = direction * step
 
         self.move_machine_rel(dx, dy, dz)
@@ -797,19 +810,21 @@ class MainWindow(QWidget):
 
     def update_xyz_display(self, x=None, y=None, z=None):
         """
-        更新 UI 上的坐标显示。
-        如果传入 x/y/z，则顺便更新内部 pos_x/pos_y/pos_z。
+        [修正版] 实事求是显示：
+        机器是多少，界面就显示多少。去掉之前的负号欺骗。
         """
-        if x is not None:
-            self.pos_x = float(x)
-        if y is not None:
-            self.pos_y = float(y)
-        if z is not None:
-            self.pos_z = float(z)
+        if x is not None: self.pos_x = float(x)
+        if y is not None: self.pos_y = float(y)
+        if z is not None: self.pos_z = float(z)
 
-        self.lbl_pos_x.setText(f"X: {self.pos_x:.2f}")
-        self.lbl_pos_y.setText(f"Y: {self.pos_y:.2f}")
-        self.lbl_pos_z.setText(f"Z: {self.pos_z:.2f}")
+        # ====== 👇 修改这里：直接显示，不要加负号 ======
+        display_x = self.pos_x
+        display_y = self.pos_y
+        display_z = self.pos_z
+
+        self.lbl_pos_x.setText(f"X: {display_x:.2f}")
+        self.lbl_pos_y.setText(f"Y: {display_y:.2f}")
+        self.lbl_pos_z.setText(f"Z: {display_z:.2f}")
 
     def on_home_axis(self, axis: str):
         """单轴 / 全部归位：X / Y / Z / all"""
@@ -1141,14 +1156,27 @@ class MainWindow(QWidget):
         self.render_current_frame()
 
     def render_current_frame(self):
-        """[回滚版本] 纯净显示：移除翻转逻辑，修复启动报错"""
+        """硬编码翻转版：让画面移动方向符合直觉"""
         if self.last_frame is None:
             return
 
         # 1. 拷贝一份
         img = self.last_frame.copy()
 
-        # 2. 默认转 BGR
+        # ====== 🛠️ 在这里强制翻转画面 ======
+        # flipCode 参数说明:
+        #  1 = 水平翻转 (解决左右反)
+        #  0 = 垂直翻转 (解决上下反)
+        # -1 = 水平+垂直同时翻转 (相当于旋转180度)
+
+        # 根据你的描述“按左键画面向右移”，你需要水平翻转：
+        img = cv2.flip(img, -1)
+
+        # 如果你发现上下也是反的（按上键画面向下移），就改成 -1
+        # img = cv2.flip(img, -1)
+        # =================================
+
+        # 2. 转成 BGR (后面的代码保持不变)
         if len(img.shape) == 2:
             vis_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         else:

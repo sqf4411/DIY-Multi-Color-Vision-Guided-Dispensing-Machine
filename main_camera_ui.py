@@ -179,7 +179,12 @@ class ImageLabel(QLabel):
             super().mouseReleaseEvent(event)
 
 
-
+# ====== ✅ 必须添加：定义设置文件名常量 ======
+import json # 确保 json 库已经导入
+import os   # 确保 os 库已经导入
+# 这个文件将用于保存速度、加速度等应用参数
+SETTINGS_FILE = "app_settings.json"
+# ==========================================
 # ================== 主窗口 ==================
 class MainWindow(QWidget):
     def __init__(self):
@@ -375,6 +380,10 @@ class MainWindow(QWidget):
             except Exception as e:
                 print(f"⚠ 加载标定矩阵失败: {e}")
         # ==========================================
+        # 在所有 UI 元素初始化完成后，调用加载设置
+        self.load_app_settings()
+
+        # self.init_camera_ui()
     # ================== UI ==================
     def init_ui(self):
         # ---- 左侧大画面 ----
@@ -900,13 +909,11 @@ class MainWindow(QWidget):
     # ================== 运动 / 坐标相关 ==================
     def on_jog(self, axis: str, direction: int):
         """
-        [动态速度版]
-        使用滑块设置的 feedrate_xy / feedrate_z
+        [动态速度版] - 修复：恢复坐标更新和日志打印
         """
         step = float(self.spn_step.value())
         dx = dy = dz = 0.0
 
-        # 注意：这里保持你之前觉得顺手的正/负逻辑（假设你现在的正向逻辑是顺手的）
         if axis == 'x':
             dx = direction * step
         elif axis == 'y':
@@ -914,10 +921,23 @@ class MainWindow(QWidget):
         elif axis == 'z':
             dz = direction * step
 
-        # ====== ✅ 修改：传入滑块设置的速度 ======
+        # 1. 执行移动指令 (会更新 machine client 内部的 _x, _y)
         self.machine.move_rel(dx, dy, dz,
                               feedrate_xy=self.feedrate_xy,
                               feedrate_z=self.feedrate_z)
+
+        # 2. 从 machine client 读取更新后的本地坐标
+        self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
+
+        # 3. 刷新 UI 显示
+        self.update_xyz_display()
+
+        # 4. 打印日志 (原来这部分逻辑是缺失的)
+        self.log(
+            "JOG:",
+            f"dX={dx:.2f}, dY={dy:.2f}, dZ={dz:.2f} -> "
+            f"X={self.pos_x:.2f}, Y={self.pos_y:.2f}, Z={self.pos_z:.2f}"
+        )
 
     # ====== ✅ 新增：速度/加速度 响应函数 (请复制这一整块) ======
     def on_speed_changed(self):
@@ -1311,6 +1331,65 @@ class MainWindow(QWidget):
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             self.log("保存参数失败：", e)
+
+    # ====================================================================
+    # 应用参数持久化 (速度/加速度)
+    # ====================================================================
+    SETTINGS_FILE = "app_settings.json"  # 在文件开头定义这个常量
+
+    # ... (在 class MainWindow(QWidget) 内部) ...
+
+    def load_app_settings(self):
+        """加载应用设置：速度和加速度"""
+        if not os.path.exists(SETTINGS_FILE):
+            return
+
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+
+                # 1. 恢复 XY 速度
+                if 'feedrate_xy' in settings:
+                    val = float(settings['feedrate_xy'])
+                    self.sld_spd_xy.setValue(int(val))  # 更新滑块
+                    self.feedrate_xy = val  # 更新内部变量
+                    self.lbl_spd_xy.setText(f"XY速度: {int(val)}")  # 更新标签
+
+                # 2. 恢复 Z 速度
+                if 'feedrate_z' in settings:
+                    val = float(settings['feedrate_z'])
+                    self.sld_spd_z.setValue(int(val))
+                    self.feedrate_z = val
+                    self.lbl_spd_z.setText(f"Z 速度: {int(val)}")
+
+                # 3. 恢复 加速度
+                if 'accel' in settings:
+                    val = float(settings['accel'])
+                    self.sld_acc.setValue(int(val))
+                    self.accel = val
+                    self.lbl_acc.setText(f"加速度: {int(val)}")
+
+            # 可以在日志中记录成功加载
+            self.log("✅ 成功加载历史速度/加速度参数。")
+
+        except Exception as e:
+            self.log(f"❌ 加载应用参数失败: {e}")
+
+    def save_app_settings(self):
+        """保存应用设置：速度和加速度"""
+        settings = {
+            'feedrate_xy': self.feedrate_xy,
+            'feedrate_z': self.feedrate_z,
+            'accel': self.accel,
+        }
+
+        try:
+            with open(SETTINGS_FILE, 'w') as f:
+                json.dump(settings, f, indent=4)
+        except Exception as e:
+            self.log(f"❌ 保存应用参数失败: {e}")
+
+
 
     def update_image(self, img: np.ndarray):
         self.last_frame = img.copy()
@@ -2122,6 +2201,43 @@ class MainWindow(QWidget):
             self.log(f"⚡ 加速度已调整为: {val}")
     # ========================================
 
+    # ... 在 class MainWindow(QWidget) 内部 ...
+    def on_speed_changed(self):
+        """更新 XY 和 Z 的速度变量"""
+        self.feedrate_xy = float(self.sld_spd_xy.value())
+        self.feedrate_z = float(self.sld_spd_z.value())
+
+        # 更新标签文字
+        self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+        self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+
+        # 【新增】调节后立即保存
+        self.save_app_settings()
+
+    def on_accel_changed(self):
+        """更新加速度，并直接发送 SET_VELOCITY_LIMIT 指令给 Klipper"""
+        val = self.sld_acc.value()
+        self.accel = float(val)
+        self.lbl_acc.setText(f"加速度: {val}")
+
+        # 发送 Klipper 指令
+        if self.machine.connected:
+            # 限制加速度和减速度
+            script = f"SET_VELOCITY_LIMIT ACCEL={val} ACCEL_TO_DECEL={val / 2}"
+            self.machine._post_gcode(script)
+            self.log(f"⚡ 加速度已调整为: {val}")
+
+        # 【新增】调节后立即保存
+        self.save_app_settings()
+
+    # ================== 其它 ==================
+    def closeEvent(self, e):
+        self.stop_cam()
+
+        # 【新增】关闭前保存所有参数
+        self.save_app_settings()
+
+        e.accept()
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     w = MainWindow()

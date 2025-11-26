@@ -1,5 +1,7 @@
 {
     "feedrate_xy": 1848.0,
     "feedrate_z": 298.0,
-    "accel": 500.0
+    "accel": 500.0,
+    "safe_z": -20.0,
+    "work_z": -25.0
 }

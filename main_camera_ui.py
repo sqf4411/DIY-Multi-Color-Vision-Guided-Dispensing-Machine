@@ -366,8 +366,12 @@ class MainWindow(QWidget):
         self.calib_points_for_ui = None
 
 
-        # 安全高度（Z）
-        self.safe_z = 10.0
+        # ===== Z 高度参数 =====
+        # 空跑/点胶时的安全高度与工作高度（mm）
+        self.safe_z = 0.0    # 抬刀 / 快移高度
+        self.work_z = -5.0   # 点胶 / 下刀高度
+
+        # 初始速度（真正的数值后面会被 load_app_settings 覆盖）
         self.feedrate_xy = 50.0   # XY 速度
         self.feedrate_z = 20.0    # Z 速度
 
@@ -631,6 +635,30 @@ class MainWindow(QWidget):
         coord_layout.addWidget(self.lbl_pos_z)
         motion_layout.addLayout(coord_layout)
 
+        # ===== Z 高度参数 (安全高度 / 点胶高度) =====
+        zparam_layout = QHBoxLayout()
+
+        lbl_safe = QLabel("安全Z")
+        self.spn_safe_z = QDoubleSpinBox()
+        self.spn_safe_z.setRange(-200.0, 200.0)
+        self.spn_safe_z.setDecimals(2)
+        self.spn_safe_z.setSingleStep(0.1)
+        self.spn_safe_z.setValue(self.safe_z)
+
+        lbl_work = QLabel("点胶Z")
+        self.spn_work_z = QDoubleSpinBox()
+        self.spn_work_z.setRange(-200.0, 200.0)
+        self.spn_work_z.setDecimals(2)
+        self.spn_work_z.setSingleStep(0.1)
+        self.spn_work_z.setValue(self.work_z)
+
+        zparam_layout.addWidget(lbl_safe)
+        zparam_layout.addWidget(self.spn_safe_z)
+        zparam_layout.addWidget(lbl_work)
+        zparam_layout.addWidget(self.spn_work_z)
+
+        motion_layout.addLayout(zparam_layout)
+
         # 步长设置 + 预设按钮
         step_layout = QVBoxLayout()
 
@@ -842,6 +870,10 @@ class MainWindow(QWidget):
         self.update_nozzle_offset_display()
 
         self.update_xyz_display(self.pos_x, self.pos_y, self.pos_z)
+
+        self.spn_safe_z.valueChanged.connect(self.on_z_params_changed)
+        self.spn_work_z.valueChanged.connect(self.on_z_params_changed)
+
 
     def on_connect_klipper(self):
         """
@@ -1415,6 +1447,20 @@ class MainWindow(QWidget):
                     self.accel = val
                     self.lbl_acc.setText(f"加速度: {int(val)}")
 
+                # 4. 恢复安全高度 Z
+                if 'safe_z' in settings:
+                    val = float(settings['safe_z'])
+                    self.safe_z = val
+                    if hasattr(self, 'spn_safe_z'):
+                        self.spn_safe_z.setValue(val)
+
+                # 5. 恢复点胶高度 Z
+                if 'work_z' in settings:
+                    val = float(settings['work_z'])
+                    self.work_z = val
+                    if hasattr(self, 'spn_work_z'):
+                        self.spn_work_z.setValue(val)
+
             # 可以在日志中记录成功加载
             self.log("✅ 成功加载历史速度/加速度参数。")
 
@@ -1427,6 +1473,8 @@ class MainWindow(QWidget):
             'feedrate_xy': self.feedrate_xy,
             'feedrate_z': self.feedrate_z,
             'accel': self.accel,
+            'safe_z': self.safe_z,
+            'work_z': self.work_z,
         }
 
         try:
@@ -1952,10 +2000,12 @@ class MainWindow(QWidget):
             m = self.cam2mach_matrix
 
             # 2. 参数设置
-            SAFE_Z = 0.0  # 移动时的安全高度
-            WORK_Z = -5.0  # 模拟工作的下刀高度
+            # 2. 参数设置（从 UI 读取）
+            SAFE_Z = float(self.safe_z)   # 移动时的安全高度
+            WORK_Z = float(self.work_z)   # 模拟工作的下刀 / 点胶高度
             SPEED_XY = int(self.feedrate_xy)
             SPEED_Z = int(self.feedrate_z)
+
 
             gcode_lines = []
             gcode_lines.append("G90")
@@ -2287,8 +2337,14 @@ class MainWindow(QWidget):
 
         # 【新增】关闭前保存所有参数
         self.save_app_settings()
-
         e.accept()
+
+    def on_z_params_changed(self):
+        """安全高度 / 点胶高度 改变时更新变量并保存"""
+        self.safe_z = float(self.spn_safe_z.value())
+        self.work_z = float(self.spn_work_z.value())
+        self.save_app_settings()
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     w = MainWindow()

@@ -295,6 +295,10 @@ class MainWindow(QWidget):
         self.verify_mode = False  # ✅ 新增：默认为关闭状态
         self.verify_click_pt = None  # ✅ 新增：用于记录验证模式下点击的坐标
 
+        # ====== ✅ 新增：针头标定状态 ======
+        self.nozzle_calib_step = 0  # 0=闲置, 1=对准相机, 2=对准针头
+        # ==================================
+
         # ====== ✅ 新增：用于在画面上绘制空跑路径 ======
         self.dry_run_paths_to_draw = []  # 存像素坐标路径
         # ===========================================
@@ -999,7 +1003,9 @@ class MainWindow(QWidget):
         self.lbl_pos_x.setText(f"X: {display_x:.2f}")
         self.lbl_pos_y.setText(f"Y: {display_y:.2f}")
         self.lbl_pos_z.setText(f"Z: {display_z:.2f}")
-
+        # ====== ✅ 新增：Z轴基准日志显示 ======
+        if hasattr(self, "lbl_z_ref"):
+            self.lbl_z_ref.setText(f"当前 Z 基准: {self.pos_z:.2f} mm")
     def on_home_axis(self, axis: str):
         """
         单轴 / 全部归位：X / Y / Z / all
@@ -1050,19 +1056,60 @@ class MainWindow(QWidget):
 
     def on_calibrate_nozzle_offset(self):
         """
-        标定针头偏移的入口（目前先做占位，不真的去标定，只是保证按钮正常工作）。
-        下一步我们会把“相机先对点，再针头对同一点”那套流程写进来。
+        标定针头偏移：相机对点 (Step 1) -> 针头对点 (Step 2) -> 计算
         """
-        QMessageBox.information(
-            self,
-            "标定针头偏移（占位）",
-            "UI 已支持针头偏移显示，当前版本只是占位实现。\n\n"
-            "后续步骤我们会实现：\n"
-            "1. 先用相机对准一个物理点，并记录当前 XY；\n"
-            "2. 再用针头对准同一个点，记录 XY；\n"
-            "3. 计算相机→针头的 ΔX, ΔY 并保存。"
-        )
-        self.log("TODO", "标定针头偏移逻辑将在下一步实现。")
+        if self.nozzle_calib_step == 0:
+            # 启动流程
+            self.nozzle_calib_step = 1
+            self.show_crosshair = True  # 显示十字准星
+            self.log("▶ 启动针头偏移标定 (步骤 1/2)")
+            self.btn_calib_nozzle.setText("记录相机中心位置")
+            self.btn_calib_nozzle.setStyleSheet("background-color: #F59E0B;")  # 橙色
+
+            QMessageBox.information(
+                self,
+                "针头标定 - 步骤 1",
+                "请将相机中心（红十字）对准一个清晰的物理标记点（例如模具的尖角），然后点击按钮记录坐标。"
+            )
+
+        elif self.nozzle_calib_step == 1:
+            # 记录相机位置
+            self.cam_x, self.cam_y, self.cam_z = self.machine.get_position()  # 记录Z轴，防止后续出错
+            self.nozzle_calib_step = 2
+            self.log(f"📍 记录相机中心 ({self.cam_x:.3f}, {self.cam_y:.3f})")
+            self.btn_calib_nozzle.setText("记录针头中心位置")
+
+            QMessageBox.information(
+                self,
+                "针头标定 - 步骤 2",
+                "请手动控制机器移动，使针头尖端对准刚才的那个物理标记点，然后点击按钮记录坐标。"
+            )
+
+        elif self.nozzle_calib_step == 2:
+            # 记录针头位置并计算偏移
+            self.nozzle_x, self.nozzle_y, _ = self.machine.get_position()
+
+            # 计算偏移量： ΔX = 针头位置 - 相机位置
+            delta_x = self.nozzle_x - self.cam_x
+            delta_y = self.nozzle_y - self.cam_y
+
+            self.nozzle_offset_x = delta_x
+            self.nozzle_offset_y = delta_y
+
+            # 刷新显示
+            self.update_nozzle_offset_display()
+
+            self.log(f"✅ 针头偏移标定完成！")
+            self.log(f"   ΔX: {delta_x:.3f} mm")
+            self.log(f"   ΔY: {delta_y:.3f} mm")
+
+            QMessageBox.information(self, "完成", "针头偏移量已计算并保存！")
+
+            # 流程结束，恢复状态
+            self.nozzle_calib_step = 0
+            self.show_crosshair = False
+            self.btn_calib_nozzle.setText("标定针头偏移")
+            self.btn_calib_nozzle.setStyleSheet("")
 
     def on_wheel_zoom(self, delta_y: int):
         """

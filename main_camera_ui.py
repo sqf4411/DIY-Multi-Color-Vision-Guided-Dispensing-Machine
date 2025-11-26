@@ -295,6 +295,7 @@ class MainWindow(QWidget):
     def init_ui(self):
         # ---- 左侧大画面 ----
         self.label = ImageLabel("无图像")
+        self.label.setMinimumSize(640, 480)  # 加这一行保底
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setStyleSheet("""
             background-color: #000000;
@@ -473,7 +474,8 @@ class MainWindow(QWidget):
         # 常用步长按钮
         preset_layout = QHBoxLayout()
         for val in [0.01, 0.1, 1, 5, 10, 25, 50, 100]:
-            text = f"{val}".rstrip("0").rstrip(".")  # 1.0 -> "1"
+            # 修改：使用简单的 str(val) 或者 f"{val:g}" 来自动处理
+            text = f"{val:g}"
             btn = QPushButton(text)
             btn.setCheckable(False)
             btn.clicked.connect(lambda _, v=val: self.spn_step.setValue(v))
@@ -1043,15 +1045,15 @@ class MainWindow(QWidget):
         self.render_current_frame()
 
     def render_current_frame(self):
-        """稳定版本：只根据 last_frame + live_detect 显示图像。"""
+        """修复后的渲染函数：根据 ScrollArea 视口计算尺寸，并主动 Resize Label"""
         if self.last_frame is None:
             return
 
         img = self.last_frame
 
         try:
+            # 1. 图像格式转换 (保持你原本的逻辑)
             if self.live_detect:
-                # 识别并画框
                 color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(img)
                 bgr = color_img
                 rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
@@ -1059,23 +1061,45 @@ class MainWindow(QWidget):
                 bytes_per_line = ch * w
                 qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
             else:
-                # 灰度显示
                 h, w = img.shape
                 qimg = QImage(img.data, w, h, w, QImage.Format_Grayscale8).copy()
+
+            qpix = QPixmap.fromImage(qimg)
+
+            # 2. 获取 ScrollArea 可视区域的大小
+            # 注意：这里要获取 viewport 的宽高，而不是 label 的
+            view_w = self.scroll_area.viewport().width()
+            view_h = self.scroll_area.viewport().height()
+
+            # 防止窗口刚启动时获取到 0 导致报错
+            if view_w <= 10: view_w = 640
+            if view_h <= 10: view_h = 480
+
+            # 3. 计算目标尺寸
+            # 逻辑：先计算“适应窗口(Fit)”的大小，再乘以 zoom_scale
+
+            # 先按 KeepAspectRatio 算出一个适应当前窗口的临时尺寸
+            temp_pix = qpix.scaled(view_w, view_h, Qt.KeepAspectRatio, Qt.FastTransformation)
+            base_w = temp_pix.width()
+            base_h = temp_pix.height()
+
+            # 应用缩放系数
+            final_w = int(base_w * self.zoom_scale)
+            final_h = int(base_h * self.zoom_scale)
+
+            # 生成最终显示的 Pixmap (使用平滑缩放)
+            final_pix = qpix.scaled(final_w, final_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+            # 4. 【关键步骤】修改 Label 大小以容纳图片
+            # 因为 setWidgetResizable(False)，必须手动 resize label，滚动条才会正确出现
+            if self.label.size() != final_pix.size():
+                self.label.resize(final_pix.size())
+
+            self.label.setPixmap(final_pix)
+
         except Exception as e:
-            # 任何异常都打印一下，避免整个显示挂掉
             self.log("[render_current_frame] 出错：", e)
             return
-
-        qpix = QPixmap.fromImage(qimg)
-        self.label.setPixmap(
-            qpix.scaled(
-                self.label.width(),
-                self.label.height(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-        )
 
     def save_image(self):
         if self.last_frame is None:

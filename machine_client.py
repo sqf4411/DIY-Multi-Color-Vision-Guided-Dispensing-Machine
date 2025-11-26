@@ -87,6 +87,25 @@ class MachineClient:
     # ------------------------------------------------------------------ #
     # 内部工具函数
     # ------------------------------------------------------------------ #
+        # ... (接在 force_fake_home 函数后面)
+
+    def emergency_stop(self):
+        """
+        🚨 发送 M112 急停指令
+        Klipper 会立即关闭 MCU，停止所有动作。
+        恢复需要手动在 Fluidd/Mainsail 点击 Firmware Restart。
+        """
+        if not self.connected:
+            return
+
+        # M112 是最高优先级指令
+        print("🚨🚨🚨 SENDING EMERGENCY STOP (M112) 🚨🚨🚨")
+        self._post_gcode("M112")
+        self.is_homed = False  # 急停后状态肯定丢失
+
+
+
+
     def _headers(self):
         if self.api_key:
             return {"X-Api-Key": self.api_key}

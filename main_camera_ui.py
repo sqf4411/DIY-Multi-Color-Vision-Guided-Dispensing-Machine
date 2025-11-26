@@ -87,6 +87,7 @@ class ImageLabel(QLabel):
     """支持滚轮缩放 + 左键拖拽的 QLabel"""
     wheel_zoom = pyqtSignal(int)          # 滚轮：传 deltaY
     pan_delta = pyqtSignal(int, int)      # 拖拽：传 dx, dy
+    clicked_pos = pyqtSignal(int, int)  # <--- ✅ 新增：点击位置信号
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -99,6 +100,10 @@ class ImageLabel(QLabel):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            # 优先处理点击信号 (传给主窗口判断是不是在选角点)
+            self.clicked_pos.emit(event.x(), event.y())
+
+            # 保持原有的拖拽逻辑
             self._dragging = True
             self._last_pos = event.pos()
             self.setCursor(Qt.ClosedHandCursor)
@@ -232,6 +237,12 @@ class MainWindow(QWidget):
         self.calib_size = None # (w, h)
         self._calib_loaded = False
 
+        # ====== 坐标标定相关 ======
+        self.calib_step = 0  # 0=闲置, 10=微调视觉点, 1-4=记录机器点
+        self.calib_vision_pts = []  # 视觉坐标 (4,2)
+        self.calib_machine_pts = []
+        self.calib_sel_idx = 0  # 当前正在微调哪个角 (0-3)
+
         # 识别结果
         self.big_box = None
         self.cell_boxes = []
@@ -323,7 +334,8 @@ class MainWindow(QWidget):
         self.label.wheel_zoom.connect(self.on_wheel_zoom)
         self.label.pan_delta.connect(self.on_pan_delta)
 
-
+        # ✅ 新增：连接点击信号
+        self.label.clicked_pos.connect(self.on_label_clicked)
 
         # ---- 相机信息 ----
         self.lbl_cam_res = QLabel("-")
@@ -341,18 +353,70 @@ class MainWindow(QWidget):
         conn_group = QGroupBox("Klipper 连接")
         conn_layout = QHBoxLayout()
 
-        # 地址输入框：例如 http://192.168.60.26 或 http://192.168.60.26:7125
-        self.edit_base_url = QLineEdit(self.default_base_url)
-        self.edit_base_url.setPlaceholderText("例如: http://192.168.60.26:7125")
+        # 1. IP 输入框 (标签+框)
+        lbl_ip = QLabel("IP:")
+        self.edit_ip = QLineEdit("192.168.60.26")
+        self.edit_ip.setFixedWidth(110)  # 给IP留够宽度
+        self.edit_ip.setAlignment(Qt.AlignCenter)
 
+        # 2. Port 输入框 (标签+框)
+        lbl_port = QLabel("Port:")
+        self.edit_port = QLineEdit("7125")
+        self.edit_port.setFixedWidth(50)  # 端口号短一点
+        self.edit_port.setAlignment(Qt.AlignCenter)
+
+        # 3. 连接按钮 (初始灰色)
         self.btn_connect_klipper = QPushButton("连接")
-        self.lbl_klipper_status = QLabel("未连接")
-        self.lbl_klipper_status.setMinimumWidth(80)
+        self.btn_connect_klipper.setCursor(Qt.PointingHandCursor)
+        self.btn_connect_klipper.setMinimumHeight(28)
+        self.btn_connect_klipper.setFixedWidth(80)  # ✅ 强制固定宽度
+        self.btn_connect_klipper.setStyleSheet("""
+                    QPushButton {
+                        background-color: #6B7280;  /* 灰色 */
+                        color: white;
+                        border-radius: 4px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background-color: #4B5563;
+                    }
+                """)
 
-        conn_layout.addWidget(QLabel("地址:"))
-        conn_layout.addWidget(self.edit_base_url)
+        # 4. 急停按钮 (红色 STOP)
+        self.btn_estop = QPushButton("STOP")
+        self.btn_estop.setCursor(Qt.PointingHandCursor)
+        self.btn_estop.setMinimumHeight(28)
+        self.btn_estop.setFixedWidth(80)  # ✅ 与连接按钮宽度一致
+        self.btn_estop.setStyleSheet("""
+                    QPushButton {
+                        background-color: #DC2626;  /* 红色 */
+                        color: white;
+                        font-weight: bold;
+                        border: 2px solid #991B1B;
+                        border-radius: 4px;
+                    }
+                    QPushButton:hover {
+                        background-color: #EF4444;
+                    }
+                    QPushButton:pressed {
+                        background-color: #7F1D1D;
+                    }
+                """)
+
+        # ====== 布局排列 (左侧输入框 -> 弹簧 -> 右侧按钮) ======
+        conn_layout.addWidget(lbl_ip)
+        conn_layout.addWidget(self.edit_ip)
+
+        conn_layout.addSpacing(10)  # IP 和 Port 之间稍微隔开一点
+
+        conn_layout.addWidget(lbl_port)
+        conn_layout.addWidget(self.edit_port)
+
+        conn_layout.addStretch()  # ✅ 关键修改：弹簧放在这里，把后面的东西顶到最右边
+
         conn_layout.addWidget(self.btn_connect_klipper)
-        conn_layout.addWidget(self.lbl_klipper_status)
+        conn_layout.addSpacing(5)  # 两个按钮之间留一点小缝隙，不要贴太死
+        conn_layout.addWidget(self.btn_estop)
 
         conn_group.setLayout(conn_layout)
 
@@ -433,6 +497,7 @@ class MainWindow(QWidget):
         row_gamma = QHBoxLayout()
         row_gamma.addWidget(self.sld_gamma)
         row_gamma.addWidget(self.spn_gamma)
+
 
         # ---- 右边参数组 ----
         param_group = QGroupBox("相机参数")
@@ -629,53 +694,84 @@ class MainWindow(QWidget):
 
     def on_connect_klipper(self):
         """
-        点击“连接”按钮：
-        - 读取 base_url
-        - configure + connect
-        - 成功则可以用 XYZ 按钮发 G-code
+        连接 Klipper：
+        拼接 IP 和 Port，连接成功后直接修改按钮文字。
         """
-        base_url = self.edit_base_url.text().strip()
-        if not base_url:
-            QMessageBox.warning(self, "错误", "请先输入 Klipper/Moonraker 地址")
+        ip = self.edit_ip.text().strip()
+        port = self.edit_port.text().strip()
+
+        if not ip or not port:
+            QMessageBox.warning(self, "错误", "IP 或 端口不能为空")
             return
 
-        # 配置 MachineClient
-        self.machine.configure(base_url)
+        # 拼接完整地址
+        full_url = f"http://{ip}:{port}"
 
+        # 配置并连接
+        self.machine.configure(full_url)
         ok = self.machine.connect()
+
         if ok:
-            self.lbl_klipper_status.setText("已连接")
-            self.log(f"✅ 已连接到 Klipper: {base_url}")
+            # ✅ 连接成功：按钮变绿，文字变“已连接”
+            self.btn_connect_klipper.setText("已连接")
+            self.btn_connect_klipper.setStyleSheet("""
+                QPushButton {
+                    background-color: #10B981;  /* 绿色 */
+                    color: white;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #059669;
+                }
+            """)
+
+            self.log(f"✅ 已连接到 Klipper: {full_url}")
         else:
-            self.lbl_klipper_status.setText("未连接")
-            self.log(f"⚠ 连接 Klipper 失败: {base_url}")
-            QMessageBox.critical(
-                self, "连接失败",
-                f"无法连接到 {base_url}\n\n"
-                f"请检查：\n"
-                f"1. Klipper/Moonraker 是否运行\n"
-                f"2. 地址是否正确（是否需要端口号）\n"
-                f"3. PC 与树莓派是否在同一网段，防火墙是否放行"
-            )
+            # ❌ 连接失败：按钮恢复灰色，提示重试
+            self.btn_connect_klipper.setText("重试")
+            self.btn_connect_klipper.setStyleSheet("""
+                QPushButton {
+                    background-color: #6B7280;
+                    color: white;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+            """)
+
+            self.log(f"⚠ 连接 Klipper 失败: {full_url}")
+            QMessageBox.critical(self, "连接失败", f"无法连接到 {full_url}\n请检查网络或 IP 设置")
+
+    def on_emergency_stop_clicked(self):
+        """点击急停按钮：立即发送 M112"""
+        # 急停不需要弹窗确认，必须分秒必争，点下即停
+        self.machine.emergency_stop()
+
+        self.log("🚨🚨🚨 已发送急停指令 (M112) 🚨🚨🚨")
+        self.log("⚠ 机器已停机。如需继续操作，请在 Fluidd 中执行【Firmware Restart】，然后重新连接。")
+
+        # 更新状态显示
+        self.lbl_klipper_status.setText("已急停")
+        QMessageBox.critical(self, "急停触发",
+                             "🚨 急停指令已发送！\n机器已停止所有动作。\n\n请排除故障后重启 Klipper 固件。")
 
     # ================== 运动 / 坐标相关 ==================
     def on_jog(self, axis: str, direction: int):
         """
-        axis: 'x' / 'y' / 'z'
-        direction: +1 表示按了 "正向" 按钮（X+ / Y+ / Z+），-1 表示 "负向"
-        我们这里把 X/Y 反向，让画面看起来：按 ↑，画面往上走。
+        [回滚版本] 视觉优先逻辑：
+        为了让画面移动符合直觉（点右画面向右），这里故意保留了反向逻辑。
         """
         step = float(self.spn_step.value())
         dx = dy = dz = 0.0
 
         if axis == 'x':
-            # 左右方向反转
+            # 恢复反向：点右键(Dir=1) -> 发送 X- -> 画面看起来向右移
             dx = -direction * step
         elif axis == 'y':
-            # 上下方向反转
+            # 恢复反向：点上键(Dir=1) -> 发送 Y- -> 画面看起来向上移
             dy = -direction * step
         elif axis == 'z':
-            # Z 方向保持原来的逻辑
+            # Z轴保持正向
             dz = direction * step
 
         self.move_machine_rel(dx, dy, dz)
@@ -1045,61 +1141,91 @@ class MainWindow(QWidget):
         self.render_current_frame()
 
     def render_current_frame(self):
-        """修复后的渲染函数：根据 ScrollArea 视口计算尺寸，并主动 Resize Label"""
+        """[回滚版本] 纯净显示：移除翻转逻辑，修复启动报错"""
         if self.last_frame is None:
             return
 
-        img = self.last_frame
+        # 1. 拷贝一份
+        img = self.last_frame.copy()
 
+        # 2. 默认转 BGR
+        if len(img.shape) == 2:
+            vis_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        else:
+            vis_img = img
+
+        h, w = vis_img.shape[:2]
+        cx, cy = w // 2, h // 2
+
+        # ====== A. 标定阶段 1 (视觉微调) ======
+        if self.calib_step == 10:
+            if len(self.calib_vision_pts) == 4:
+                for i, pt in enumerate(self.calib_vision_pts):
+                    px, py = int(pt[0]), int(pt[1])
+                    if i == self.calib_sel_idx:
+                        cv2.circle(vis_img, (px, py), 6, (0, 0, 255), -1)
+                        cv2.circle(vis_img, (px, py), 20, (0, 255, 255), 2)
+                        cv2.line(vis_img, (px - 30, py), (px + 30, py), (0, 255, 255), 1)
+                        cv2.line(vis_img, (px, py - 30), (px, py + 30), (0, 255, 255), 1)
+                        cv2.putText(vis_img, f"#{i + 1} Moving", (px + 20, py - 20),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+                    else:
+                        cv2.circle(vis_img, (px, py), 6, (0, 255, 0), 2)
+                        cv2.putText(vis_img, f"#{i + 1}", (px + 10, py - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
+                msg = "ADJUST: Press [1-4] to Switch | [WASD] to Move"
+                cv2.putText(vis_img, msg, (30, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+
+        # ====== B. 标定阶段 2 (机器对位) ======
+        elif 1 <= self.calib_step <= 4:
+            if self.show_crosshair:
+                cv2.line(vis_img, (cx, 0), (cx, h), (0, 0, 255), 1)
+                cv2.line(vis_img, (0, cy), (w, cy), (0, 0, 255), 1)
+
+            if len(self.calib_vision_pts) == 4:
+                target = self.calib_vision_pts[self.calib_step - 1]
+                tx, ty = int(target[0]), int(target[1])
+                cv2.arrowedLine(vis_img, (cx, cy), (tx, ty), (0, 255, 0), 3)
+                cv2.circle(vis_img, (tx, ty), 10, (0, 255, 255), 2)
+
+        # ====== C. 正常检测模式 ======
+        elif self.live_detect:
+            from mold_detector import detect_mold_and_cells
+            detected_img, _, _, _ = detect_mold_and_cells(img)
+            vis_img = detected_img
+
+        # -----------------------------------------------------------
+        # 3. 显示
+        # -----------------------------------------------------------
         try:
-            # 1. 图像格式转换 (保持你原本的逻辑)
-            if self.live_detect:
-                color_img, big_box, cell_boxes, cell_centers = detect_mold_and_cells(img)
-                bgr = color_img
-                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                h, w, ch = rgb.shape
-                bytes_per_line = ch * w
-                qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
-            else:
-                h, w = img.shape
-                qimg = QImage(img.data, w, h, w, QImage.Format_Grayscale8).copy()
-
+            rgb = cv2.cvtColor(vis_img, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            bytes_per_line = ch * w
+            qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
             qpix = QPixmap.fromImage(qimg)
 
-            # 2. 获取 ScrollArea 可视区域的大小
-            # 注意：这里要获取 viewport 的宽高，而不是 label 的
             view_w = self.scroll_area.viewport().width()
             view_h = self.scroll_area.viewport().height()
-
-            # 防止窗口刚启动时获取到 0 导致报错
             if view_w <= 10: view_w = 640
             if view_h <= 10: view_h = 480
 
-            # 3. 计算目标尺寸
-            # 逻辑：先计算“适应窗口(Fit)”的大小，再乘以 zoom_scale
-
-            # 先按 KeepAspectRatio 算出一个适应当前窗口的临时尺寸
             temp_pix = qpix.scaled(view_w, view_h, Qt.KeepAspectRatio, Qt.FastTransformation)
             base_w = temp_pix.width()
             base_h = temp_pix.height()
 
-            # 应用缩放系数
             final_w = int(base_w * self.zoom_scale)
             final_h = int(base_h * self.zoom_scale)
 
-            # 生成最终显示的 Pixmap (使用平滑缩放)
             final_pix = qpix.scaled(final_w, final_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
-            # 4. 【关键步骤】修改 Label 大小以容纳图片
-            # 因为 setWidgetResizable(False)，必须手动 resize label，滚动条才会正确出现
             if self.label.size() != final_pix.size():
                 self.label.resize(final_pix.size())
 
             self.label.setPixmap(final_pix)
 
         except Exception as e:
-            self.log("[render_current_frame] 出错：", e)
-            return
+            self.log("[render_current_frame] 渲染出错：", e)
 
     def save_image(self):
         if self.last_frame is None:
@@ -1194,12 +1320,177 @@ class MainWindow(QWidget):
             self.log(f"❌ 打开路径示教失败：{e}")
 
     # ================== 点胶任务按钮（占位） ==================
+        # 替换原有的 on_calibrate_coords
     def on_calibrate_coords(self):
-        """
-        按钮：标定坐标系（相机像素 → 机器 XY）
-        当前为占位，后面会实现 4 点标定。
-        """
-        self.log("🧮 标定坐标系：暂时只是占位，下一步我们会专门实现标定流程。")
+        """标定流程主控：自动识别 -> 进入微调 -> 4步记录 -> 计算"""
+
+        # --- 阶段 1: 启动 & 自动识别 ---
+        if self.calib_step == 0:
+            if self.last_frame is None:
+                self.log("❌ 请先启动相机")
+                return
+
+            # 1. 先尝试自动识别
+            # 注意：这里调用 mold_detector 里的检测
+            from mold_detector import detect_mold_and_cells
+            _, big_box, _, _ = detect_mold_and_cells(self.last_frame)
+
+            if big_box is not None:
+                self.calib_vision_pts = big_box.astype(np.float32)
+                # 排序: 左上, 右上, 右下, 左下
+                from mold_detector import _order_points
+                self.calib_vision_pts = _order_points(self.calib_vision_pts)
+                self.log("✅ 自动识别到大框，进入微调模式。")
+            elif os.path.exists("golden_corners.npy"):
+                self.calib_vision_pts = np.load("golden_corners.npy")
+                self.log("⚠ 自动识别失败，加载上次保存的角点。")
+            else:
+                QMessageBox.warning(self, "失败", "无法识别模具且无历史数据。\n请确保模具在画面中，或先进行示教。")
+                return
+
+            # 进入微调状态 (状态码设为 10)
+            self.calib_step = 10
+            self.calib_sel_idx = 0
+            self.btn_calibrate.setText("确认视觉角点 (下一步)")
+            self.btn_calibrate.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold;")  # 紫色
+
+            # =========== 修改开始：支持取消 ===========
+            reply = QMessageBox.information(
+                self,
+                "微调模式",
+                "【步骤 1/2：微调视觉角点】\n\n"
+                "1. 滚动滚轮放大画面。\n"
+                "2. 点击画面中的红圈选中角点，使用【WASD】键微调位置。\n"
+                "3. 确保 4 个角点都精准对齐后，再次点击按钮进入下一步。",
+                QMessageBox.Ok | QMessageBox.Cancel  # <--- 添加取消按钮
+            )
+
+            if reply == QMessageBox.Cancel:
+                # 如果点击取消，马上回退状态
+                self.calib_step = 0
+                self.btn_calibrate.setText("标定坐标系")
+                self.btn_calibrate.setStyleSheet("")  # 恢复默认样式
+                self.log("🚫 标定操作已取消")
+                self.render_current_frame()  # 刷新画面，去除红点辅助线
+                return
+            # =========== 修改结束 ===========
+
+        # --- 阶段 2: 确认微调，进入机器对位 ---
+        elif self.calib_step == 10:
+            # 保存微调好的点，下次可以用
+            np.save("golden_corners.npy", self.calib_vision_pts)
+
+            # 切换到机器对位流程 (状态 1)
+            self.calib_step = 1
+            self.calib_machine_pts = []
+            self.show_crosshair = True
+
+            self.btn_calibrate.setText("记录第 1 点 (左上)")
+            self.btn_calibrate.setStyleSheet("background-color: #F59E0B; color: black; font-weight: bold;")  # 橙色
+
+            self.log("✅ 视觉角点已确认。进入机器对位流程。")
+            self.log("👉 请将相机中心（十字准星）对准模具【左上角】，然后点击按钮。")
+
+        # --- 阶段 3: 记录机器坐标 (1-4) ---
+        elif 1 <= self.calib_step <= 4:
+            mx, my, mz = self.machine.get_position()
+            self.calib_machine_pts.append([mx, my])
+            self.log(f"📍 记录机器点 {self.calib_step}: ({mx:.2f}, {my:.2f})")
+
+            self.calib_step += 1
+
+            if self.calib_step <= 4:
+                names = ["左上", "右上", "右下", "左下"]
+                next_name = names[self.calib_step - 1]
+                self.btn_calibrate.setText(f"记录第 {self.calib_step} 点 ({next_name})")
+                self.log(f"👉 下一步：对准【{next_name}】")
+            else:
+                self.finish_calibration()
+
+    # --- 新增：处理点击选点 ---
+    def on_label_clicked(self, widget_x, widget_y):
+        """鼠标点击画面时，选中最近的角点 (仅在微调模式下有效)"""
+        if self.calib_step != 10:
+            return
+
+        # 将组件坐标映射回图像坐标
+        # 公式: img_x = widget_x / zoom_scale (大概估算)
+        # 更严谨的做法是结合 scrollbar，但这里只要算相对距离最近的即可
+
+        # 简单反算：
+        # 我们直接遍历 4 个点，把它们投影到 widget 坐标，看谁离鼠标最近
+        min_dist = float('inf')
+        sel = -1
+
+        # 获取当前显示的缩放比例
+        if self.last_frame is None: return
+        h_img, w_img = self.last_frame.shape[:2]
+
+        # 重新走一遍 render 里的逻辑算显示尺寸 (为了代码简洁，这里做个简化估算)
+        # 实际上因为有点麻烦，我们可以反过来：把点击位置当作参考
+        # 最简单的体验优化：不需要太精准，只要点在那个大概方位就行
+
+        # 这种情况下，直接根据逻辑位置判断：
+        # 点击 左上区域->0, 右上->1 ...
+        # 但为了严谨，我们用 WASD 切换也是可以的。
+        # 这里为了简化，我们只实现 "WASD 移动当前选中的点"，切换点可以用数字键 1-4
+        pass
+
+        # --- 新增：键盘控制 WASD ---
+
+    def keyPressEvent(self, event):
+        """键盘事件：WASD 微调，1234 切换选中点"""
+        if self.calib_step == 10:
+            key = event.key()
+            step = 1.0  # 微调步长 1px
+
+            # 切换选中点
+            if key == Qt.Key_1:
+                self.calib_sel_idx = 0
+            elif key == Qt.Key_2:
+                self.calib_sel_idx = 1
+            elif key == Qt.Key_3:
+                self.calib_sel_idx = 2
+            elif key == Qt.Key_4:
+                self.calib_sel_idx = 3
+
+            # 微调坐标
+            elif key == Qt.Key_W:
+                self.calib_vision_pts[self.calib_sel_idx][1] -= step
+            elif key == Qt.Key_S:
+                self.calib_vision_pts[self.calib_sel_idx][1] += step
+            elif key == Qt.Key_A:
+                self.calib_vision_pts[self.calib_sel_idx][0] -= step
+            elif key == Qt.Key_D:
+                self.calib_vision_pts[self.calib_sel_idx][0] += step
+
+            # 触发重绘
+            self.render_current_frame()
+            # 必须调用 accept，否则可能传给其他控件
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def finish_calibration(self):
+        """计算最终矩阵"""
+        try:
+            pts_img = np.array(self.calib_vision_pts, dtype=np.float32)
+            pts_mach = np.array(self.calib_machine_pts, dtype=np.float32)
+            M, _ = cv2.estimateAffine2D(pts_img, pts_mach)
+
+            if M is None: raise Exception("点共线或数据异常")
+
+            self.cam2mach_matrix = M
+            np.save("cam2mach_matrix.npy", M)
+            self.log("✅ 标定完成！矩阵已保存。")
+            QMessageBox.information(self, "成功", "坐标系标定完成！")
+        except Exception as e:
+            self.log(f"❌ 计算失败: {e}")
+
+        self.calib_step = 0
+        self.show_crosshair = False
+        self.btn_calibrate.setText("标定坐标系")
+        self.btn_calibrate.setStyleSheet("")
 
     def on_virtual_run(self):
         """

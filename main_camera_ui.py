@@ -1501,22 +1501,27 @@ class MainWindow(QWidget):
                 msg = "ADJUST: Press [1-4] to Switch | [WASD] to Move"
                 cv2.putText(vis_img, msg, (30, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
 
-        # ====== 🎨 E. 空跑路径显示 (新增) ======
+        # ====== 🎨 E. 空跑路径显示 (新增 + 相机中心十字 = 点胶针) ======
         if len(self.dry_run_paths_to_draw) > 0:
-            # 遍历每一条路径画出来
+            # 1️⃣ 空跑时先画“相机中心 = 点胶针”十字线
+            cv2.line(vis_img, (cx, 0), (cx, h), (0, 0, 255), 1)   # 竖线
+            cv2.line(vis_img, (0, cy), (w, cy), (0, 0, 255), 1)   # 横线
+            cv2.circle(vis_img, (cx, cy), 15, (0, 0, 255), 2)     # 中心小圈
+
+            # 2️⃣ 再遍历每一条空跑路径画出来
             for path in self.dry_run_paths_to_draw:
                 # path 是 (N, 2) 的数组，需要转成 int32
                 pts = path.reshape((-1, 1, 2)).astype(np.int32)
                 cv2.polylines(vis_img, [pts], False, (0, 255, 0), 2, cv2.LINE_AA)
 
-                # 标个起点
+                # 标记起点
                 if len(path) > 0:
                     sx, sy = int(path[0][0]), int(path[0][1])
                     cv2.circle(vis_img, (sx, sy), 5, (0, 0, 255), -1)
 
             cv2.putText(vis_img, "DRY RUNNING...", (20, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-        # ====================================
+
 
 
 

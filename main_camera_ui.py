@@ -26,7 +26,8 @@ import numpy as np
 import cv2
 import json
 
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
+
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
     QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -390,11 +391,31 @@ class MainWindow(QWidget):
                     print("✅ 已自动加载历史标定矩阵")
             except Exception as e:
                 print(f"⚠ 加载标定矩阵失败: {e}")
+
+
+
+        # ==== 运动 / 坐标相关 ====
+        self.machine = MachineClient()
+        self.machine.logger = self.log
+
+        self.default_base_url = "http://192.168.60.26:7125"
+
+        # 当前坐标（mm）——这里只作为初始显示，不去访问 Klipper
+        self.pos_x = 0.0
+        self.pos_y = 0.0
+        self.pos_z = 0.0
+
+        # 实时坐标轮询定时器（连接后开启，断开后停止）
+        self.pos_timer = QTimer(self)
+        self.pos_timer.setInterval(500)  # 200ms 刷新一次
+        self.pos_timer.timeout.connect(self.poll_machine_position)
+
         # ==========================================
         # 在所有 UI 元素初始化完成后，调用加载设置
         self.load_app_settings()
 
         # self.init_camera_ui()
+
     # ================== UI ==================
     def init_ui(self):
         # ---- 左侧大画面 ----
@@ -914,6 +935,8 @@ class MainWindow(QWidget):
             self.update_xyz_display(mx, my, mz)
             self.log(f"🔄 同步坐标成功: X={mx:.2f}, Y={my:.2f}, Z={mz:.2f}")
             self.log(f"✅ 已连接到 Klipper: {full_url}")
+            # 开启实时坐标轮询
+            self.pos_timer.start()
             # ===========================================
         else:
             self.btn_connect_klipper.setText("重试")
@@ -927,6 +950,18 @@ class MainWindow(QWidget):
             """)
             self.log(f"⚠ 连接 Klipper 失败: {full_url}")
             QMessageBox.critical(self, "连接失败", f"无法连接到 {full_url}\n请检查网络或 IP 设置")
+
+    def poll_machine_position(self):
+        """定时从 Klipper 读取当前位置，并刷新到界面。"""
+        try:
+            if not getattr(self.machine, "connected", False):
+                return
+            x, y, z = self.machine.get_position()
+            self.update_xyz_display(x, y, z)
+        except Exception:
+            # 这里静默，避免刷屏
+            pass
+
 
     def on_emergency_stop_clicked(self):
         """点击急停按钮：立即发送 M112"""

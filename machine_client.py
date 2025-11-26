@@ -153,12 +153,13 @@ class MachineClient:
 
             # --- 方案 A: 尝试读取 toolhead ---
             toolhead = all_status.get("toolhead")
+            # --- 方案 A: 尝试读取 toolhead ---
             if toolhead:
                 pos = toolhead.get("position", [0.0, 0.0, 0.0, 0.0])
                 self._x, self._y, self._z = map(float, pos[:3])
                 homed_axes = toolhead.get("homed_axes", "")
                 self.is_homed = bool(homed_axes)
-                self._log(f"[MachineClient] 同步成功 (toolhead): ({self._x:.2f}, {self._y:.2f}, {self._z:.2f})")
+                # 不再打印“同步成功”日志，避免定时器轮询时刷屏
                 return True
 
             # --- 方案 B: 尝试读取 gcode_move ---
@@ -166,8 +167,9 @@ class MachineClient:
             if gcode_move:
                 pos = gcode_move.get("gcode_position", [0.0, 0.0, 0.0, 0.0])
                 self._x, self._y, self._z = map(float, pos[:3])
-                self._log(f"[MachineClient] 同步成功 (gcode_move): ({self._x:.2f}, {self._y:.2f}, {self._z:.2f})")
+                # 同理这里也去掉频繁日志
                 return True
+
 
             # --- 两个都失败 ---
             self._log("[MachineClient] 读取状态失败：toolhead 和 gcode_move 均为空。status =", all_status)

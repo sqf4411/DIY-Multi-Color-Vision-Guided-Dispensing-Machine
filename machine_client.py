@@ -122,56 +122,67 @@ class MachineClient:
         url = f"{self.base_url}/printer/gcode/script"
         payload = {"script": script}
         try:
-            r = self.session.post(url, json=payload, headers=self._headers(), timeout=5)
+            # 👇👇👇 修改这里：把 timeout=5 改成 timeout=20 👇👇👇
+            r = self.session.post(url, json=payload, headers=self._headers(), timeout=120)
             r.raise_for_status()
             return True
         except Exception as e:
+            # 这里最好把 print 改成 self._log 方便在 UI 看，不过 print 也能在控制台看
             print(f"[MachineClient] 发送 G-code 失败: {e}  script={script!r}")
             return False
 
     def _sync_toolhead_status(self) -> bool:
         """
-        从 Klipper 读取 toolhead 状态：
-        - homed_axes: "" / "xyz"
-        - position: [x, y, z, e]
-        返回 True=读取成功，False=读取失败（例如 toolhead 为 None）
+        从 Klipper 读取状态：
+        优先尝试读取 'toolhead'，如果失败则尝试读取 'gcode_move'。
         """
         if not self.base_url:
             return False
 
         url = f"{self.base_url}/printer/objects/query"
-        params = {"objects": "toolhead"}
+        # 同时查询 toolhead 和 gcode_move，谁有数据用谁
+        params = {"objects": "toolhead&gcode_move"}
+
         try:
-            r = self.session.get(url, params=params, headers=self._headers(), timeout=3)
+            r = self.session.get(url, params=params, headers=self._headers(), timeout=5)
             r.raise_for_status()
             data = r.json()
 
             result = data.get("result", {})
             all_status = result.get("status", {})
+
+            # --- 方案 A: 尝试读取 toolhead ---
             toolhead = all_status.get("toolhead")
+            if toolhead:
+                pos = toolhead.get("position", [0.0, 0.0, 0.0, 0.0])
+                self._x, self._y, self._z = map(float, pos[:3])
 
-            if toolhead is None:
-                # 只说明“没拿到 toolhead”，不要改 is_homed
-                self._log(
-                    "[MachineClient] 读取 toolhead 状态失败：未找到 'toolhead' 字段。"
-                    " 原始 status =", all_status
-                )
-                return False
+                # 只有 toolhead 才有 homed_axes
+                homed_axes = toolhead.get("homed_axes", "")
+                self.is_homed = bool(homed_axes)
 
-            pos = toolhead.get("position", [0.0, 0.0, 0.0, 0.0])
-            self._x, self._y, self._z = map(float, pos[:3])
+                self._log(f"[MachineClient] 同步成功 (toolhead): ({self._x:.2f}, {self._y:.2f}, {self._z:.2f})")
+                return True
 
-            homed_axes = toolhead.get("homed_axes", "")
-            self.is_homed = bool(homed_axes)
+            # --- 方案 B: 尝试读取 gcode_move (备用) ---
+            gcode_move = all_status.get("gcode_move")
+            if gcode_move:
+                # gcode_position 包含了 G92 偏移后的坐标，通常更符合用户直觉
+                pos = gcode_move.get("gcode_position", [0.0, 0.0, 0.0, 0.0])
+                self._x, self._y, self._z = map(float, pos[:3])
 
-            self._log(
-                f"[MachineClient] toolhead: pos=({self._x:.3f},{self._y:.3f},{self._z:.3f}), "
-                f"homed_axes={homed_axes!r}"
-            )
-            return True
+                # gcode_move 不包含 homed_axes，我们只能假设它已更新
+                # (或者保持之前的 is_homed 状态不变)
+
+                self._log(f"[MachineClient] 同步成功 (gcode_move): ({self._x:.2f}, {self._y:.2f}, {self._z:.2f})")
+                return True
+
+            # --- 两个都失败 ---
+            self._log("[MachineClient] 读取状态失败：toolhead 和 gcode_move 均为空。status =", all_status)
+            return False
 
         except Exception as e:
-            self._log("[MachineClient] 读取 toolhead 状态失败:", e)
+            self._log("[MachineClient] 读取状态请求异常:", e)
             return False
 
     # ------------------------------------------------------------------ #

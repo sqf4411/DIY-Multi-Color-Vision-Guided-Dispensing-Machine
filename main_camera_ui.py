@@ -32,7 +32,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout,
     QFileDialog, QSlider,
     QGroupBox, QFormLayout, QDoubleSpinBox, QTextEdit,
-    QMessageBox, QLineEdit, QScrollArea,
+    QMessageBox, QLineEdit, QScrollArea,QDialog, QDialogButtonBox
 )
 
 
@@ -81,7 +81,55 @@ class CameraThread(QThread):
                 img = img.reshape((h, w))
                 self.frame_signal.emit(img)
 
+# ================== 线程：执行耗时的归位操作 ==================
+class HomeWorker(QThread):
+    """
+    专门用于后台执行归位操作，防止卡死 UI 主线程
+    """
+    # 任务完成后，发送信号告诉主界面更新坐标 (x, y, z)
+    finished_signal = pyqtSignal(float, float, float)
 
+    def __init__(self, machine_client, axis):
+        super().__init__()
+        self.machine = machine_client
+        self.axis = axis
+
+    def run(self):
+        # 这里是后台线程，怎么卡都不会影响界面
+        if self.axis == 'x':
+            self.machine.home_x()
+        elif self.axis == 'y':
+            self.machine.home_y()
+        elif self.axis == 'z':
+            self.machine.home_z()
+        elif self.axis == 'all':
+            self.machine.home_all()
+
+        # 归位完成后，读取最新坐标
+        x, y, z = self.machine.get_position()
+
+        # 发送信号回主线程
+        self.finished_signal.emit(x, y, z)
+
+# ================== 线程：后台发送 G-code ==================
+class GCodeWorker(QThread):
+    """
+    专门用于后台发送 G-code 脚本，防止卡死 UI 和相机
+    """
+    finished_signal = pyqtSignal(bool, str)
+
+    def __init__(self, machine_client, script):
+        super().__init__()
+        self.machine = machine_client
+        self.script = script
+
+    def run(self):
+        # 这行代码很耗时，必须在子线程跑
+        ok = self.machine._post_gcode(self.script)
+        if ok:
+            self.finished_signal.emit(True, "执行成功")
+        else:
+            self.finished_signal.emit(False, "发送失败或超时")
 ######## 滚轮
 class ImageLabel(QLabel):
     """支持滚轮缩放 + 左键拖拽的 QLabel"""
@@ -241,6 +289,11 @@ class MainWindow(QWidget):
         self.calib_step = 0  # 0=闲置, 10=微调视觉点, 1-4=记录机器点
         self.verify_mode = False  # ✅ 新增：默认为关闭状态
         self.verify_click_pt = None  # ✅ 新增：用于记录验证模式下点击的坐标
+
+        # ====== ✅ 新增：用于在画面上绘制空跑路径 ======
+        self.dry_run_paths_to_draw = []  # 存像素坐标路径
+        # ===========================================
+
         self.calib_vision_pts = []  # 视觉坐标 (4,2)
         self.calib_machine_pts = []
         self.calib_sel_idx = 0  # 当前正在微调哪个角 (0-3)
@@ -277,6 +330,12 @@ class MainWindow(QWidget):
 
         # 点动步长（mm）
         self.jog_step_mm = 1.0
+
+        # ====== ✅ 新增：速度与加速度默认值 ======
+        self.feedrate_xy = 3000.0  # 默认 XY 速度 (mm/min)
+        self.feedrate_z = 500.0  # 默认 Z 速度 (mm/min)
+        self.accel = 500.0  # 默认加速度 (mm/s^2)
+        # ======================================
 
         # 针头相对「相机参考点」的 XY 偏移量（mm）
         self.nozzle_offset_x = 0.0
@@ -613,14 +672,51 @@ class MainWindow(QWidget):
 
         motion_layout.addLayout(grid)
 
+        # ====== ✅ 新增：速度与加速度调节滑块 ======
+        speed_group = QGroupBox("速度 & 加速度调节")
+        speed_layout = QVBoxLayout()
 
-        # # Z 归位单独一行
-        # home_z_layout = QHBoxLayout()
-        # self.btn_home_z = QPushButton("归位 Z")
-        # home_z_layout.addStretch(1)
-        # home_z_layout.addWidget(self.btn_home_z)
-        # home_z_layout.addStretch(1)
-        # motion_layout.addLayout(home_z_layout)
+        # 1. XY 速度
+        row_sxy = QHBoxLayout()
+        self.lbl_spd_xy = QLabel(f"XY速度: {int(self.feedrate_xy)}")
+        self.sld_spd_xy = QSlider(Qt.Horizontal)
+        self.sld_spd_xy.setRange(100, 10000)  # 范围 100 ~ 10000
+        self.sld_spd_xy.setValue(int(self.feedrate_xy))
+        self.sld_spd_xy.valueChanged.connect(self.on_speed_changed)
+        row_sxy.addWidget(self.lbl_spd_xy)
+        row_sxy.addWidget(self.sld_spd_xy)
+
+        # 2. Z 速度
+        row_sz = QHBoxLayout()
+        self.lbl_spd_z = QLabel(f"Z 速度: {int(self.feedrate_z)}")
+        self.sld_spd_z = QSlider(Qt.Horizontal)
+        self.sld_spd_z.setRange(100, 2000)  # 范围 100 ~ 2000 (Z轴慢点)
+        self.sld_spd_z.setValue(int(self.feedrate_z))
+        self.sld_spd_z.valueChanged.connect(self.on_speed_changed)
+        row_sz.addWidget(self.lbl_spd_z)
+        row_sz.addWidget(self.sld_spd_z)
+
+        # 3. 加速度 (Accel)
+        row_acc = QHBoxLayout()
+        self.lbl_acc = QLabel(f"加速度: {int(self.accel)}")
+        self.sld_acc = QSlider(Qt.Horizontal)
+        self.sld_acc.setRange(100, 3000)  # 范围 100 ~ 3000
+        self.sld_acc.setValue(int(self.accel))
+        # 加速度需要松开鼠标才发送指令，防止拖动时发送太多指令卡死 Klipper
+        self.sld_acc.sliderReleased.connect(self.on_accel_changed)
+        # 同时也连接 valueChanged 只为了更新显示文字
+        self.sld_acc.valueChanged.connect(lambda v: self.lbl_acc.setText(f"加速度: {v}"))
+
+        row_acc.addWidget(self.lbl_acc)
+        row_acc.addWidget(self.sld_acc)
+
+        speed_layout.addLayout(row_sxy)
+        speed_layout.addLayout(row_sz)
+        speed_layout.addLayout(row_acc)
+        speed_group.setLayout(speed_layout)
+
+        motion_layout.addWidget(speed_group)
+        # =========================================
 
         motion_group.setLayout(motion_layout)
         self.motion_group = motion_group
@@ -733,7 +829,7 @@ class MainWindow(QWidget):
         """
         连接 Klipper：
         1. 拼接 IP 和 Port
-        2. 连接成功后，立即同步 Klipper 的真实坐标到界面
+        2. 连接成功后，立即强制同步坐标！
         """
         ip = self.edit_ip.text().strip()
         port = self.edit_port.text().strip()
@@ -762,19 +858,20 @@ class MainWindow(QWidget):
                 }
             """)
 
-            # ====== ✅ 新增：连接成功后，立即同步坐标 ======
-            # 从 machine_client 里读取刚刚从 Klipper 抓回来的坐标
+            # ====== ✅ 关键修复：连接后强制同步坐标 ======
+            # 有时候第一次连接可能 toolhead 还没准备好，我们再试一次获取状态
+            self.machine._sync_toolhead_status()
+
+            # 获取坐标
             mx, my, mz = self.machine.get_position()
 
-            # 刷新界面显示 (这会自动应用你之前的正负号显示逻辑)
+            # 强制刷新界面显示
             self.update_xyz_display(mx, my, mz)
 
-            self.log(f"🔄 已同步 Klipper 坐标: X={mx:.2f}, Y={my:.2f}, Z={mz:.2f}")
-            # ===========================================
-
+            self.log(f"🔄 同步坐标成功: X={mx:.2f}, Y={my:.2f}, Z={mz:.2f}")
             self.log(f"✅ 已连接到 Klipper: {full_url}")
+            # ===========================================
         else:
-            # 连接失败逻辑
             self.btn_connect_klipper.setText("重试")
             self.btn_connect_klipper.setStyleSheet("""
                 QPushButton {
@@ -784,7 +881,6 @@ class MainWindow(QWidget):
                     font-weight: bold;
                 }
             """)
-
             self.log(f"⚠ 连接 Klipper 失败: {full_url}")
             QMessageBox.critical(self, "连接失败", f"无法连接到 {full_url}\n请检查网络或 IP 设置")
 
@@ -804,22 +900,49 @@ class MainWindow(QWidget):
     # ================== 运动 / 坐标相关 ==================
     def on_jog(self, axis: str, direction: int):
         """
-        [标准版] 正向逻辑：
-        点右键(Dir=1) -> 坐标增加(X+)
-        点上键(Dir=1) -> 坐标增加(Y+)
+        [动态速度版]
+        使用滑块设置的 feedrate_xy / feedrate_z
         """
         step = float(self.spn_step.value())
         dx = dy = dz = 0.0
 
+        # 注意：这里保持你之前觉得顺手的正/负逻辑（假设你现在的正向逻辑是顺手的）
         if axis == 'x':
-            dx = direction * step  # ✅ 去掉负号，正向移动
+            dx = direction * step
         elif axis == 'y':
-            dy = direction * step  # ✅ 去掉负号，正向移动
+            dy = direction * step
         elif axis == 'z':
             dz = direction * step
 
-        self.move_machine_rel(dx, dy, dz)
+        # ====== ✅ 修改：传入滑块设置的速度 ======
+        self.machine.move_rel(dx, dy, dz,
+                              feedrate_xy=self.feedrate_xy,
+                              feedrate_z=self.feedrate_z)
 
+    # ====== ✅ 新增：速度/加速度 响应函数 (请复制这一整块) ======
+    def on_speed_changed(self):
+        """更新 XY 和 Z 的速度变量"""
+        # 从滑块读取数值
+        self.feedrate_xy = float(self.sld_spd_xy.value())
+        self.feedrate_z = float(self.sld_spd_z.value())
+
+        # 更新标签显示的文字
+        self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+        self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+
+    def on_accel_changed(self):
+        """更新加速度，并直接发送 SET_VELOCITY_LIMIT 指令给 Klipper"""
+        val = self.sld_acc.value()
+        self.accel = float(val)
+        self.lbl_acc.setText(f"加速度: {val}")
+
+        # 发送 Klipper 指令 (只有连接后才发)
+        if self.machine.connected:
+            # 限制加速度和减速度
+            script = f"SET_VELOCITY_LIMIT ACCEL={val} ACCEL_TO_DECEL={val / 2}"
+            self.machine._post_gcode(script)
+            self.log(f"⚡ 加速度已调整为: {val}")
+    # =========================================================
 
     def move_machine_rel(self, dx: float, dy: float, dz: float):
         """
@@ -858,22 +981,31 @@ class MainWindow(QWidget):
         self.lbl_pos_z.setText(f"Z: {display_z:.2f}")
 
     def on_home_axis(self, axis: str):
-        """单轴 / 全部归位：X / Y / Z / all"""
-        if axis == 'x':
-            self.machine.home_x()
-        elif axis == 'y':
-            self.machine.home_y()
-        elif axis == 'z':
-            self.machine.home_z()
-        elif axis == 'all':
-            self.machine.home_all()
-        else:
-            return
+        """
+        单轴 / 全部归位：X / Y / Z / all
+        (多线程修复版：不再卡顿相机画面)
+        """
+        self.log(f"⏳ 正在后台执行归位 ({axis.upper()})... 请稍候")
 
-        self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
-        self.update_xyz_display()
-        self.log("HOME:", f"Axis {axis.upper()} -> "
-                          f"X={self.pos_x:.2f}, Y={self.pos_y:.2f}, Z={self.pos_z:.2f}")
+        # 1. 创建线程任务
+        self.home_worker = HomeWorker(self.machine, axis)
+
+        # 2. 连接信号：当线程结束时，执行 self.on_home_finished
+        self.home_worker.finished_signal.connect(self.on_home_finished)
+
+        # 3. 启动线程
+        self.home_worker.start()
+
+        # 此时主线程立刻获得自由，相机画面继续流畅刷新！
+
+    def on_home_finished(self, x, y, z):
+        """归位线程结束后的回调函数"""
+        # 更新界面坐标
+        self.update_xyz_display(x, y, z)
+        self.log(f"✅ 归位完成: X={x:.2f}, Y={y:.2f}, Z={z:.2f}")
+
+        # 清理线程对象
+        self.home_worker = None
 
     # ---- 一键对刀（占位） ----
     def on_tool_probe_clicked(self):
@@ -1242,6 +1374,26 @@ class MainWindow(QWidget):
 
                 msg = "ADJUST: Press [1-4] to Switch | [WASD] to Move"
                 cv2.putText(vis_img, msg, (30, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+
+        # ====== 🎨 E. 空跑路径显示 (新增) ======
+        if len(self.dry_run_paths_to_draw) > 0:
+            # 遍历每一条路径画出来
+            for path in self.dry_run_paths_to_draw:
+                # path 是 (N, 2) 的数组，需要转成 int32
+                pts = path.reshape((-1, 1, 2)).astype(np.int32)
+                cv2.polylines(vis_img, [pts], False, (0, 255, 0), 2, cv2.LINE_AA)
+
+                # 标个起点
+                if len(path) > 0:
+                    sx, sy = int(path[0][0]), int(path[0][1])
+                    cv2.circle(vis_img, (sx, sy), 5, (0, 0, 255), -1)
+
+            cv2.putText(vis_img, "DRY RUNNING...", (20, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        # ====================================
+
+
+
 
         # ====== C. 标定阶段 2 (机器对位模式) ======
         elif 1 <= self.calib_step <= 4:
@@ -1627,103 +1779,153 @@ class MainWindow(QWidget):
 
     def on_dry_run(self):
         """
-        按钮：空跑 (修复版 - 使用相对逻辑)
-        无论相机停在哪里，只要画面里有模具，就以当前位置为基准进行空跑。
+        按钮：空跑 (流程升级版)
+        1. 识别并计算路径。
+        2. 屏幕绘制绿线（视觉检查）。
+        3. 弹出 G-code 预览窗口（数据检查）。
+        4. 用户确认后，后台发送指令，跑完自动回到 XYZ 起点。
         """
+        # 1. 基础检查
         if self.cam2mach_matrix is None:
-            QMessageBox.warning(self, "未标定", "请先完成坐标系标定！")
+            QMessageBox.warning(self, "未标定", "请先完成【标定坐标系】！")
             return
         if self.last_frame is None:
             QMessageBox.warning(self, "无图像", "请先启动相机！")
             return
 
-        # 1. 获取翻转后的图像 (保持视觉一致性)
-        from mold_detector import get_calculated_paths
-        img_dry = self.last_frame.copy()
-        img_dry = cv2.flip(img_dry, -1)  # 必须翻转！
+        # 暂停实时识别，防止干扰
+        if self.live_detect:
+            self.detect_mold()
 
-        # 2. 获取路径数据 (像素坐标)
-        paths_px = get_calculated_paths(img_dry)
+        try:
+            # --- A. 图像处理 & 识别 ---
+            from mold_detector import get_calculated_paths
+            img_dry = self.last_frame.copy()
+            img_dry = cv2.flip(img_dry, -1)  # 翻转
 
-        if not paths_px:
-            QMessageBox.warning(self, "未识别", "未识别到模具路径！\n请调整光照或检查模具位置。")
-            return
+            paths_px = get_calculated_paths(img_dry)
+            if not paths_px:
+                QMessageBox.warning(self, "未识别", "未识别到模具路径！")
+                return
 
-        # ====== 🛠️ 核心算法修改：相对坐标计算 ======
-        # 获取当前机器所在的物理坐标 (基准点)
-        cur_x, cur_y, _ = self.machine.get_position()
+            # --- B. 视觉反馈：立即画出绿线 ---
+            self.dry_run_paths_to_draw = paths_px
+            self.show_crosshair = True
+            self.render_current_frame()  # 刷新界面，让你看到绿线
 
-        # 获取屏幕中心 (像素基准)
-        h_img, w_img = img_dry.shape[:2]
-        center_x, center_y = w_img / 2, h_img / 2
+            # --- C. 坐标计算 & G-code 生成 ---
+            # 1. 获取当前起点 (包括 Z)
+            origin_x, origin_y, origin_z = self.machine.get_position()
 
-        # 提取矩阵的线性部分 (2x2)，只负责旋转和缩放，忽略平移
-        # M = [[m00, m01, tx], [m10, m11, ty]]
-        m = self.cam2mach_matrix
+            h_img, w_img = img_dry.shape[:2]
+            center_x, center_y = w_img / 2, h_img / 2
+            m = self.cam2mach_matrix
 
-        paths_machine = []
+            # 2. 参数设置
+            SAFE_Z = 0.0  # 移动时的安全高度
+            WORK_Z = -5.0  # 模拟工作的下刀高度
+            SPEED_XY = int(self.feedrate_xy)
+            SPEED_Z = int(self.feedrate_z)
 
-        for p_px in paths_px:
-            # p_px 是 (N, 2) 的数组
-            # 计算相对于屏幕中心的像素偏移
-            delta_px = p_px - np.array([center_x, center_y])
+            gcode_lines = []
+            gcode_lines.append("G90")
+            gcode_lines.append(f"G0 Z{SAFE_Z} F{SPEED_Z}")  # 先抬刀
 
-            # 应用矩阵线性变换 (像素差 -> 毫米差)
-            # dx_mm = m00*dx_p + m01*dy_p
-            # dy_mm = m10*dx_p + m11*dy_p
-            delta_mm_x = delta_px[:, 0] * m[0, 0] + delta_px[:, 1] * m[0, 1]
-            delta_mm_y = delta_px[:, 0] * m[1, 0] + delta_px[:, 1] * m[1, 1]
+            # 3. 遍历路径生成指令
+            for i, p_px in enumerate(paths_px):
+                # 像素转毫米 (相对偏移法)
+                delta_px = p_px - np.array([center_x, center_y])
+                delta_mm_x = delta_px[:, 0] * m[0, 0] + delta_px[:, 1] * m[0, 1]
+                delta_mm_y = delta_px[:, 0] * m[1, 0] + delta_px[:, 1] * m[1, 1]
 
-            # 加上当前机器坐标 = 绝对目标坐标
-            abs_x = cur_x + delta_mm_x
-            abs_y = cur_y + delta_mm_y
+                abs_x = origin_x + delta_mm_x
+                abs_y = origin_y + delta_mm_y
+                path_machine = np.column_stack((abs_x, abs_y))
 
-            # 组合回 (N, 2)
-            path_mm = np.column_stack((abs_x, abs_y))
-            paths_machine.append(path_mm)
-        # ===========================================
+                if len(path_machine) == 0: continue
 
-        self.log(f"✅ 生成 {len(paths_machine)} 条路径，基于当前坐标 X{cur_x:.1f}, Y{cur_y:.1f}")
+                # --- 生成该段路径的 G-code ---
+                gcode_lines.append(f"; --- Path {i + 1} ---")
 
-        # 4. 生成 G-code 脚本
-        # ⚠️ 注意：Z轴高度一定要确认好！
-        SAFE_Z = 0.0  # 抬刀高度 (最高点)
-        WORK_Z = -5.0  # 工作高度 (根据你的模具深度调整)
-        SPEED_XY = 6000
-        SPEED_Z = 1000
+                # 移动到起点
+                start_x, start_y = path_machine[0]
+                # 叠加针头偏移 (如果用相机中心看，确保这里 nozzle_offset 是 0)
+                start_x += self.nozzle_offset_x
+                start_y += self.nozzle_offset_y
 
-        gcode_lines = []
-        gcode_lines.append("G90")  # 绝对坐标模式
-        gcode_lines.append(f"G0 Z{SAFE_Z} F{SPEED_Z}")
+                gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{SPEED_XY}")
+                gcode_lines.append(f"G0 Z{WORK_Z} F{SPEED_Z}")  # 下刀
 
-        for path in paths_machine:
-            if len(path) == 0: continue
+                # 走路径
+                for pt in path_machine[1:]:
+                    pt_x = pt[0] + self.nozzle_offset_x
+                    pt_y = pt[1] + self.nozzle_offset_y
+                    gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{SPEED_XY}")
 
-            # 4.1 移动到起点
-            start_x, start_y = path[0]
-            # 加上针头偏移 (如果有标定过)
-            start_x += self.nozzle_offset_x
-            start_y += self.nozzle_offset_y
+                gcode_lines.append(f"G0 Z{SAFE_Z} F{SPEED_Z}")  # 抬刀
 
-            gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{SPEED_XY}")
-            gcode_lines.append(f"G0 Z{WORK_Z} F{SPEED_Z}")  # 下刀
+            # --- D. 回到起点 (XYZ 都回) ---
+            gcode_lines.append(f"; --- Return to Start ---")
+            gcode_lines.append(f"G0 X{origin_x:.3f} Y{origin_y:.3f} F{SPEED_XY}")
+            gcode_lines.append(f"G0 Z{origin_z:.3f} F{SPEED_Z}")  # 最后降回原来的高度
 
-            # 4.2 走路径
-            for pt in path[1:]:
-                pt_x, pt_y = pt
-                pt_x += self.nozzle_offset_x
-                pt_y += self.nozzle_offset_y
-                gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{SPEED_XY}")
+            full_script = "\n".join(gcode_lines)
 
-            gcode_lines.append(f"G0 Z{SAFE_Z} F{SPEED_Z}")  # 抬刀
+            # --- E. 弹出确认窗口 (人工审查) ---
+            dialog = QDialog(self)
+            dialog.setWindowTitle("确认空跑 G-code")
+            dialog.resize(600, 400)
 
-        # 5. 发送
-        full_script = "\n".join(gcode_lines)
-        ok = self.machine._post_gcode(full_script)
-        if ok:
-            self.log(f"🚀 空跑指令已发送")
+            layout = QVBoxLayout()
+
+            lbl_info = QLabel(f"已识别 {len(paths_px)} 条路径。\n请检查下方生成的 G-code，确认无误后执行。")
+            layout.addWidget(lbl_info)
+
+            text_edit = QTextEdit()
+            text_edit.setPlainText(full_script)
+            layout.addWidget(text_edit)
+
+            btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            btn_box.button(QDialogButtonBox.Ok).setText("执行 (Run)")
+            btn_box.button(QDialogButtonBox.Cancel).setText("取消")
+            btn_box.accepted.connect(dialog.accept)
+            btn_box.rejected.connect(dialog.reject)
+            layout.addWidget(btn_box)
+
+            dialog.setLayout(layout)
+
+            # 等待用户点击
+            if dialog.exec_() == QDialog.Accepted:
+                # 用户点了确定，才发送
+                self.log("🚀 用户确认，正在发送指令...")
+                self.dry_run_worker = GCodeWorker(self.machine, full_script)
+                self.dry_run_worker.finished_signal.connect(self.on_dry_run_finished)
+                self.dry_run_worker.start()
+            else:
+                self.log("🚫 用户取消空跑")
+                self.dry_run_paths_to_draw = []  # 清除绿线
+                self.render_current_frame()
+
+        except Exception as e:
+            self.log(f"❌ 错误: {e}")
+            self.dry_run_paths_to_draw = []
+
+    def on_dry_run_finished(self, success, msg):
+        """空跑线程结束后的回调"""
+        # 清除屏幕上的绿线
+        self.dry_run_paths_to_draw = []
+        self.render_current_frame()
+
+        if success:
+            QMessageBox.information(self, "完成", "✅ 空跑任务执行完毕！")
+            self.log("✅ 空跑结束。")
         else:
-            QMessageBox.critical(self, "发送失败", "无法发送 G-code")
+            QMessageBox.warning(self, "失败", f"❌ 执行失败: {msg}")
+            self.log("❌ 空跑异常中止。")
+
+        # 重新同步一次坐标
+        mx, my, mz = self.machine.get_position()
+        self.update_xyz_display(mx, my, mz)
 
     def on_real_run(self):
         """
@@ -1896,6 +2098,29 @@ class MainWindow(QWidget):
     def resume_preview(self):
         self.freeze_display = False
 
+    # ====== ✅ 修复：把这两个函数向左移，与 resume_preview 对齐 ======
+    def on_speed_changed(self):
+        """更新 XY 和 Z 的速度变量"""
+        self.feedrate_xy = float(self.sld_spd_xy.value())
+        self.feedrate_z = float(self.sld_spd_z.value())
+
+        # 更新标签文字
+        self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+        self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+
+    def on_accel_changed(self):
+        """更新加速度，并直接发送 SET_VELOCITY_LIMIT 指令给 Klipper"""
+        val = self.sld_acc.value()
+        self.accel = float(val)
+        self.lbl_acc.setText(f"加速度: {val}")
+
+        # 发送 Klipper 指令
+        if self.machine.connected:
+            # 限制加速度和减速度
+            script = f"SET_VELOCITY_LIMIT ACCEL={val} ACCEL_TO_DECEL={val / 2}"
+            self.machine._post_gcode(script)
+            self.log(f"⚡ 加速度已调整为: {val}")
+    # ========================================
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

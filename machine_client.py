@@ -140,8 +140,8 @@ class MachineClient:
             return False
 
         url = f"{self.base_url}/printer/objects/query"
-        # 同时查询 toolhead 和 gcode_move，谁有数据用谁
-        params = {"objects": "toolhead&gcode_move"}
+        # ✅ 正确写法：/printer/objects/query?toolhead&gcode_move
+        params = {"toolhead": "", "gcode_move": ""}
 
         try:
             r = self.session.get(url, params=params, headers=self._headers(), timeout=5)
@@ -156,24 +156,16 @@ class MachineClient:
             if toolhead:
                 pos = toolhead.get("position", [0.0, 0.0, 0.0, 0.0])
                 self._x, self._y, self._z = map(float, pos[:3])
-
-                # 只有 toolhead 才有 homed_axes
                 homed_axes = toolhead.get("homed_axes", "")
                 self.is_homed = bool(homed_axes)
-
                 self._log(f"[MachineClient] 同步成功 (toolhead): ({self._x:.2f}, {self._y:.2f}, {self._z:.2f})")
                 return True
 
-            # --- 方案 B: 尝试读取 gcode_move (备用) ---
+            # --- 方案 B: 尝试读取 gcode_move ---
             gcode_move = all_status.get("gcode_move")
             if gcode_move:
-                # gcode_position 包含了 G92 偏移后的坐标，通常更符合用户直觉
                 pos = gcode_move.get("gcode_position", [0.0, 0.0, 0.0, 0.0])
                 self._x, self._y, self._z = map(float, pos[:3])
-
-                # gcode_move 不包含 homed_axes，我们只能假设它已更新
-                # (或者保持之前的 is_homed 状态不变)
-
                 self._log(f"[MachineClient] 同步成功 (gcode_move): ({self._x:.2f}, {self._y:.2f}, {self._z:.2f})")
                 return True
 
@@ -188,13 +180,14 @@ class MachineClient:
     # ------------------------------------------------------------------ #
     # 坐标查询
     # ------------------------------------------------------------------ #
-    def get_position(self) -> Tuple[float, float, float]:
-        """
-        返回当前软件坐标（mm）。
-        先用软件坐标跑通，后面再根据需要从 Klipper 同步真坐标。
-        """
-        return self._x, self._y, self._z
 
+    def get_position(self) -> Tuple[float, float, float]:
+        if self.base_url and self.connected:
+            try:
+                self._sync_toolhead_status()
+            except Exception as e:
+                self._log("[MachineClient] get_position: 同步 Klipper 坐标失败，使用缓存坐标。", e)
+        return self._x, self._y, self._z
 
     # ------------------------------------------------------------------ #
     # 运动控制

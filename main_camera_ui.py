@@ -333,8 +333,11 @@ class MainWindow(QWidget):
 
         self.default_base_url = "http://192.168.60.26:7125"  # 按你实际端口改
 
-        # 当前坐标（mm）
-        self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
+        # 当前坐标（mm）——这里只作为初始显示，不去访问 Klipper
+        self.pos_x = 0.0
+        self.pos_y = 0.0
+        self.pos_z = 0.0
+        # self.update_xyz_display(self.pos_x, self.pos_y, self.pos_z)
 
 
         # 点动步长（mm）
@@ -838,6 +841,8 @@ class MainWindow(QWidget):
         self.update_xyz_display()
         self.update_nozzle_offset_display()
 
+        self.update_xyz_display(self.pos_x, self.pos_y, self.pos_z)
+
     def on_connect_klipper(self):
         """
         连接 Klipper：
@@ -872,15 +877,9 @@ class MainWindow(QWidget):
             """)
 
             # ====== ✅ 关键修复：连接后强制同步坐标 ======
-            # 有时候第一次连接可能 toolhead 还没准备好，我们再试一次获取状态
             self.machine._sync_toolhead_status()
-
-            # 获取坐标
             mx, my, mz = self.machine.get_position()
-
-            # 强制刷新界面显示
             self.update_xyz_display(mx, my, mz)
-
             self.log(f"🔄 同步坐标成功: X={mx:.2f}, Y={my:.2f}, Z={mz:.2f}")
             self.log(f"✅ 已连接到 Klipper: {full_url}")
             # ===========================================

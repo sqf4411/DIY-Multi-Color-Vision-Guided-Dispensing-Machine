@@ -1,80 +1,48 @@
-# DIY 多色视觉引导点胶机 – 相机 & Klipper 一体化 UI
+# DIY 多色视觉引导点胶机 (DIY Multi-Color Vision Guided Dispensing Machine)
 
-本项目是一个围绕 **工业相机 + Klipper（Moonraker）** 的桌面端工具，用于：
-- 实时预览工业相机画面，调节曝光 / 增益 / Gamma
-- 自动识别硅胶模具、提取“大框 + 4 个腔体位置”
-- 通过「黄金示教」「路径示教」生成点胶模板
-- 通过自定义 `MachineClient` 控制 Klipper（或本地模拟）实现 XYZ 点动、回零
-- 后续扩展：像素坐标 → 机械坐标标定、虚拟跑、空跑、真实点胶等
+本项目使用 Python、OpenCV 和 PyQt5 实现了一个视觉引导的点胶系统。它通过 HTTP/WebSocket 接口与运动控制器 (Klipper) 通信，根据视觉反馈执行精确的点胶任务。
 
-适用场景：  
-DIY 6 轴点胶机 / 工匠键帽多色点胶 / 硅胶负模点胶生产线等。
+## 📂 1. Python 源代码文件
 
----
+| 文件名 | 描述 |
+| :--- | :--- |
+| `main_camera_ui.py` | **主程序入口**。负责主 GUI 界面、相机显示、事件循环，并协调所有其他模块。 |
+| `mold_detector.py` | **核心视觉逻辑**。处理模具识别、模板匹配以及路径计算（包含点和线）。 |
+| `golden_teach.py` | **黄金示教**。允许用户定义标准模具模板（4个槽位），支持实时绘制和撤销功能。 |
+| `path_teach.py` | **路径编辑**。允许用户在模板上绘制点胶路径（左键画线，右键画点）。 |
+| `dry_run_dialog.py` | **G代码生成**。空跑/点胶设置对话框。根据路径和设置（安全高度、工作高度、延时、速度）生成 G 代码。 |
+| `machine_client.py` | **机器控制**。通过 HTTP/WebSocket 处理与运动控制器 (Klipper/Moonraker) 的通信。 |
+| `golden_corners_adjust.py` | **标定辅助**。用于在坐标标定过程中微调模具的 4 个角点。 |
+| `run_production.py` | **生产脚本**。用于生产模式运行的脚本（无头模式或简化界面）。 |
+| `testUi.py` | **UI 测试**。用于单独测试 UI 组件的简单脚本。 |
 
-## 目录结构
+## 🛠️ 2. 重要函数说明
 
-项目主要文件：
+| 函数名 | 所在文件 | 描述 |
+| :--- | :--- | :--- |
+| `detect_mold_and_cells` | `mold_detector.py` | **视觉识别**。在当前帧中检测大模具框架和单个产品槽位。 |
+| `get_calculated_paths` | `mold_detector.py` | **路径计算**。计算所有检测到的产品的最终点胶路径（像素坐标），应用偏移和透视校正。 |
+| `run_golden_teach` | `golden_teach.py` | **示教**。启动黄金示教 UI 循环。 |
+| `run_path_teach` | `path_teach.py` | **示教**。启动路径编辑 UI 循环。 |
+| `generate_gcode` | `dry_run_dialog.py` | **G代码**。将像素路径转换为机器 G 代码，处理抬刀、速度和延时。 |
+| `render_current_frame` | `main_camera_ui.py` | **渲染**。主渲染循环。绘制相机画面、覆盖层（框、路径、点）并处理 UI 状态显示。 |
+| `on_dry_run` | `main_camera_ui.py` | **逻辑**。点击“空跑/点胶”按钮时触发。准备路径并打开设置对话框。 |
+| `on_golden_teach` | `main_camera_ui.py` | **逻辑**。点击“黄金示教”按钮时触发。管理图片选择并调用 `run_golden_teach`。 |
+| `on_edit_path` | `main_camera_ui.py` | **逻辑**。点击“编辑路径”按钮时触发。管理图片选择并调用 `run_path_teach`。 |
 
-- `main_camera_ui.py`  
-  主程序入口，PyQt5 UI：
-  - 左侧：工业相机实时画面
-  - 右侧：相机参数调节、Klipper 连接、XYZ 点动控制、日志窗口
-  - 按钮：启动 / 停止相机、保存图片、识别模具、黄金示教、路径示教、标定坐标系、虚拟跑 / 空跑 / 真跑、测试出胶等
+## 📄 3. 生成的数据文件
 
-- `machine_client.py`  
-  运动控制抽象层：
-  - 当前版本：**本地模拟坐标版**，不真正发网络请求，方便开发 UI 和流程
-  - 以后可以替换为：调用 Klipper / Moonraker HTTP API、串口、TCP socket 等
-
-- `mold_detector.py`  
-  模具识别与黄金模板缓存：
-  - 负责从图像中检测：
-    - 大模具外框（1 个）
-    - 4 个小腔体的位置
-  - 管理黄金示教产生的模板（`slot_templates.npy`、`warp_size.npy` 等）
-  - 提供统一接口给 UI 进行「识别模具」显示
-
-- `golden_teach.py`  
-  「黄金示教」工具脚本：
-  - 打开一张基准图（例如 `mold2.png`）
-  - 用户在图像上手动画 4 个黄色框（4 个产品）
-  - 保存到：
-    - `slot_templates.npy`：4×4×2 的黄框坐标（4 个产品 × 每个框四个角）
-    - `warp_size.npy`：透视矫正后的宽高
-
-- `path_teach.py`  
-  「点胶路径示教」工具脚本：
-  - 基于黄金示教中的某个小格（cell），手动画点胶折线 / 点集
-  - 保存路径到：
-    - `cell_0_polylines.npy` / `cell_0_dots.npy` 等
-  - 后续由 UI 调用，用于虚拟跑 / 空跑 / 真实点胶
-
-- `golden_corners_adjust.py`（建议名，单独脚本）  
-  「心理更踏实版」四角精调工具：
-  - 读取基准图 `mold2.png`
-  - 通过 `detect_mold_and_cells()` 自动获取大框四角
-  - 提供放大视图 + 方向键 / WASD 精调像素
-  - 保存最终 4 个角点到 `golden_corners.npy`，作为更精准的基准角点
-
-- 典型数据文件（运行过程中产生）：
-  - `mold2.png`：黄金示教用的基准图
-  - `slot_templates.npy`：4 个产品的黄框模板
-  - `warp_size.npy`：透视后的图像尺寸
-  - `golden_corners.npy`：精调后的大框四角坐标（可选）
-  - `cell_0_polylines.npy` / `cell_0_dots.npy`：某个腔体的点胶路径
-  - `camera_params.json`：曝光、增益、Gamma 等相机参数
-
----
-
-## 环境依赖
-
-### 1. Python 环境
-
-- 建议使用 **Python 3.8+，Windows 10/11**
-- 建议在虚拟环境中安装依赖：
-
-```bash
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
+| 文件模式 | 描述 |
+| :--- | :--- |
+| `mold2.png` | 用于参考的“黄金模板”图片。 |
+| `slot_templates.npy` | 存储在黄金示教中定义的 4 个槽位位置（框）。 |
+| `warp_size.npy` | 存储透视校正后模板的尺寸 `[宽, 高]`。 |
+| `cell_0_polylines.npy` | 存储点胶路径的原始**线段**数据（局部坐标）。 |
+| `cell_0_dots.npy` | 存储点胶路径的原始**点**数据（局部坐标）。 |
+| `disp_poly_cell0.npy` | 存储用于显示的**线段**路径（黄金坐标系）。 |
+| `disp_dots_cell0.npy` | 存储用于显示的**点**路径（黄金坐标系）。 |
+| `golden_corners.npy` | 存储标定好的模具视觉角点。 |
+| `cam2mach_matrix.npy` | 存储相机到机器的坐标变换矩阵。 |
+| `app_settings.json` | 存储应用程序设置（速度、Z轴高度、延时等）。 |
+| `camera_params.json` | 存储相机参数（曝光、增益、Gamma）。 |
+| `captures/` | 包含从相机保存的截图目录。 |

@@ -319,6 +319,7 @@ class MainWindow(QWidget):
 
         # 黄金模板
         self.slot_templates = None   # (4,4,2)
+        self.latest_capture_path = None  # ✅ 新增：记录最近保存的图片路径
 
         # 参数范围
         self.exp_min = 100.0
@@ -369,8 +370,8 @@ class MainWindow(QWidget):
 
         # ===== Z 高度参数 =====
         # 空跑/点胶时的安全高度与工作高度（mm）
-        self.safe_z = 0.0    # 抬刀 / 快移高度
-        self.work_z = -5.0   # 点胶 / 下刀高度
+        self.safe_z = 20.0    # 抬刀 / 快移高度
+        self.work_z = 5.0   # 点胶 / 下刀高度
 
         # 初始速度（真正的数值后面会被 load_app_settings 覆盖）
         self.feedrate_xy = 50.0   # XY 速度
@@ -661,14 +662,14 @@ class MainWindow(QWidget):
 
         lbl_safe = QLabel("安全Z")
         self.spn_safe_z = QDoubleSpinBox()
-        self.spn_safe_z.setRange(-200.0, 200.0)
+        self.spn_safe_z.setRange(0.0, 300.0)
         self.spn_safe_z.setDecimals(2)
         self.spn_safe_z.setSingleStep(0.1)
         self.spn_safe_z.setValue(self.safe_z)
 
         lbl_work = QLabel("点胶Z")
         self.spn_work_z = QDoubleSpinBox()
-        self.spn_work_z.setRange(-200.0, 200.0)
+        self.spn_work_z.setRange(0.0, 300.0)
         self.spn_work_z.setDecimals(2)
         self.spn_work_z.setSingleStep(0.1)
         self.spn_work_z.setValue(self.work_z)

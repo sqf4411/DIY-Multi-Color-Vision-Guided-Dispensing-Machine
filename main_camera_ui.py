@@ -1870,11 +1870,32 @@ class MainWindow(QWidget):
                 cv2.arrowedLine(vis_img, (cx, cy), (tx, ty), (0, 255, 0), 3)
                 cv2.circle(vis_img, (tx, ty), 10, (0, 255, 255), 2)
 
-        # ====== D. 正常检测模式 ======
+        # ====== D. 正常检测模式 (优化：跳帧检测) ======
         elif self.live_detect:
-            from mold_detector import detect_mold_and_cells
-            detected_img, _, _, _ = detect_mold_and_cells(img)
-            vis_img = detected_img
+            # 初始化计数器
+            if not hasattr(self, '_detect_frame_count'):
+                self._detect_frame_count = 0
+                self._last_detected_img = None
+            
+            self._detect_frame_count += 1
+            
+            # 每 3 帧检测一次 (降低 66% 负荷)
+            if self._detect_frame_count % 3 == 0:
+                from mold_detector import detect_mold_and_cells
+                detected_img, _, _, _ = detect_mold_and_cells(img)
+                self._last_detected_img = detected_img
+                vis_img = detected_img
+            else:
+                # 中间帧：如果有缓存就用缓存，没有就用原图
+                if self._last_detected_img is not None:
+                    vis_img = self._last_detected_img
+                else:
+                    vis_img = img
+        else:
+            # 如果关闭了检测，重置计数器
+            if hasattr(self, '_detect_frame_count'):
+                self._detect_frame_count = 0
+                self._last_detected_img = None
 
         # -----------------------------------------------------------
         # 3. 显示

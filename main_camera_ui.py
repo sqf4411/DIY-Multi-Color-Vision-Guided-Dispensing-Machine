@@ -422,8 +422,9 @@ class MainWindow(QWidget):
 
         # ===== Z 高度参数 =====
         # 空跑/点胶时的安全高度与工作高度（mm）
-        self.safe_z = 20.0    # 抬刀 / 快移高度
-        self.work_z = 5.0   # 点胶 / 下刀高度
+        self.safe_z_cavity = 22.0   # 腔内安全高度 (小抬刀)
+        self.safe_z_product = 50.0  # 产品安全高度 (大抬刀)
+        self.work_z = 5.0           # 点胶 / 下刀高度
 
         # 初始速度（真正的数值后面会被 load_app_settings 覆盖）
         self.feedrate_xy = 50.0   # XY 速度
@@ -718,13 +719,23 @@ class MainWindow(QWidget):
         # ===== Z 高度参数 (安全高度 / 点胶高度) =====
         zparam_layout = QHBoxLayout()
 
-        lbl_safe = QLabel("安全Z")
-        self.spn_safe_z = QDoubleSpinBox()
-        self.spn_safe_z.setRange(0.0, 300.0)
-        self.spn_safe_z.setDecimals(2)
-        self.spn_safe_z.setSingleStep(0.1)
-        self.spn_safe_z.setValue(self.safe_z)
+        # 1. 腔内安全高度
+        lbl_safe_cavity = QLabel("腔内安全Z")
+        self.spn_safe_z_cavity = QDoubleSpinBox()
+        self.spn_safe_z_cavity.setRange(0.0, 300.0)
+        self.spn_safe_z_cavity.setDecimals(2)
+        self.spn_safe_z_cavity.setSingleStep(0.1)
+        self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
 
+        # 2. 产品安全高度
+        lbl_safe_product = QLabel("产品安全Z")
+        self.spn_safe_z_product = QDoubleSpinBox()
+        self.spn_safe_z_product.setRange(0.0, 300.0)
+        self.spn_safe_z_product.setDecimals(2)
+        self.spn_safe_z_product.setSingleStep(0.1)
+        self.spn_safe_z_product.setValue(self.safe_z_product)
+
+        # 3. 点胶高度
         lbl_work = QLabel("点胶Z")
         self.spn_work_z = QDoubleSpinBox()
         self.spn_work_z.setRange(0.0, 300.0)
@@ -732,8 +743,10 @@ class MainWindow(QWidget):
         self.spn_work_z.setSingleStep(0.1)
         self.spn_work_z.setValue(self.work_z)
 
-        zparam_layout.addWidget(lbl_safe)
-        zparam_layout.addWidget(self.spn_safe_z)
+        zparam_layout.addWidget(lbl_safe_cavity)
+        zparam_layout.addWidget(self.spn_safe_z_cavity)
+        zparam_layout.addWidget(lbl_safe_product)
+        zparam_layout.addWidget(self.spn_safe_z_product)
         zparam_layout.addWidget(lbl_work)
         zparam_layout.addWidget(self.spn_work_z)
 
@@ -951,7 +964,8 @@ class MainWindow(QWidget):
 
         self.update_xyz_display(self.pos_x, self.pos_y, self.pos_z)
 
-        self.spn_safe_z.valueChanged.connect(self.on_z_params_changed)
+        self.spn_safe_z_cavity.valueChanged.connect(self.on_z_params_changed)
+        self.spn_safe_z_product.valueChanged.connect(self.on_z_params_changed)
         self.spn_work_z.valueChanged.connect(self.on_z_params_changed)
 
 
@@ -1732,12 +1746,25 @@ class MainWindow(QWidget):
                     self.accel = val
                     self.lbl_acc.setText(f"加速度: {int(val)}")
 
-                # 4. 恢复安全高度 Z
-                if 'safe_z' in settings:
+                # 4. 恢复安全高度 Z (旧版兼容 + 新版)
+                if 'safe_z_cavity' in settings:
+                    val = float(settings['safe_z_cavity'])
+                    self.safe_z_cavity = val
+                    if hasattr(self, 'spn_safe_z_cavity'):
+                        self.spn_safe_z_cavity.setValue(val)
+                
+                if 'safe_z_product' in settings:
+                    val = float(settings['safe_z_product'])
+                    self.safe_z_product = val
+                    if hasattr(self, 'spn_safe_z_product'):
+                        self.spn_safe_z_product.setValue(val)
+                
+                # 兼容旧配置：如果只有 safe_z，则赋给 safe_z_cavity
+                if 'safe_z' in settings and 'safe_z_cavity' not in settings:
                     val = float(settings['safe_z'])
-                    self.safe_z = val
-                    if hasattr(self, 'spn_safe_z'):
-                        self.spn_safe_z.setValue(val)
+                    self.safe_z_cavity = val
+                    if hasattr(self, 'spn_safe_z_cavity'):
+                        self.spn_safe_z_cavity.setValue(val)
 
                 # 5. 恢复点胶高度 Z
                 if 'work_z' in settings:
@@ -1758,7 +1785,9 @@ class MainWindow(QWidget):
             'feedrate_xy': self.feedrate_xy,
             'feedrate_z': self.feedrate_z,
             'accel': self.accel,
-            'safe_z': self.safe_z,
+            'accel': self.accel,
+            'safe_z_cavity': self.safe_z_cavity,
+            'safe_z_product': self.safe_z_product,
             'work_z': self.work_z,
         }
 
@@ -1841,7 +1870,17 @@ class MainWindow(QWidget):
             cv2.circle(vis_img, (cx, cy), 15, (0, 0, 255), 2)     # 中心小圈
 
             # 2️⃣ 再遍历每一条空跑路径画出来
-            for path in self.dry_run_paths_to_draw:
+            # paths_to_draw 现在是 List[List[path]] (产品 -> 路径片段)
+            # 或者为了兼容旧代码，我们先把它展平再画
+            flat_paths = []
+            for prod_paths in self.dry_run_paths_to_draw:
+                if isinstance(prod_paths, list):
+                    flat_paths.extend(prod_paths)
+                else:
+                    # 兼容旧格式 (如果 mold_detector 没更新)
+                    flat_paths.append(prod_paths)
+
+            for path in flat_paths:
                 # path 是 (N, 2) 的数组，需要转成 int32
                 pts = path.reshape((-1, 1, 2)).astype(np.int32)
                 cv2.polylines(vis_img, [pts], False, (0, 255, 0), 2, cv2.LINE_AA)
@@ -2407,7 +2446,8 @@ class MainWindow(QWidget):
             
             # 准备初始参数
             initial_params = {
-                'safe_z': float(self.safe_z),
+                'safe_z_cavity': float(self.safe_z_cavity),
+                'safe_z_product': float(self.safe_z_product),
                 'work_z': float(self.work_z),
                 'speed_xy': int(self.feedrate_xy),
                 'speed_z': int(self.feedrate_z)
@@ -2442,7 +2482,8 @@ class MainWindow(QWidget):
                 self.dry_run_worker.start()
                 
                 # 可选：更新界面上的默认值，方便下次使用
-                self.spn_safe_z.setValue(dialog.safe_z)
+                self.spn_safe_z_cavity.setValue(dialog.safe_z_cavity)
+                self.spn_safe_z_product.setValue(dialog.safe_z_product)
                 self.spn_work_z.setValue(dialog.work_z)
                 self.feedrate_xy = dialog.speed_xy
                 self.feedrate_z = dialog.speed_z
@@ -2643,38 +2684,9 @@ class MainWindow(QWidget):
         self.save_params()
 
     # ================== 其它 ==================
-    def closeEvent(self, e):
-        self.stop_cam()
-        e.accept()
-
     def resume_preview(self):
         self.freeze_display = False
 
-    # ====== ✅ 修复：把这两个函数向左移，与 resume_preview 对齐 ======
-    def on_speed_changed(self):
-        """更新 XY 和 Z 的速度变量"""
-        self.feedrate_xy = float(self.sld_spd_xy.value())
-        self.feedrate_z = float(self.sld_spd_z.value())
-
-        # 更新标签文字
-        self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
-        self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
-
-    def on_accel_changed(self):
-        """更新加速度，并直接发送 SET_VELOCITY_LIMIT 指令给 Klipper"""
-        val = self.sld_acc.value()
-        self.accel = float(val)
-        self.lbl_acc.setText(f"加速度: {val}")
-
-        # 发送 Klipper 指令
-        if self.machine.connected:
-            # 限制加速度和减速度
-            script = f"SET_VELOCITY_LIMIT ACCEL={val} ACCEL_TO_DECEL={val / 2}"
-            self.machine._post_gcode(script)
-            self.log(f"⚡ 加速度已调整为: {val}")
-    # ========================================
-
-    # ... 在 class MainWindow(QWidget) 内部 ...
     def on_speed_changed(self):
         """更新 XY 和 Z 的速度变量"""
         self.feedrate_xy = float(self.sld_spd_xy.value())
@@ -2706,14 +2718,14 @@ class MainWindow(QWidget):
     # ================== 其它 ==================
     def closeEvent(self, e):
         self.stop_cam()
-
         # 【新增】关闭前保存所有参数
         self.save_app_settings()
         e.accept()
 
     def on_z_params_changed(self):
         """安全高度 / 点胶高度 改变时更新变量并保存"""
-        self.safe_z = float(self.spn_safe_z.value())
+        self.safe_z_cavity = float(self.spn_safe_z_cavity.value())
+        self.safe_z_product = float(self.spn_safe_z_product.value())
         self.work_z = float(self.spn_work_z.value())
         self.save_app_settings()
 

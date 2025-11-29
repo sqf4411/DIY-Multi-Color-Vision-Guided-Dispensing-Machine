@@ -18,7 +18,8 @@ class DryRunDialog(QDialog):
         self.center_x, self.center_y = img_center
         
         # 初始参数
-        self.safe_z = initial_params.get('safe_z', 20.0)
+        self.safe_z_cavity = initial_params.get('safe_z_cavity', 22.0)
+        self.safe_z_product = initial_params.get('safe_z_product', 50.0)
         self.work_z = initial_params.get('work_z', 5.0)
         self.speed_xy = initial_params.get('speed_xy', 2000)
         self.speed_z = initial_params.get('speed_z', 500)
@@ -33,13 +34,21 @@ class DryRunDialog(QDialog):
         param_group = QGroupBox("参数设置")
         param_layout = QGridLayout()
 
-        # Safe Z
-        param_layout.addWidget(QLabel("安全高度 (Safe Z):"), 0, 0)
-        self.spn_safe_z = QDoubleSpinBox()
-        self.spn_safe_z.setRange(0, 300)
-        self.spn_safe_z.setValue(self.safe_z)
-        self.spn_safe_z.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_safe_z, 0, 1)
+        # Safe Z Cavity
+        param_layout.addWidget(QLabel("腔内安全高度 (Cavity Z):"), 0, 0)
+        self.spn_safe_z_cavity = QDoubleSpinBox()
+        self.spn_safe_z_cavity.setRange(0, 300)
+        self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
+        self.spn_safe_z_cavity.valueChanged.connect(self.on_param_changed)
+        param_layout.addWidget(self.spn_safe_z_cavity, 0, 1)
+
+        # Safe Z Product
+        param_layout.addWidget(QLabel("产品安全高度 (Product Z):"), 1, 0)
+        self.spn_safe_z_product = QDoubleSpinBox()
+        self.spn_safe_z_product.setRange(0, 300)
+        self.spn_safe_z_product.setValue(self.safe_z_product)
+        self.spn_safe_z_product.valueChanged.connect(self.on_param_changed)
+        param_layout.addWidget(self.spn_safe_z_product, 1, 1)
 
         # Work Z
         param_layout.addWidget(QLabel("点胶高度 (Work Z):"), 0, 2)
@@ -50,20 +59,20 @@ class DryRunDialog(QDialog):
         param_layout.addWidget(self.spn_work_z, 0, 3)
 
         # Speed XY
-        param_layout.addWidget(QLabel("XY 速度 (mm/min):"), 1, 0)
+        param_layout.addWidget(QLabel("XY 速度 (mm/min):"), 2, 0)
         self.spn_speed_xy = QSpinBox()
         self.spn_speed_xy.setRange(100, 20000)
         self.spn_speed_xy.setValue(int(self.speed_xy))
         self.spn_speed_xy.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_speed_xy, 1, 1)
+        param_layout.addWidget(self.spn_speed_xy, 2, 1)
 
         # Speed Z
-        param_layout.addWidget(QLabel("Z 速度 (mm/min):"), 1, 2)
+        param_layout.addWidget(QLabel("Z 速度 (mm/min):"), 2, 2)
         self.spn_speed_z = QSpinBox()
         self.spn_speed_z.setRange(100, 5000)
         self.spn_speed_z.setValue(int(self.speed_z))
         self.spn_speed_z.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_speed_z, 1, 3)
+        param_layout.addWidget(self.spn_speed_z, 2, 3)
 
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
@@ -86,7 +95,8 @@ class DryRunDialog(QDialog):
         self.setLayout(layout)
 
     def on_param_changed(self):
-        self.safe_z = self.spn_safe_z.value()
+        self.safe_z_cavity = self.spn_safe_z_cavity.value()
+        self.safe_z_product = self.spn_safe_z_product.value()
         self.work_z = self.spn_work_z.value()
         self.speed_xy = self.spn_speed_xy.value()
         self.speed_z = self.spn_speed_z.value()
@@ -95,37 +105,67 @@ class DryRunDialog(QDialog):
     def generate_gcode(self):
         gcode_lines = []
         gcode_lines.append("G90")
-        gcode_lines.append(f"G0 Z{self.safe_z:.2f} F{self.speed_z}")
+        # Start with Product Safe Z
+        gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
 
-        for i, p_px in enumerate(self.paths_px):
-            # 像素转毫米
-            delta_px = p_px - np.array([self.center_x, self.center_y])
-            delta_mm_x = delta_px[:, 0] * self.m[0, 0] + delta_px[:, 1] * self.m[0, 1]
-            delta_mm_y = delta_px[:, 0] * self.m[1, 0] + delta_px[:, 1] * self.m[1, 1]
+        # Flatten logic: paths_px can be List[List[path]] (New) or List[path] (Old)
+        # We want to treat the outer list as "Products" and inner list as "Segments"
+        
+        products = []
+        if len(self.paths_px) > 0:
+            if isinstance(self.paths_px[0], list):
+                # New format: List[List[path]]
+                products = self.paths_px
+            else:
+                # Old format: List[path] -> Treat each path as a separate product for safety
+                # Or treat all as one product? Let's treat each as a separate product to be safe.
+                products = [[p] for p in self.paths_px]
 
-            abs_x = self.origin_x + delta_mm_x
-            abs_y = self.origin_y + delta_mm_y
-            path_machine = np.column_stack((abs_x, abs_y))
-
-            if len(path_machine) == 0: continue
-
-            gcode_lines.append(f"; --- Path {i + 1} ---")
+        for prod_idx, prod_segments in enumerate(products):
+            gcode_lines.append(f"; --- Product {prod_idx + 1} ---")
             
-            # 起点
-            start_x, start_y = path_machine[0]
-            start_x += self.nozzle_offset_x
-            start_y += self.nozzle_offset_y
+            # Before moving to a new product, we should be at safe_z_product (already there from start or end of last loop)
+            # But let's ensure it for safety if we optimize later
+            # gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
 
-            gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{self.speed_xy}")
-            gcode_lines.append(f"G0 Z{self.work_z:.2f} F{self.speed_z}")
+            for seg_idx, p_px in enumerate(prod_segments):
+                # 1. Convert pixels to mm
+                delta_px = p_px - np.array([self.center_x, self.center_y])
+                delta_mm_x = delta_px[:, 0] * self.m[0, 0] + delta_px[:, 1] * self.m[0, 1]
+                delta_mm_y = delta_px[:, 0] * self.m[1, 0] + delta_px[:, 1] * self.m[1, 1]
 
-            # 路径点
-            for pt in path_machine[1:]:
-                pt_x = pt[0] + self.nozzle_offset_x
-                pt_y = pt[1] + self.nozzle_offset_y
-                gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{self.speed_xy}")
+                abs_x = self.origin_x + delta_mm_x
+                abs_y = self.origin_y + delta_mm_y
+                path_machine = np.column_stack((abs_x, abs_y))
 
-            gcode_lines.append(f"G0 Z{self.safe_z:.2f} F{self.speed_z}")
+                if len(path_machine) == 0: continue
+
+                gcode_lines.append(f";   Segment {seg_idx + 1}")
+
+                # 2. Move to Start Point
+                start_x, start_y = path_machine[0]
+                start_x += self.nozzle_offset_x
+                start_y += self.nozzle_offset_y
+
+                # Move XY first (at current Z, which should be safe)
+                gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{self.speed_xy}")
+                
+                # 3. Down to Work Z
+                gcode_lines.append(f"G0 Z{self.work_z:.2f} F{self.speed_z}")
+
+                # 4. Dispense Path
+                for pt in path_machine[1:]:
+                    pt_x = pt[0] + self.nozzle_offset_x
+                    pt_y = pt[1] + self.nozzle_offset_y
+                    gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{self.speed_xy}")
+
+                # 5. Lift after segment
+                # If this is the LAST segment of the product, lift to Product Safe Z
+                # Otherwise, lift to Cavity Safe Z
+                if seg_idx == len(prod_segments) - 1:
+                    gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
+                else:
+                    gcode_lines.append(f"G0 Z{self.safe_z_cavity:.2f} F{self.speed_z}")
 
         gcode_lines.append(f"; --- Return to Start ---")
         gcode_lines.append(f"G0 X{self.origin_x:.3f} Y{self.origin_y:.3f} F{self.speed_xy}")

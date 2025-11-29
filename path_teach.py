@@ -195,8 +195,8 @@ def run_path_teach(cell_index: int = 0,
 
         head = np.zeros((30, disp_w, 3), dtype=np.uint8)
         cv2.putText(head,
-                    "L: line   R: dot   N: new line   "
-                    "C: clear   Z: undo   S: save   Q: quit",
+                    "L-Click: Line/Dot (Mode)   R-Click: Dot   N: New Line   "
+                    "C: Clear   Z: Undo   S: Save   Q: Quit",
                     (10, 22), cv2.FONT_HERSHEY_SIMPLEX,
                     0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
@@ -217,10 +217,15 @@ def run_path_teach(cell_index: int = 0,
         wy = (y - 30) / scale
 
         if event == cv2.EVENT_LBUTTONDOWN:
+            # Left click: Add point based on current mode
             if mode == "line":
                 current_line.append((wx, wy))
             elif mode == "dot":
                 dots.append((wx, wy))
+        
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            # Right click: Always add a dot
+            dots.append((wx, wy))
 
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW_NAME, disp_w, disp_h + 30)

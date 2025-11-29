@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QGroupBox, QDoubleSpinBox, QSpinBox, QTextEdit,
-    QDialogButtonBox
+    QDialogButtonBox, QCheckBox
 )
 import numpy as np
 
@@ -17,6 +17,16 @@ class DryRunDialog(QDialog):
         self.nozzle_offset_x, self.nozzle_offset_y = nozzle_offset
         self.center_x, self.center_y = img_center
         
+        # Parse products structure
+        self.products = []
+        if len(self.paths_px) > 0:
+            if isinstance(self.paths_px[0], list):
+                # New format: List[List[path]]
+                self.products = self.paths_px
+            else:
+                # Old format: List[path] -> Treat each path as a separate product for safety
+                self.products = [[p] for p in self.paths_px]
+
         # 初始参数
         self.safe_z_cavity = initial_params.get('safe_z_cavity', 22.0)
         self.safe_z_product = initial_params.get('safe_z_product', 50.0)
@@ -77,14 +87,28 @@ class DryRunDialog(QDialog):
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
 
-        # 2. 预览区
-        layout.addWidget(QLabel(f"已识别 {len(self.paths_px)} 条路径。G-code 预览:"))
+        # 2. 产品选择区 (New)
+        prod_group = QGroupBox(f"产品选择 (共 {len(self.products)} 个)")
+        prod_layout = QHBoxLayout()
+        self.chk_products = []
+        for i in range(len(self.products)):
+            chk = QCheckBox(f"产品 {i + 1}")
+            chk.setChecked(True) # 默认全选
+            chk.stateChanged.connect(self.generate_gcode)
+            prod_layout.addWidget(chk)
+            self.chk_products.append(chk)
+        prod_layout.addStretch()
+        prod_group.setLayout(prod_layout)
+        layout.addWidget(prod_group)
+
+        # 3. 预览区
+        layout.addWidget(QLabel("G-code 预览:"))
         self.text_preview = QTextEdit()
         self.text_preview.setReadOnly(True)
         self.text_preview.setStyleSheet("background-color: #1e1e1e; color: #dcdcdc; font-family: Consolas;")
         layout.addWidget(self.text_preview)
 
-        # 3. 按钮区
+        # 4. 按钮区
         btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btn_box.button(QDialogButtonBox.Ok).setText("执行 (Run)")
         btn_box.button(QDialogButtonBox.Cancel).setText("取消")
@@ -108,26 +132,13 @@ class DryRunDialog(QDialog):
         # Start with Product Safe Z
         gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
 
-        # Flatten logic: paths_px can be List[List[path]] (New) or List[path] (Old)
-        # We want to treat the outer list as "Products" and inner list as "Segments"
-        
-        products = []
-        if len(self.paths_px) > 0:
-            if isinstance(self.paths_px[0], list):
-                # New format: List[List[path]]
-                products = self.paths_px
-            else:
-                # Old format: List[path] -> Treat each path as a separate product for safety
-                # Or treat all as one product? Let's treat each as a separate product to be safe.
-                products = [[p] for p in self.paths_px]
+        for prod_idx, prod_segments in enumerate(self.products):
+            # Check if product is selected
+            if not self.chk_products[prod_idx].isChecked():
+                continue
 
-        for prod_idx, prod_segments in enumerate(products):
             gcode_lines.append(f"; --- Product {prod_idx + 1} ---")
             
-            # Before moving to a new product, we should be at safe_z_product (already there from start or end of last loop)
-            # But let's ensure it for safety if we optimize later
-            # gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
-
             for seg_idx, p_px in enumerate(prod_segments):
                 # 1. Convert pixels to mm
                 delta_px = p_px - np.array([self.center_x, self.center_y])

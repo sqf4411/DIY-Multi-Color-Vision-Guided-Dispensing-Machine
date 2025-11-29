@@ -111,7 +111,7 @@ class MachineClient:
             return {"X-Api-Key": self.api_key}
         return {}
 
-    def _post_gcode(self, script: str):
+    def _post_gcode(self, script: str, timeout: int = 20):
         """
         向 /printer/gcode/script 发送一段 G-code 脚本
         """
@@ -122,8 +122,8 @@ class MachineClient:
         url = f"{self.base_url}/printer/gcode/script"
         payload = {"script": script}
         try:
-            # 👇👇👇 修改这里：把 timeout=5 改成 timeout=20 👇👇👇
-            r = self.session.post(url, json=payload, headers=self._headers(), timeout=120)
+            # 使用传入的 timeout
+            r = self.session.post(url, json=payload, headers=self._headers(), timeout=timeout)
             r.raise_for_status()
             return True
         except Exception as e:

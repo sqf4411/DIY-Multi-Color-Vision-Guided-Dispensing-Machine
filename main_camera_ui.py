@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
     QVBoxLayout, QHBoxLayout, QGridLayout,
     QFileDialog, QSlider,
-    QGroupBox, QFormLayout, QDoubleSpinBox, QTextEdit,
+    QGroupBox, QFormLayout, QDoubleSpinBox, QSpinBox, QTextEdit,
     QMessageBox, QLineEdit, QScrollArea,QDialog, QDialogButtonBox
 )
 
@@ -39,6 +39,7 @@ from PyQt5.QtGui import QImage, QPixmap
 
 # 你的检测函数
 from mold_detector import detect_mold_and_cells, reload_golden_templates
+from dry_run_dialog import DryRunDialog, DryRunControlDialog
 
 # ---- 按你的实际路径修改 ----
 sys.path.append(r"H:\MVS\Development\Samples\Python\MvImport")
@@ -122,7 +123,8 @@ class GCodeWorker(QThread):
 
     def run(self):
         # 这行代码很耗时，必须在子线程跑
-        ok = self.machine._post_gcode(self.script)
+        # 设置超长超时 (1小时)，防止空跑过程中超时报错
+        ok = self.machine._post_gcode(self.script, timeout=3600)
         if ok:
             self.finished_signal.emit(True, "执行成功")
         else:
@@ -184,17 +186,25 @@ SETTINGS_FILE = "app_settings.json"
 # ==========================================
 # ================== 主窗口 ==================
 class MainWindow(QWidget):
+    # 定义信号，用于跨线程更新 UI
+    log_signal = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
+        self.setWindowTitle("DIY 视觉点胶机控制台 (No30 还原版)")
+        self.resize(1280, 800)
+
+        # 连接日志信号
+        self.log_signal.connect(self._log_impl)
+
+        # 设置黑色主题样式
         self.setStyleSheet("""
         QWidget {
-            background-color: #111827;        /* 整体深灰背景 */
-            color: #E5E7EB;                   /* 文字偏亮 */
-            font-family: "Microsoft YaHei";
-            font-size: 10pt;
+            background-color: #111827;
+            color: #E5E7EB;
+            font-family: "Segoe UI", "Microsoft YaHei";
+            font-size: 14px;
         }
-
-        /* 分组卡片 */
         QGroupBox {
             font-weight: bold;
             border: 1px solid #374151;
@@ -325,18 +335,18 @@ class MainWindow(QWidget):
         self.gamma_min = 0.5
         self.gamma_max = 2.0
 
+
+
         # ==== 运动 / 坐标相关 ====
         self.machine = MachineClient()
-        self.machine.logger = self.log    # 👉 把 UI 的 log 函数塞给 MachineClient
+        self.machine.logger = self.log
 
-        self.default_base_url = "http://192.168.60.26:7125"  # 按你实际端口改
+        self.default_base_url = "http://192.168.60.26:7125"
 
         # 当前坐标（mm）——这里只作为初始显示，不去访问 Klipper
         self.pos_x = 0.0
         self.pos_y = 0.0
         self.pos_z = 0.0
-        # self.update_xyz_display(self.pos_x, self.pos_y, self.pos_z)
-
 
         # 点动步长（mm）
         self.jog_step_mm = 1.0
@@ -373,7 +383,15 @@ class MainWindow(QWidget):
         self.feedrate_xy = 50.0   # XY 速度
         self.feedrate_z = 20.0    # Z 速度
 
+        # 实时坐标轮询定时器（连接后开启，断开后停止）
+        self.pos_timer = QTimer(self)
+        self.pos_timer.setInterval(500)  # 200ms 刷新一次
+        self.pos_timer.timeout.connect(self.poll_machine_position)
+
+        # ==========================================
+        # 在所有 UI 元素初始化完成后，调用加载设置
         self.init_ui()
+        self.load_app_settings()
         self.load_saved_params()
         self.load_golden_templates()
         # ====== ✅ 新增：启动时自动加载标定矩阵 ======
@@ -389,29 +407,27 @@ class MainWindow(QWidget):
             except Exception as e:
                 print(f"⚠ 加载标定矩阵失败: {e}")
 
-
-
-        # ==== 运动 / 坐标相关 ====
-        self.machine = MachineClient()
-        self.machine.logger = self.log
-
-        self.default_base_url = "http://192.168.60.26:7125"
-
-        # 当前坐标（mm）——这里只作为初始显示，不去访问 Klipper
-        self.pos_x = 0.0
-        self.pos_y = 0.0
-        self.pos_z = 0.0
-
-        # 实时坐标轮询定时器（连接后开启，断开后停止）
-        self.pos_timer = QTimer(self)
-        self.pos_timer.setInterval(500)  # 200ms 刷新一次
-        self.pos_timer.timeout.connect(self.poll_machine_position)
-
-        # ==========================================
-        # 在所有 UI 元素初始化完成后，调用加载设置
-        self.load_app_settings()
-
         # self.init_camera_ui()
+
+    # ================== 日志相关 ==================
+    def _log_impl(self, msg):
+        """实际更新 UI 的槽函数，运行在主线程"""
+        timestamp = datetime.now().strftime("[%H:%M:%S] ")
+        self.log_box.append(f"{timestamp}{msg}")
+        # 自动滚动到底部
+        cursor = self.log_box.textCursor()
+        cursor.movePosition(cursor.End)
+        self.log_box.setTextCursor(cursor)
+
+    def log(self, msg, *args):
+        """
+        统一日志入口。
+        无论谁调用，都发信号给主线程去更新 UI。
+        支持多参数，类似 print
+        """
+        if args:
+            msg = f"{msg} " + " ".join(str(a) for a in args)
+        self.log_signal.emit(str(msg))
 
     # ================== UI ==================
     def init_ui(self):
@@ -1096,6 +1112,214 @@ class MainWindow(QWidget):
         # 清理线程对象
         self.home_worker = None
 
+    # ================== 相机相关 ==================
+    def start_cam(self):
+        if self.cam:
+            return
+
+        deviceList = MV_CC_DEVICE_INFO_LIST()
+        MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, deviceList)
+
+        if deviceList.nDeviceNum == 0:
+            self.log("No camera found")
+            return
+
+        dev_info = ctypes.cast(
+            deviceList.pDeviceInfo[0], ctypes.POINTER(MV_CC_DEVICE_INFO)
+        ).contents
+
+        self.cam = MvCamera()
+        self.cam.MV_CC_CreateHandle(dev_info)
+        self.cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
+
+        self.cam.MV_CC_SetEnumValue("ExposureAuto", 0)
+        self.cam.MV_CC_SetEnumValue("GainAuto", 0)
+        self.cam.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_Mono8)
+
+        try:
+            self.cam.MV_CC_SetBoolValue("GammaEnable", True)
+        except:
+            pass
+
+        self.read_param_ranges()
+        self.read_cam_info()
+        self.apply_saved_params()
+
+        self.cam.MV_CC_StartGrabbing()
+        self.sync_from_camera_to_ui()
+
+        self.thread = CameraThread(self.cam)
+        self.thread.frame_signal.connect(self.update_image)
+        self.thread.start()
+
+        self.btn_start.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+        self.btn_save.setEnabled(True)
+
+    def stop_cam(self):
+        if not self.cam:
+            return
+
+        if self.thread:
+            self.thread.stop()
+            self.thread.wait()
+            self.thread = None
+
+        self.cam.MV_CC_StopGrabbing()
+        self.cam.MV_CC_CloseDevice()
+        self.cam.MV_CC_DestroyHandle()
+        self.cam = None
+
+        self.label.setText("已停止")
+        self.btn_start.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.btn_save.setEnabled(False)
+
+        self.lbl_cam_res.setText("-")
+        self.lbl_cam_fps.setText("-")
+        self.lbl_cam_fmt.setText("-")
+
+    def read_param_ranges(self):
+        # 曝光
+        try:
+            v = MVCC_FLOATVALUE()
+            self.cam.MV_CC_GetFloatValue("ExposureTime", v)
+            self.exp_min = max(self.exp_min, v.fMin)
+            self.exp_max = min(self.exp_max, v.fMax)
+        except:
+            pass
+
+        # 增益
+        try:
+            v = MVCC_FLOATVALUE()
+            self.cam.MV_CC_GetFloatValue("Gain", v)
+            self.gain_min = max(self.gain_min, v.fMin)
+            self.gain_max = min(self.gain_max, v.fMax)
+        except:
+            pass
+
+        # Gamma
+        try:
+            v = MVCC_FLOATVALUE()
+            self.cam.MV_CC_GetFloatValue("Gamma", v)
+            self.gamma_min = max(self.gamma_min, v.fMin)
+            self.gamma_max = min(self.gamma_max, v.fMax)
+        except:
+            pass
+
+        self.spn_exp.setRange(self.exp_min, self.exp_max)
+        self.spn_gain.setRange(self.gain_min, self.gain_max)
+        self.spn_gamma.setRange(self.gamma_min, self.gamma_max)
+
+    def read_cam_info(self):
+        if not self.cam:
+            return
+
+        try:
+            w_val = MVCC_INTVALUE()
+            h_val = MVCC_INTVALUE()
+            self.cam.MV_CC_GetIntValue("Width", w_val)
+            self.cam.MV_CC_GetIntValue("Height", h_val)
+            self.lbl_cam_res.setText(f"{w_val.nCurValue} x {h_val.nCurValue}")
+        except:
+            self.lbl_cam_res.setText("-")
+
+        try:
+            fps_val = MVCC_FLOATVALUE()
+            ret = self.cam.MV_CC_GetFloatValue("AcquisitionFrameRate", fps_val)
+            if ret != 0:
+                ret = self.cam.MV_CC_GetFloatValue("ResultingFrameRate", fps_val)
+            if ret == 0:
+                self.lbl_cam_fps.setText(f"{fps_val.fCurValue:.2f} fps")
+            else:
+                self.lbl_cam_fps.setText("-")
+        except:
+            self.lbl_cam_fps.setText("-")
+
+        try:
+            enum_val = MVCC_ENUMVALUE()
+            ret = self.cam.MV_CC_GetEnumValue("PixelFormat", enum_val)
+            if ret == 0:
+                if enum_val.nCurValue == PixelType_Gvsp_Mono8:
+                    self.lbl_cam_fmt.setText("Mono8")
+                else:
+                    self.lbl_cam_fmt.setText(f"0x{enum_val.nCurValue:X}")
+            else:
+                self.lbl_cam_fmt.setText("-")
+        except:
+            self.lbl_cam_fmt.setText("-")
+
+    def load_saved_params(self):
+        try:
+            if os.path.exists(self.config_path):
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    self.saved_params = json.load(f)
+            else:
+                self.saved_params = {}
+        except Exception as e:
+            self.log("读取参数文件失败：", e)
+            self.saved_params = {}
+
+    def init_calibration(self):
+        """从 calib 目录加载相机标定参数（camera_matrix.npy / dist_coeffs.npy）"""
+        try:
+            calib_dir = os.path.join(os.path.dirname(__file__), "calib")
+            cam_path = os.path.join(calib_dir, "camera_matrix.npy")
+            dist_path = os.path.join(calib_dir, "dist_coeffs.npy")
+
+            if os.path.exists(cam_path) and os.path.exists(dist_path):
+                self.K = np.load(cam_path)
+                self.D = np.load(dist_path)
+                self._calib_loaded = True
+                msg = "✅ 已加载标定参数 camera_matrix.npy / dist_coeffs.npy"
+            else:
+                self._calib_loaded = False
+                msg = "⚠ calib 目录下未找到 camera_matrix.npy 或 dist_coeffs.npy，将使用原始图像"
+
+        except Exception as e:
+            self._calib_loaded = False
+            msg = f"⚠ 加载标定参数失败：{e}"
+
+        if hasattr(self, "log_box"):
+            self.log(msg)
+        else:
+            print(msg)
+
+    # ===== 黄金模板 =====
+    def load_golden_templates(self):
+        try:
+            if os.path.exists("slot_templates.npy"):
+                self.slot_templates = np.load("slot_templates.npy")
+                self.log(f"✅ 黄金模板 slot_templates.npy 加载成功，形状：{self.slot_templates.shape}")
+            else:
+                self.log("⚠ 未找到 slot_templates.npy，暂时无法做黄金对位")
+        except Exception as e:
+            self.log("加载黄金模板失败：", e)
+            self.slot_templates = None
+
+    def apply_saved_params(self):
+        if not self.cam or not self.saved_params:
+            return
+
+        if "ExposureTime" in self.saved_params:
+            self.set_exposure(float(self.saved_params["ExposureTime"]))
+        if "Gain" in self.saved_params:
+            self.set_gain(float(self.saved_params["Gain"]))
+        if "Gamma" in self.saved_params:
+            self.set_gamma(float(self.saved_params["Gamma"]))
+
+    def save_params(self):
+        try:
+            data = {
+                "ExposureTime": float(self.spn_exp.value()),
+                "Gain": float(self.spn_gain.value()),
+                "Gamma": float(self.spn_gamma.value())
+            }
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            self.log("保存参数失败：", e)
+
     # ---- 一键对刀（占位） ----
     def on_tool_probe_clicked(self):
         """
@@ -1221,23 +1445,6 @@ class MainWindow(QWidget):
         hbar.setValue(hbar.value() - dx)
         vbar.setValue(vbar.value() - dy)
     def resizeEvent(self, event):
-        super().resizeEvent(event)
-        # 下次渲染时重新计算 base_scale
-        self.base_scale = None
-        self.render_current_frame()
-
-    # ================== 日志 ==================
-    def log(self, *args):
-        text = " ".join(str(a) for a in args)
-        print(text)
-        self.log_box.append(text)
-        sb = self.log_box.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-    # ================== 相机相关 ==================
-    def start_cam(self):
-        if self.cam:
-            return
 
         deviceList = MV_CC_DEVICE_INFO_LIST()
         MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, deviceList)
@@ -2096,8 +2303,8 @@ class MainWindow(QWidget):
         按钮：空跑 (流程升级版)
         1. 识别并计算路径。
         2. 屏幕绘制绿线（视觉检查）。
-        3. 弹出 G-code 预览窗口（数据检查）。
-        4. 用户确认后，后台发送指令，跑完自动回到 XYZ 起点。
+        3. 弹出参数设置窗口 (DryRunDialog)。
+        4. 用户确认后，后台发送指令。
         """
         # 1. 基础检查
         if self.cam2mach_matrix is None:
@@ -2125,109 +2332,69 @@ class MainWindow(QWidget):
             # --- B. 视觉反馈：立即画出绿线 ---
             self.dry_run_paths_to_draw = paths_px
             self.show_crosshair = True
-            self.render_current_frame()  # 刷新界面，让你看到绿线
+            self.render_current_frame()
 
-            # --- C. 坐标计算 & G-code 生成 ---
-            # 1. 获取当前起点 (包括 Z)
-            origin_x, origin_y, origin_z = self.machine.get_position()
-
+            # --- C. 弹出参数对话框 ---
             h_img, w_img = img_dry.shape[:2]
             center_x, center_y = w_img / 2, h_img / 2
-            m = self.cam2mach_matrix
+            
+            # 准备初始参数
+            initial_params = {
+                'safe_z': float(self.safe_z),
+                'work_z': float(self.work_z),
+                'speed_xy': int(self.feedrate_xy),
+                'speed_z': int(self.feedrate_z)
+            }
+            
+            # 获取当前机器坐标作为原点
+            origin_pos = self.machine.get_position()
+            nozzle_offset = (self.nozzle_offset_x, self.nozzle_offset_y)
 
-            # 2. 参数设置
-            # 2. 参数设置（从 UI 读取）
-            SAFE_Z = float(self.safe_z)   # 移动时的安全高度
-            WORK_Z = float(self.work_z)   # 模拟工作的下刀 / 点胶高度
-            SPEED_XY = int(self.feedrate_xy)
-            SPEED_Z = int(self.feedrate_z)
+            dialog = DryRunDialog(
+                self, 
+                paths_px, 
+                self.cam2mach_matrix, 
+                origin_pos, 
+                nozzle_offset, 
+                initial_params,
+                (center_x, center_y)
+            )
 
-
-            gcode_lines = []
-            gcode_lines.append("G90")
-            gcode_lines.append(f"G0 Z{SAFE_Z} F{SPEED_Z}")  # 先抬刀
-
-            # 3. 遍历路径生成指令
-            for i, p_px in enumerate(paths_px):
-                # 像素转毫米 (相对偏移法)
-                delta_px = p_px - np.array([center_x, center_y])
-                delta_mm_x = delta_px[:, 0] * m[0, 0] + delta_px[:, 1] * m[0, 1]
-                delta_mm_y = delta_px[:, 0] * m[1, 0] + delta_px[:, 1] * m[1, 1]
-
-                abs_x = origin_x + delta_mm_x
-                abs_y = origin_y + delta_mm_y
-                path_machine = np.column_stack((abs_x, abs_y))
-
-                if len(path_machine) == 0: continue
-
-                # --- 生成该段路径的 G-code ---
-                gcode_lines.append(f"; --- Path {i + 1} ---")
-
-                # 移动到起点
-                start_x, start_y = path_machine[0]
-                # 叠加针头偏移 (如果用相机中心看，确保这里 nozzle_offset 是 0)
-                start_x += self.nozzle_offset_x
-                start_y += self.nozzle_offset_y
-
-                gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{SPEED_XY}")
-                gcode_lines.append(f"G0 Z{WORK_Z} F{SPEED_Z}")  # 下刀
-
-                # 走路径
-                for pt in path_machine[1:]:
-                    pt_x = pt[0] + self.nozzle_offset_x
-                    pt_y = pt[1] + self.nozzle_offset_y
-                    gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{SPEED_XY}")
-
-                gcode_lines.append(f"G0 Z{SAFE_Z} F{SPEED_Z}")  # 抬刀
-
-            # --- D. 回到起点 (XYZ 都回) ---
-            gcode_lines.append(f"; --- Return to Start ---")
-            gcode_lines.append(f"G0 X{origin_x:.3f} Y{origin_y:.3f} F{SPEED_XY}")
-            gcode_lines.append(f"G0 Z{origin_z:.3f} F{SPEED_Z}")  # 最后降回原来的高度
-
-            full_script = "\n".join(gcode_lines)
-
-            # --- E. 弹出确认窗口 (人工审查) ---
-            dialog = QDialog(self)
-            dialog.setWindowTitle("确认空跑 G-code")
-            dialog.resize(600, 400)
-
-            layout = QVBoxLayout()
-
-            lbl_info = QLabel(f"已识别 {len(paths_px)} 条路径。\n请检查下方生成的 G-code，确认无误后执行。")
-            layout.addWidget(lbl_info)
-
-            text_edit = QTextEdit()
-            text_edit.setPlainText(full_script)
-            layout.addWidget(text_edit)
-
-            btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-            btn_box.button(QDialogButtonBox.Ok).setText("执行 (Run)")
-            btn_box.button(QDialogButtonBox.Cancel).setText("取消")
-            btn_box.accepted.connect(dialog.accept)
-            btn_box.rejected.connect(dialog.reject)
-            layout.addWidget(btn_box)
-
-            dialog.setLayout(layout)
-
-            # 等待用户点击
             if dialog.exec_() == QDialog.Accepted:
-                # 用户点了确定，才发送
-                self.log("🚀 用户确认，正在发送指令...")
+                # --- D. 执行 ---
+                full_script = dialog.get_gcode()
+                self.log("🚀 开始执行空跑...")
+                
+                # ✅ 使用后台线程发送指令，防止卡死相机
                 self.dry_run_worker = GCodeWorker(self.machine, full_script)
                 self.dry_run_worker.finished_signal.connect(self.on_dry_run_finished)
                 self.dry_run_worker.start()
+                
+                # 可选：更新界面上的默认值，方便下次使用
+                self.spn_safe_z.setValue(dialog.safe_z)
+                self.spn_work_z.setValue(dialog.work_z)
+                self.feedrate_xy = dialog.speed_xy
+                self.feedrate_z = dialog.speed_z
+
+                # 弹出控制面板 (阻塞主界面，直到空跑结束)
+                self.dry_run_ctrl_dlg = DryRunControlDialog(self, self.machine)
+                self.dry_run_ctrl_dlg.exec_()
             else:
                 self.log("🚫 用户取消空跑")
                 self.dry_run_paths_to_draw = []  # 清除绿线
                 self.render_current_frame()
 
         except Exception as e:
-            self.log(f"❌ 错误: {e}")
-            self.dry_run_paths_to_draw = []
+            self.log(f"❌ 空跑准备出错: {e}")
+            import traceback
+            traceback.print_exc()
 
     def on_dry_run_finished(self, success, msg):
         """空跑线程结束后的回调"""
+        # 关闭控制面板
+        if hasattr(self, 'dry_run_ctrl_dlg') and self.dry_run_ctrl_dlg.isVisible():
+            self.dry_run_ctrl_dlg.accept()
+
         # 清除屏幕上的绿线
         self.dry_run_paths_to_draw = []
         self.render_current_frame()
@@ -2238,10 +2405,8 @@ class MainWindow(QWidget):
         else:
             QMessageBox.warning(self, "失败", f"❌ 执行失败: {msg}")
             self.log("❌ 空跑异常中止。")
+            return
 
-        # 重新同步一次坐标
-        mx, my, mz = self.machine.get_position()
-        self.update_xyz_display(mx, my, mz)
 
     def on_real_run(self):
         """

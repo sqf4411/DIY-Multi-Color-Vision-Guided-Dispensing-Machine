@@ -136,19 +136,19 @@ class DryRunDialog(QDialog):
     def get_gcode(self):
         return self.text_preview.toPlainText()
 
-from PyQt5.QtWidgets import QPushButton
+from PyQt5.QtWidgets import QPushButton, QProgressBar
 
 class DryRunControlDialog(QDialog):
-    def __init__(self, parent, machine_client):
+    def __init__(self, parent, worker):
         super().__init__(parent)
-        self.machine = machine_client
-        self.setWindowTitle("空跑控制")
-        self.resize(300, 150)
-        # 设置为非模态，或者在主窗口中以非阻塞方式显示
-        # 但如果是 exec_() 就会阻塞。
-        # 我们希望它阻塞主窗口的操作，但不阻塞后台线程。
-        # 所以用 exec_() 是可以的，因为 GCodeWorker 是后台线程。
+        self.worker = worker
+        self.setWindowTitle("空跑控制 (逐行模式)")
+        self.resize(400, 180)
         self.init_ui()
+        
+        # 连接 worker 信号
+        self.worker.progress_signal.connect(self.update_progress)
+        self.worker.log_signal.connect(self.update_status)
 
     def init_ui(self):
         layout = QVBoxLayout()
@@ -156,6 +156,12 @@ class DryRunControlDialog(QDialog):
         self.lbl_status = QLabel("正在执行空跑...")
         self.lbl_status.setStyleSheet("font-size: 14px; font-weight: bold; color: #10B981;")
         layout.addWidget(self.lbl_status)
+
+        # 进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
 
         btn_layout = QHBoxLayout()
         
@@ -165,6 +171,7 @@ class DryRunControlDialog(QDialog):
 
         self.btn_resume = QPushButton("继续 (Resume)")
         self.btn_resume.clicked.connect(self.on_resume)
+        self.btn_resume.setEnabled(False) # 初始禁用
         btn_layout.addWidget(self.btn_resume)
 
         self.btn_stop = QPushButton("停止 (Stop)")
@@ -176,44 +183,33 @@ class DryRunControlDialog(QDialog):
         self.setLayout(layout)
 
     def on_pause(self):
-        self.lbl_status.setText("正在发送暂停指令...")
+        self.worker.pause()
+        self.btn_pause.setEnabled(False)
+        self.btn_resume.setEnabled(True)
+        self.lbl_status.setText("已暂停 (等待当前移动完成)")
         self.lbl_status.setStyleSheet("font-size: 14px; font-weight: bold; color: #F59E0B;")
-        
-        def _target():
-            # 使用短超时 (5秒)，防止界面卡死
-            self.machine._post_gcode("PAUSE", timeout=5)
-            # 注意：子线程不能直接更新 UI，这里偷懒了，因为 PyQt5 有时允许简单的 setText
-            # 严谨做法是用信号，但为了简单起见，这里假设没问题，或者用 QTimer 轮询
-            # 更好的做法是定义一个 Worker，但这里代码量少，直接用 lambda
-        
-        import threading
-        t = threading.Thread(target=_target)
-        t.start()
-        
-        # 乐观更新 UI
-        self.lbl_status.setText("已发送暂停指令 (PAUSE)")
 
     def on_resume(self):
-        self.lbl_status.setText("正在发送继续指令...")
-        
-        def _target():
-            self.machine._post_gcode("RESUME", timeout=5)
-            
-        import threading
-        t = threading.Thread(target=_target)
-        t.start()
-        
-        self.lbl_status.setText("已发送继续指令 (RESUME)")
+        self.worker.resume()
+        self.btn_pause.setEnabled(True)
+        self.btn_resume.setEnabled(False)
+        self.lbl_status.setText("正在执行空跑...")
         self.lbl_status.setStyleSheet("font-size: 14px; font-weight: bold; color: #10B981;")
 
     def on_stop(self):
+        self.worker.stop()
         self.lbl_status.setText("正在停止...")
         self.lbl_status.setStyleSheet("font-size: 14px; font-weight: bold; color: #EF4444;")
+        self.btn_pause.setEnabled(False)
+        self.btn_resume.setEnabled(False)
+        self.btn_stop.setEnabled(False)
+
+    def update_progress(self, current, total):
+        self.progress_bar.setMaximum(total)
+        self.progress_bar.setValue(current)
         
-        def _target():
-            self.machine._post_gcode("CANCEL_PRINT", timeout=5)
-            
-        import threading
-        t = threading.Thread(target=_target)
-        t.start()
+    def update_status(self, msg):
+        # 可以在这里显示来自 worker 的日志
+        # self.lbl_status.setText(msg) 
+        pass
 

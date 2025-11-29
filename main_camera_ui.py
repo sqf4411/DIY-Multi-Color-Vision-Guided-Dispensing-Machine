@@ -110,25 +110,70 @@ class HomeWorker(QThread):
         self.finished_signal.emit(x, y, z)
 
 # ================== 线程：后台发送 G-code ==================
-class GCodeWorker(QThread):
+# ================== 线程：逐行发送 G-code (支持暂停) ==================
+class GCodeLineWorker(QThread):
     """
-    专门用于后台发送 G-code 脚本，防止卡死 UI 和相机
+    逐行发送 G-code，支持暂停/继续/停止
     """
-    finished_signal = pyqtSignal(bool, str)
+    progress_signal = pyqtSignal(int, int)  # 当前行, 总行数
+    finished_signal = pyqtSignal(bool, str) # 成功/失败, 消息
+    log_signal = pyqtSignal(str)            # 日志消息
 
-    def __init__(self, machine_client, script):
+    def __init__(self, machine_client, script_lines):
         super().__init__()
         self.machine = machine_client
-        self.script = script
+        self.lines = script_lines
+        self._is_paused = False
+        self._is_stopped = False
 
     def run(self):
-        # 这行代码很耗时，必须在子线程跑
-        # 设置超长超时 (1小时)，防止空跑过程中超时报错
-        ok = self.machine._post_gcode(self.script, timeout=3600)
-        if ok:
-            self.finished_signal.emit(True, "执行成功")
-        else:
-            self.finished_signal.emit(False, "发送失败或超时")
+        total = len(self.lines)
+        self.log_signal.emit(f"开始执行，共 {total} 行指令")
+        
+        for i, line in enumerate(self.lines):
+            # 1. 检查停止
+            if self._is_stopped:
+                self.finished_signal.emit(False, "用户已停止")
+                return
+
+            # 2. 检查暂停
+            while self._is_paused:
+                if self._is_stopped:
+                    self.finished_signal.emit(False, "用户已停止")
+                    return
+                self.msleep(100) # 等待 100ms
+
+            # 3. 发送指令
+            line = line.strip()
+            if not line or line.startswith(';'):
+                continue
+
+            # 发送并等待 ok
+            # 对于移动指令，Klipper 通常会立即返回 ok (放入缓冲区)，除非缓冲区满了
+            # 对于 G4 (Dwell) 或 M400 (Finish Moves)，会阻塞直到完成
+            # 我们设置一个较长的超时，防止长指令超时
+            ok = self.machine._post_gcode(line, timeout=300)
+            
+            if not ok:
+                self.finished_signal.emit(False, f"指令发送失败: {line}")
+                return
+
+            # 4. 发送进度
+            self.progress_signal.emit(i + 1, total)
+        
+        self.finished_signal.emit(True, "执行完成")
+
+    def pause(self):
+        self._is_paused = True
+        self.log_signal.emit("已暂停发送下一行指令")
+
+    def resume(self):
+        self._is_paused = False
+        self.log_signal.emit("恢复发送指令")
+
+    def stop(self):
+        self._is_stopped = True
+        self.log_signal.emit("正在停止...")
 ######## 滚轮
 class ImageLabel(QLabel):
     """支持滚轮缩放 + 左键拖拽的 QLabel"""
@@ -278,6 +323,7 @@ class MainWindow(QWidget):
         """)
 
         self.cam = None
+        self.config_path = "params.json"  # ✅ 新增：定义参数文件路径
         self.thread = None
         self.last_frame = None
         self.freeze_display = False  # 是否冻结画面
@@ -2363,11 +2409,15 @@ class MainWindow(QWidget):
             if dialog.exec_() == QDialog.Accepted:
                 # --- D. 执行 ---
                 full_script = dialog.get_gcode()
-                self.log("🚀 开始执行空跑...")
+                self.log("🚀 开始执行空跑 (逐行模式)...")
                 
-                # ✅ 使用后台线程发送指令，防止卡死相机
-                self.dry_run_worker = GCodeWorker(self.machine, full_script)
+                # 1. 拆分指令
+                lines = full_script.split('\n')
+                
+                # 2. 创建逐行 Worker
+                self.dry_run_worker = GCodeLineWorker(self.machine, lines)
                 self.dry_run_worker.finished_signal.connect(self.on_dry_run_finished)
+                self.dry_run_worker.log_signal.connect(self.log) # 连接日志
                 self.dry_run_worker.start()
                 
                 # 可选：更新界面上的默认值，方便下次使用
@@ -2376,8 +2426,8 @@ class MainWindow(QWidget):
                 self.feedrate_xy = dialog.speed_xy
                 self.feedrate_z = dialog.speed_z
 
-                # 弹出控制面板 (阻塞主界面，直到空跑结束)
-                self.dry_run_ctrl_dlg = DryRunControlDialog(self, self.machine)
+                # 3. 弹出控制面板 (传入 worker)
+                self.dry_run_ctrl_dlg = DryRunControlDialog(self, self.dry_run_worker)
                 self.dry_run_ctrl_dlg.exec_()
             else:
                 self.log("🚫 用户取消空跑")

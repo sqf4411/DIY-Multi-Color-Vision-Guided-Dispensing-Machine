@@ -1685,6 +1685,7 @@ class MainWindow(QWidget):
             ok = cv2.imwrite(save_path, frame_to_save)
             if ok:
                 self.log(f"📸 已保存图片：{save_path}")
+                self.latest_capture_path = save_path  # ✅ 记录路径
             else:
                 self.log("❌ 保存图片失败（cv2.imwrite 返回 False）")
         else:
@@ -1718,6 +1719,22 @@ class MainWindow(QWidget):
     def on_golden_teach(self):
         """点击‘黄金示教’，使用本地 mold2.png 文件进行示教"""
         self.freeze_display = True
+
+        # ====== ✅ 新增：询问是否使用刚保存的图片 ======
+        if self.latest_capture_path and os.path.exists(self.latest_capture_path):
+            filename = os.path.basename(self.latest_capture_path)
+            reply = QMessageBox.question(
+                self, "使用新图片？",
+                f"检测到刚刚保存了图片：\n{filename}\n\n是否将其作为新的模板 (mold2.png) 进行示教？",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                try:
+                    shutil.copy(self.latest_capture_path, "mold2.png")
+                    self.log(f"✅ 已将 {filename} 设置为新模板 (mold2.png)")
+                except Exception as e:
+                    self.log(f"❌ 复制图片失败: {e}")
+        # ===========================================
 
         if not os.path.exists("mold2.png"):
             self.log("❌ 未找到 mold2.png，请先准备好这张图片")

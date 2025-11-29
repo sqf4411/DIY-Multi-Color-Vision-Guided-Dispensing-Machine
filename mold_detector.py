@@ -114,10 +114,22 @@ def _load_golden_and_paths():
     # --- 2. 加载路径文件 ---
     if _PATH_POLY is None and os.path.exists("disp_poly_cell0.npy"):
         try:
-            arr = np.load("disp_poly_cell0.npy").astype(np.float32)
-            _PATH_POLY = arr if arr.size > 0 else None
+            # ✅ 允许 pickle 以加载对象数组 (list of arrays)
+            arr = np.load("disp_poly_cell0.npy", allow_pickle=True)
+            
+            if arr.dtype == object:
+                # 新格式：多段线列表
+                _PATH_POLY = [seg.astype(np.float32) for seg in arr]
+            else:
+                # 旧格式：单一大数组 -> 转为单元素列表
+                arr = arr.astype(np.float32)
+                if arr.size > 0:
+                    _PATH_POLY = [arr]
+                else:
+                    _PATH_POLY = None
         except:
             pass
+
     if _PATH_DOTS is None and os.path.exists("disp_dots_cell0.npy"):
         try:
             arr = np.load("disp_dots_cell0.npy").astype(np.float32)
@@ -303,23 +315,22 @@ def detect_mold_and_cells(gray: np.ndarray):
                 box0 = _order_points(_TEMPLATES[0])
                 c0_x = (min(box0[:, 0]) + max(box0[:, 0])) / 2
                 c0_y = (min(box0[:, 1]) + max(box0[:, 1])) / 2
-
-                manual_offset_x = bx - c0_x
-                manual_offset_y = by - c0_y
-                offset = np.array([manual_offset_x, manual_offset_y], dtype=np.float32)
+                offset = np.array([bx - c0_x, by - c0_y], dtype=np.float32)
 
             # --- 4. 绘制路径 ---
             # 将 0 号的路径加上偏移量，再投射回屏幕
 
             # 绘制折线 (粗细 5，绿色)
             if _PATH_POLY is not None:
-                pts_gold = _PATH_POLY + offset
-                pts_w = pts_gold.reshape(-1, 1, 2)
-                res_o = cv2.perspectiveTransform(pts_w, Minv_cur)
-                if res_o is not None:
-                    pts = res_o.reshape(-1, 2).astype(np.int32)
-                    for i in range(len(pts) - 1):
-                        cv2.line(color_img, tuple(pts[i]), tuple(pts[i + 1]), (0, 255, 0), 5, cv2.LINE_AA)
+                # ✅ 遍历每一段折线
+                for seg in _PATH_POLY:
+                    pts_gold = seg + offset
+                    pts_w = pts_gold.reshape(-1, 1, 2)
+                    res_o = cv2.perspectiveTransform(pts_w, Minv_cur)
+                    if res_o is not None:
+                        pts = res_o.reshape(-1, 2).astype(np.int32)
+                        for i in range(len(pts) - 1):
+                            cv2.line(color_img, tuple(pts[i]), tuple(pts[i + 1]), (0, 255, 0), 5, cv2.LINE_AA)
 
             # 绘制点 (半径 10，绿色)
             if _PATH_DOTS is not None:
@@ -411,13 +422,14 @@ def get_calculated_paths(gray: np.ndarray):
                 offset = np.array([bx - c0_x, by - c0_y], dtype=np.float32)
 
             # --- B. 生成像素坐标路径 ---
-            # 黄金坐标 = 原始路径 + 偏移
-            pts_gold = _PATH_POLY + offset
-            # 投射回当前画面的像素坐标
-            pts_w = pts_gold.reshape(-1, 1, 2)
-            res_o = cv2.perspectiveTransform(pts_w, Minv_cur)  # (N, 1, 2)
+            # ✅ 遍历每一段折线
+            for seg in _PATH_POLY:
+                pts_gold = seg + offset
+                # 投射回当前画面的像素坐标
+                pts_w = pts_gold.reshape(-1, 1, 2)
+                res_o = cv2.perspectiveTransform(pts_w, Minv_cur)  # (N, 1, 2)
 
-            if res_o is not None:
-                all_paths_pixels.append(res_o.reshape(-1, 2))  # (N, 2)
+                if res_o is not None:
+                    all_paths_pixels.append(res_o.reshape(-1, 2))  # (N, 2)
 
     return all_paths_pixels

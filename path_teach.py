@@ -273,11 +273,15 @@ def run_path_teach(cell_index: int = 0,
 
             # 2) 生成黄金坐标系下的显示路径
             try:
+                poly_disp_list = []
                 if polylines:
-                    merged = np.concatenate(polylines, axis=0)
-                    poly_disp = local_to_golden(merged)
-                else:
-                    poly_disp = np.zeros((0, 2), dtype=np.float32)
+                    # 保持多段线结构，不要合并
+                    for seg in polylines:
+                        seg_gold = local_to_golden(seg)
+                        poly_disp_list.append(seg_gold)
+                
+                # 保存为对象数组 (允许不规则形状)
+                np.save(f"disp_poly_cell{cell_index}.npy", np.array(poly_disp_list, dtype=object))
 
                 if dots:
                     dots_arr = np.array(dots, dtype=np.float32)
@@ -285,7 +289,6 @@ def run_path_teach(cell_index: int = 0,
                 else:
                     dots_disp = np.zeros((0, 2), dtype=np.float32)
 
-                np.save(f"disp_poly_cell{cell_index}.npy", poly_disp)
                 np.save(f"disp_dots_cell{cell_index}.npy", dots_disp)
                 print(f"✅ 已保存显示路径 disp_poly_cell{cell_index}.npy / disp_dots_cell{cell_index}.npy")
             except Exception as e:

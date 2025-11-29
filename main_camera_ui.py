@@ -1,30 +1,26 @@
 import os
 import sys
+import shutil
+import ctypes
+from datetime import datetime
+import json
+import time
+import cv2
+import numpy as np
+from machine_client import MachineClient
 
 def add_mvs_dll_path():
     dll_dir = os.getenv("MVS_DLL_DIR")
     if dll_dir and os.path.isdir(dll_dir):
-        # Windows 10+ 推荐用这个
         if sys.platform == "win32":
             os.add_dll_directory(dll_dir)
         else:
-            # 理论上不会走到这里，预防一下
             os.environ["PATH"] = dll_dir + os.pathsep + os.environ.get("PATH", "")
         print(f"[INFO] MVS DLL directory added: {dll_dir}")
     else:
         print("[WARN] 环境变量 MVS_DLL_DIR 未设置或路径不存在，请检查。")
 
 add_mvs_dll_path()
-
-import sys
-import os
-import ctypes
-from datetime import datetime
-from machine_client import MachineClient
-
-import numpy as np
-import cv2
-import json
 
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 
@@ -1720,21 +1716,58 @@ class MainWindow(QWidget):
         """点击‘黄金示教’，使用本地 mold2.png 文件进行示教"""
         self.freeze_display = True
 
-        # ====== ✅ 新增：询问是否使用刚保存的图片 ======
-        if self.latest_capture_path and os.path.exists(self.latest_capture_path):
-            filename = os.path.basename(self.latest_capture_path)
-            reply = QMessageBox.question(
-                self, "使用新图片？",
-                f"检测到刚刚保存了图片：\n{filename}\n\n是否将其作为新的模板 (mold2.png) 进行示教？",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
-            )
-            if reply == QMessageBox.Yes:
+        # ====== ✅ 3按钮选择逻辑 ======
+        candidate_path = self.latest_capture_path
+        if not candidate_path:
+            if os.path.exists("captures"):
+                files = [os.path.join("captures", f) for f in os.listdir("captures") if f.lower().endswith(('.png', '.jpg', '.bmp'))]
+                if files:
+                    files.sort(key=lambda x: os.path.getmtime(x))
+                    candidate_path = files[-1]
+
+        if candidate_path and os.path.exists(candidate_path):
+            filename = os.path.basename(candidate_path)
+            mtime = datetime.fromtimestamp(os.path.getmtime(candidate_path)).strftime('%H:%M:%S')
+
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("选择模板源")
+            msg_box.setText(f"检测到最新图片：{filename} ({mtime})\n请选择要使用的模板：")
+            
+            btn_use_latest = msg_box.addButton("使用最新图片", QMessageBox.AcceptRole)
+            btn_use_mold2 = msg_box.addButton("使用现有 mold2", QMessageBox.ActionRole)
+            btn_cancel = msg_box.addButton("取消", QMessageBox.RejectRole)
+            
+            msg_box.exec_()
+            
+            if msg_box.clickedButton() == btn_use_latest:
                 try:
-                    shutil.copy(self.latest_capture_path, "mold2.png")
-                    self.log(f"✅ 已将 {filename} 设置为新模板 (mold2.png)")
+                    # 1. 备份旧的
+                    if os.path.exists("mold2.png"):
+                        shutil.copy("mold2.png", "mold2.bak")
+                        self.log("ℹ️ 已备份原 mold2.png 为 mold2.bak")
+
+                    # 2. 读取最新图片并旋转 180 度
+                    img_latest = cv2.imread(candidate_path)
+                    if img_latest is not None:
+                        # 旋转 180 度 (flip -1)
+                        img_rotated = cv2.flip(img_latest, -1)
+                        cv2.imwrite("mold2.png", img_rotated)
+                        self.log(f"✅ 已旋转180度并更新 mold2.png 为: {filename}")
+                    else:
+                        self.log("❌ 读取最新图片失败")
+                        self.freeze_display = False
+                        return
                 except Exception as e:
-                    self.log(f"❌ 复制图片失败: {e}")
-        # ===========================================
+                    self.log(f"❌ 处理图片失败: {e}")
+                    self.freeze_display = False
+                    return
+            elif msg_box.clickedButton() == btn_use_mold2:
+                self.log("ℹ️ 继续使用现有 mold2.png")
+            else:
+                self.log("🚫 操作已取消")
+                self.freeze_display = False
+                return
+        # ============================
 
         if not os.path.exists("mold2.png"):
             self.log("❌ 未找到 mold2.png，请先准备好这张图片")
@@ -1756,6 +1789,56 @@ class MainWindow(QWidget):
     def on_edit_path(self):
         """点击按钮：在黄金图片中编辑某个小框的点胶路径"""
         self.log("🧵 打开点胶路径示教窗口（默认小框 index=0）")
+
+        # ====== ✅ 3按钮选择逻辑 ======
+        candidate_path = self.latest_capture_path
+        if not candidate_path:
+            if os.path.exists("captures"):
+                files = [os.path.join("captures", f) for f in os.listdir("captures") if f.lower().endswith(('.png', '.jpg', '.bmp'))]
+                if files:
+                    files.sort(key=lambda x: os.path.getmtime(x))
+                    candidate_path = files[-1]
+
+        if candidate_path and os.path.exists(candidate_path):
+            filename = os.path.basename(candidate_path)
+            mtime = datetime.fromtimestamp(os.path.getmtime(candidate_path)).strftime('%H:%M:%S')
+
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("选择模板源")
+            msg_box.setText(f"检测到最新图片：{filename} ({mtime})\n请选择要使用的模板：")
+            
+            btn_use_latest = msg_box.addButton("使用最新图片", QMessageBox.AcceptRole)
+            btn_use_mold2 = msg_box.addButton("使用现有 mold2", QMessageBox.ActionRole)
+            btn_cancel = msg_box.addButton("取消", QMessageBox.RejectRole)
+            
+            msg_box.exec_()
+            
+            if msg_box.clickedButton() == btn_use_latest:
+                try:
+                    # 1. 备份旧的
+                    if os.path.exists("mold2.png"):
+                        shutil.copy("mold2.png", "mold2.bak")
+                        self.log("ℹ️ 已备份原 mold2.png 为 mold2.bak")
+
+                    # 2. 读取最新图片并旋转 180 度
+                    img_latest = cv2.imread(candidate_path)
+                    if img_latest is not None:
+                        # 旋转 180 度 (flip -1)
+                        img_rotated = cv2.flip(img_latest, -1)
+                        cv2.imwrite("mold2.png", img_rotated)
+                        self.log(f"✅ 已旋转180度并更新 mold2.png 为: {filename}")
+                    else:
+                        self.log("❌ 读取最新图片失败")
+                        return
+                except Exception as e:
+                    self.log(f"❌ 处理图片失败: {e}")
+                    return
+            elif msg_box.clickedButton() == btn_use_mold2:
+                self.log("ℹ️ 继续使用现有 mold2.png")
+            else:
+                self.log("🚫 操作已取消")
+                return
+        # ============================
         try:
             from path_teach import run_path_teach
             ok = run_path_teach(cell_index=0, img_path="mold2.png")

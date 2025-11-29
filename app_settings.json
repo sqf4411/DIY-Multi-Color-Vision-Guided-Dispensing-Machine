@@ -2,7 +2,10 @@
     "feedrate_xy": 1818.0,
     "feedrate_z": 650.0,
     "accel": 263.0,
-    "safe_z_cavity": 222.0,
-    "safe_z_product": 230.0,
-    "work_z": 221.0
+    "safe_z_cavity": 222.0000000000001,
+    "safe_z_product": 230.0000000000001,
+    "work_z": 221.0000000000001,
+    "z_base": 116.10000000000022,
+    "tool_setter_x": 303.9984375,
+    "tool_setter_y": 79.49843750000002
 }

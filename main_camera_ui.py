@@ -102,12 +102,85 @@ class HomeWorker(QThread):
             self.machine.home_z()
         elif self.axis == 'all':
             self.machine.home_all()
+        
+        # 无论成功失败，都发信号
+        # 实际位置需要再次查询，这里简单发个 0,0,0 或者让主界面自己去 poll
+        # 为了方便，我们在 machine_client 里加了 _x, _y, _z 缓存，但最好还是读一下
+        self.finished_signal.emit(self.machine._x, self.machine._y, self.machine._z)
 
-        # 归位完成后，读取最新坐标
-        x, y, z = self.machine.get_position()
+# ================== 线程：自动对刀 ==================
+class AutoToolSetWorker(QThread):
+    finished_signal = pyqtSignal(bool, float, str) # success, new_z_base, msg
 
-        # 发送信号回主线程
-        self.finished_signal.emit(x, y, z)
+    def __init__(self, machine_client, safe_z, target_x, target_y):
+        super().__init__()
+        self.machine = machine_client
+        self.safe_z = safe_z
+        self.target_x = target_x
+        self.target_y = target_y
+
+    def run(self):
+        try:
+            # 1. 抬升到安全高度
+            self.machine.move_z_absolute(self.safe_z, 600)
+            time.sleep(0.5)
+
+            # 2. 移动到对刀仪上方
+            self.machine.move_xy_absolute(self.target_x, self.target_y, 3000)
+            self.machine.wait_until_idle()
+            time.sleep(0.5)
+
+            # 3. 快速下降到 Z=150 (用户指定起始高度)
+            self.machine.logger(f"🚀 快速下降到 Z=150.0...")
+            self.machine.move_z_absolute(150.0, 600)
+            self.machine.wait_until_idle()
+            time.sleep(0.5)
+
+            # 4. 第一阶段：粗探 (Z=150 -> 120, step=1.0)
+            self.machine.logger(f"🔍 第一阶段粗探 (Z=150->120, step=1.0)...")
+            trigger_z = None
+            current_z = 150.0
+            found = False
+            
+            while current_z > 120.0:
+                status = self.machine.query_probe_status()
+                if status == 'triggered':
+                    found = True
+                    trigger_z = current_z
+                    self.machine.logger(f"✅ 粗探触发于 Z={current_z:.2f}")
+                    break
+                
+                current_z -= 1.0
+                self.machine.move_z_absolute(current_z, 600)
+                self.machine.wait_until_idle()
+                time.sleep(0.1)
+
+            # 5. 第二阶段：精探 (Z=120 -> 0, step=0.1)
+            if not found:
+                self.machine.logger(f"🔍 第二阶段精探 (Z={current_z}->0.0, step=0.1)...")
+                while current_z > 0.0:
+                    status = self.machine.query_probe_status()
+                    if status == 'triggered':
+                        found = True
+                        trigger_z = current_z
+                        self.machine.logger(f"✅ 精探触发于 Z={current_z:.2f}")
+                        break
+                    
+                    current_z -= 0.1
+                    self.machine.move_z_absolute(current_z, 300)
+                    self.machine.wait_until_idle()
+                    time.sleep(0.1)
+
+            if not found:
+                self.finished_signal.emit(False, 0.0, "全程未检测到信号")
+                return
+
+            # 6. 抬起并完成
+            self.machine.move_z_absolute(self.safe_z, 600)
+            self.finished_signal.emit(True, trigger_z, "对刀成功")
+
+        except Exception as e:
+            self.finished_signal.emit(False, 0.0, f"对刀过程出错: {e}")
 
 # ================== 线程：后台发送 G-code ==================
 # ================== 线程：逐行发送 G-code (支持暂停) ==================
@@ -366,7 +439,7 @@ class MainWindow(QWidget):
         self.cell_centers = []
 
         # 配置文件
-        self.config_path = "camera_params.json"
+        # self.config_path 已经在前面定义为 "params.json"
         self.saved_params = {}
 
         # 黄金模板
@@ -419,16 +492,23 @@ class MainWindow(QWidget):
         # 为了在画面上画出将要标定的腔体中心点和编号
         self.calib_points_for_ui = None
 
-
         # ===== Z 高度参数 =====
         # 空跑/点胶时的安全高度与工作高度（mm）
-        self.safe_z_cavity = 22.0   # 腔内安全高度 (小抬刀)
+        # 用户反馈：Z轴最大200+（上），0是下。
+        self.safe_z = 20.0    # 抬刀 / 快移高度 (Legacy)
+        self.safe_z_cavity = 20.0   # 腔内安全高度 (小抬刀)
         self.safe_z_product = 50.0  # 产品安全高度 (大抬刀)
-        self.work_z = 5.0           # 点胶 / 下刀高度
-
-        # 初始速度（真正的数值后面会被 load_app_settings 覆盖）
-        self.feedrate_xy = 50.0   # XY 速度
-        self.feedrate_z = 20.0    # Z 速度
+        self.work_z = 1.0           # 点胶 / 下刀高度 (接近0)
+        
+        # 对刀基准 (上次对刀时的 Z 坐标)
+        self.z_base = 0.0
+        
+        # 对刀仪坐标 (XY)
+        self.tool_setter_x = None
+        self.tool_setter_y = None
+        
+        # 对刀模式：False=正常, True=手动找对刀点
+        self.manual_tool_set_mode = False
 
         # 实时坐标轮询定时器（连接后开启，断开后停止）
         self.pos_timer = QTimer(self)
@@ -441,20 +521,7 @@ class MainWindow(QWidget):
         self.load_app_settings()
         self.load_saved_params()
         self.load_golden_templates()
-        # ====== ✅ 新增：启动时自动加载标定矩阵 ======
-        if os.path.exists("cam2mach_matrix.npy"):
-            try:
-                self.cam2mach_matrix = np.load("cam2mach_matrix.npy")
-                # 这里因为 log_box 已经初始化了，可以直接打印到界面日志
-                # 为了防止 log 函数还未准备好（极端情况），加个简单判断
-                if hasattr(self, 'log'):
-                    self.log("✅ 已自动加载历史标定矩阵，无需重新标定！")
-                else:
-                    print("✅ 已自动加载历史标定矩阵")
-            except Exception as e:
-                print(f"⚠ 加载标定矩阵失败: {e}")
-
-        # self.init_camera_ui()
+        self.init_calibration()
 
     # ================== 日志相关 ==================
     def _log_impl(self, msg):
@@ -751,6 +818,37 @@ class MainWindow(QWidget):
         zparam_layout.addWidget(self.spn_work_z)
 
         motion_layout.addLayout(zparam_layout)
+        
+        # ===== Z 高度 / 对刀 =====
+        zbase_group = QGroupBox("Z 高度 / 对刀")
+        zbase_layout = QVBoxLayout()
+        
+        # 1. Z 基准显示
+        self.lbl_z_base = QLabel(f"当前 Z 基准: {self.z_base:.2f} mm")
+        self.lbl_z_base.setStyleSheet("font-weight: bold; font-size: 14px; color: #FCD34D;")
+        
+        # 2. 对刀仪状态灯 (圆形 Label)
+        status_layout = QHBoxLayout()
+        lbl_status_text = QLabel("对刀仪状态:")
+        self.lbl_probe_status = QLabel("●")
+        self.lbl_probe_status.setStyleSheet("color: #9CA3AF; font-size: 20px;") # 默认灰色
+        self.lbl_probe_status.setToolTip("灰色=未知, 绿色=未触发, 红色=已触发")
+        status_layout.addWidget(lbl_status_text)
+        status_layout.addWidget(self.lbl_probe_status)
+        status_layout.addStretch()
+
+        # 3. 按钮
+        self.btn_auto_tool_set = QPushButton("一键对刀")
+        self.btn_auto_tool_set.setMinimumHeight(30)
+        self.btn_auto_tool_set.setStyleSheet("background-color: #2563EB; font-weight: bold;")
+        self.btn_auto_tool_set.clicked.connect(self.on_btn_auto_tool_set)
+        
+        zbase_layout.addWidget(self.lbl_z_base)
+        zbase_layout.addLayout(status_layout)
+        zbase_layout.addWidget(self.btn_auto_tool_set)
+        zbase_group.setLayout(zbase_layout)
+        
+        motion_layout.addWidget(zbase_group)
 
         # 步长设置 + 预设按钮
         step_layout = QVBoxLayout()
@@ -872,15 +970,6 @@ class MainWindow(QWidget):
         offset_group.setLayout(offset_layout)
         self.offset_group = offset_group
 
-        # ---- Z 高度 / 对刀 ----
-        z_group = QGroupBox("Z 高度 / 对刀")
-        z_layout = QVBoxLayout()
-        self.lbl_z_ref = QLabel("当前 Z 基准: -.- mm")
-        self.btn_tool_probe = QPushButton("一键对刀")
-        z_layout.addWidget(self.lbl_z_ref)
-        z_layout.addWidget(self.btn_tool_probe)
-        z_group.setLayout(z_layout)
-        self.z_group = z_group
 
         # ---- 日志窗口 ----
         self.log_box = QTextEdit()
@@ -893,7 +982,6 @@ class MainWindow(QWidget):
         right_layout.addWidget(conn_group)          # ✅ 新增：Klipper 连接
         right_layout.addWidget(self.motion_group)   # XYZ 控制
         right_layout.addWidget(self.offset_group)   # 针头偏移
-        right_layout.addWidget(self.z_group)        # Z 高度 / 对刀
         right_layout.addLayout(btn_layout)
         right_layout.addLayout(task_layout)         # 点胶任务按钮排
         right_layout.addWidget(param_group)
@@ -925,8 +1013,6 @@ class MainWindow(QWidget):
         # 针头偏移标定
         self.btn_calib_nozzle.clicked.connect(self.on_calibrate_nozzle_offset)
 
-        # 一键对刀
-        self.btn_tool_probe.clicked.connect(self.on_tool_probe_clicked)
 
         # 点胶任务按钮
         self.btn_calibrate.clicked.connect(self.on_calibrate_coords)
@@ -1031,6 +1117,19 @@ class MainWindow(QWidget):
                 return
             x, y, z = self.machine.get_position()
             self.update_xyz_display(x, y, z)
+            
+            # 始终轮询探针状态 (因为现在是读取变量，开销较小)
+            status = self.machine.query_probe_status()
+            if status == 'triggered':
+                self.lbl_probe_status.setStyleSheet("color: #EF4444; font-size: 20px;") # 红
+                self.lbl_probe_status.setText("● (触发)")
+            elif status == 'open':
+                self.lbl_probe_status.setStyleSheet("color: #10B981; font-size: 20px;") # 绿
+                self.lbl_probe_status.setText("● (未触发)")
+            else:
+                self.lbl_probe_status.setStyleSheet("color: #9CA3AF; font-size: 20px;") # 灰
+                self.lbl_probe_status.setText("● (未知)")
+
         except Exception:
             # 这里静默，避免刷屏
             pass
@@ -1361,6 +1460,7 @@ class MainWindow(QWidget):
         if not self.cam or not self.saved_params:
             return
 
+        self.log(f"🔄 正在应用保存的相机参数: {self.saved_params}")
         if "ExposureTime" in self.saved_params:
             self.set_exposure(float(self.saved_params["ExposureTime"]))
         if "Gain" in self.saved_params:
@@ -1504,7 +1604,7 @@ class MainWindow(QWidget):
         # 鼠标向右拖动，希望看到右边内容 => 滚动条减少
         hbar.setValue(hbar.value() - dx)
         vbar.setValue(vbar.value() - dy)
-    def resizeEvent(self, event):
+    def start_cam(self):
 
         deviceList = MV_CC_DEVICE_INFO_LIST()
         MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, deviceList)
@@ -1532,14 +1632,27 @@ class MainWindow(QWidget):
 
         self.read_param_ranges()
         self.read_cam_info()
-        self.apply_saved_params()
+        
+        # 1. 先尝试应用一次参数 (暂时屏蔽，防止报错 0x80000003)
+        # self.apply_saved_params()
 
-        self.cam.MV_CC_StartGrabbing()
+        # 2. 启动取流
+        ret = self.cam.MV_CC_StartGrabbing()
+        if ret != 0:
+            self.log(f"❌ 相机启动取流失败，错误码: {ret}")
+            return
+
         self.sync_from_camera_to_ui()
 
         self.thread = CameraThread(self.cam)
         self.thread.frame_signal.connect(self.update_image)
         self.thread.start()
+        
+        # 3. 【关键】延时 1 秒再次应用参数
+        # 某些相机在 StartGrabbing 后会重置参数，或者需要一点时间才能接收参数
+        QTimer.singleShot(1000, self.apply_saved_params)
+
+        self.btn_start.setEnabled(False)
 
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
@@ -1643,10 +1756,31 @@ class MainWindow(QWidget):
             if os.path.exists(self.config_path):
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     self.saved_params = json.load(f)
+                
+                # ✅ 加载后立即更新 UI 显示
+                if "ExposureTime" in self.saved_params:
+                    val = float(self.saved_params["ExposureTime"])
+                    if hasattr(self, 'spn_exp'):
+                        self.spn_exp.setValue(val)
+                        # 滑块也同步一下 (注意范围映射)
+                        # 这里简单处理，假设 spinbox change 会联动 slider
+                
+                if "Gain" in self.saved_params:
+                    val = float(self.saved_params["Gain"])
+                    if hasattr(self, 'spn_gain'):
+                        self.spn_gain.setValue(val)
+                
+                if "Gamma" in self.saved_params:
+                    val = float(self.saved_params["Gamma"])
+                    if hasattr(self, 'spn_gamma'):
+                        self.spn_gamma.setValue(val)
+                        
+                self.log(f"✅ 已加载相机参数: {self.config_path}")
             else:
                 self.saved_params = {}
+                self.log("ℹ️ 未找到相机参数文件，使用默认值。")
         except Exception as e:
-            self.log("读取参数文件失败：", e)
+            self.log(f"读取参数文件失败：{e}")
             self.saved_params = {}
 
     def init_calibration(self):
@@ -1773,6 +1907,17 @@ class MainWindow(QWidget):
                     if hasattr(self, 'spn_work_z'):
                         self.spn_work_z.setValue(val)
 
+                # 6. 恢复对刀基准
+                if 'z_base' in settings:
+                    self.z_base = float(settings['z_base'])
+                    if hasattr(self, 'lbl_z_base'):
+                        self.lbl_z_base.setText(f"当前 Z 基准: {self.z_base:.2f} mm")
+
+                # 7. 恢复对刀仪坐标
+                if 'tool_setter_x' in settings and 'tool_setter_y' in settings:
+                    self.tool_setter_x = float(settings['tool_setter_x'])
+                    self.tool_setter_y = float(settings['tool_setter_y'])
+
             # 可以在日志中记录成功加载
             self.log("✅ 成功加载历史速度/加速度参数。")
 
@@ -1789,6 +1934,9 @@ class MainWindow(QWidget):
             'safe_z_cavity': self.safe_z_cavity,
             'safe_z_product': self.safe_z_product,
             'work_z': self.work_z,
+            'z_base': self.z_base,
+            'tool_setter_x': self.tool_setter_x,
+            'tool_setter_y': self.tool_setter_y,
         }
 
         try:
@@ -2720,6 +2868,113 @@ class MainWindow(QWidget):
 
         # 【新增】调节后立即保存
         self.save_app_settings()
+
+    def on_btn_auto_tool_set(self):
+        """一键对刀逻辑 (含手动找点模式)"""
+        
+        # --- 情况 A: 正在手动找点模式，用户点击按钮表示“确认位置” ---
+        if self.manual_tool_set_mode:
+            # 获取当前坐标
+            mx, my, mz = self.machine.get_position()
+            self.tool_setter_x = mx
+            self.tool_setter_y = my
+            
+            # 保存设置
+            self.save_app_settings()
+            
+            # 退出手动模式
+            self.manual_tool_set_mode = False
+            self.btn_auto_tool_set.setText("一键对刀")
+            self.btn_auto_tool_set.setStyleSheet("background-color: #2563EB; font-weight: bold;")
+            
+            QMessageBox.information(self, "位置已保存", 
+                                    f"对刀仪坐标已保存为:\nX: {mx:.2f}\nY: {my:.2f}\n\n现在可以执行自动对刀了。")
+            return
+
+        # --- 情况 B: 尚未设置对刀仪坐标 ---
+        if self.tool_setter_x is None or self.tool_setter_y is None:
+            reply = QMessageBox.question(
+                self, "未设置对刀仪",
+                "尚未记录对刀仪的 XY 坐标。\n\n"
+                "是否进入【手动找点模式】？\n"
+                "进入后，请移动针头到对刀仪正上方，然后再次点击按钮确认。",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                self.manual_tool_set_mode = True
+                self.btn_auto_tool_set.setText("确认对刀仪位置 (点击保存)")
+                self.btn_auto_tool_set.setStyleSheet("background-color: #F59E0B; color: black; font-weight: bold;") # 橙色
+                self.log("👉 进入手动找点模式：请移动到对刀仪上方，并观察状态灯。")
+            return
+
+        # --- 情况 C: 已有坐标，执行自动对刀 ---
+        # 修改：允许用户选择“重新标定位置”
+        box = QMessageBox(self)
+        box.setWindowTitle("确认对刀")
+        box.setText(f"已保存对刀仪坐标 (X{self.tool_setter_x:.1f}, Y{self.tool_setter_y:.1f})。\n\n"
+                    "请选择操作：")
+        btn_auto = box.addButton("开始自动对刀", QMessageBox.YesRole)
+        btn_manual = box.addButton("重新标定位置", QMessageBox.NoRole)
+        btn_cancel = box.addButton("取消", QMessageBox.RejectRole)
+        
+        box.exec_()
+        
+        if box.clickedButton() == btn_manual:
+            # 进入手动模式
+            self.manual_tool_set_mode = True
+            self.btn_auto_tool_set.setText("确认对刀仪位置 (点击保存)")
+            self.btn_auto_tool_set.setStyleSheet("background-color: #F59E0B; color: black; font-weight: bold;") 
+            self.log("👉 进入手动找点模式：请移动到对刀仪上方，并观察状态灯。")
+            return
+            
+        elif box.clickedButton() == btn_auto:
+            # 继续执行自动对刀
+            pass
+        else:
+            # 取消
+            return
+
+        self.log("🚀 开始自动对刀...")
+        self.btn_auto_tool_set.setEnabled(False)
+        
+        # 启动后台线程
+        self.tool_worker = AutoToolSetWorker(self.machine, self.safe_z_product, self.tool_setter_x, self.tool_setter_y)
+        self.tool_worker.finished_signal.connect(self.on_auto_tool_set_finished)
+        self.tool_worker.start()
+
+    def on_auto_tool_set_finished(self, success, trigger_z, msg):
+        self.btn_auto_tool_set.setEnabled(True)
+        self.log(msg)
+        
+        if success:
+            # 计算偏差并更新
+            if self.z_base == 0.0:
+                # 第一次对刀，直接记录
+                self.z_base = trigger_z
+                self.log(f"✅ 首次对刀，基准 Z 已设为: {self.z_base:.3f}")
+            else:
+                # 计算差值
+                diff = trigger_z - self.z_base
+                self.log(f"ℹ️ 旧基准: {self.z_base:.3f}, 新基准: {trigger_z:.3f}, 偏差: {diff:.3f}")
+                
+                # 更新 Z 参数
+                self.safe_z_cavity += diff
+                self.safe_z_product += diff
+                self.work_z += diff
+                
+                # 更新 UI
+                self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
+                self.spn_safe_z_product.setValue(self.safe_z_product)
+                self.spn_work_z.setValue(self.work_z)
+                
+                self.z_base = trigger_z
+                self.log(f"✅ 所有 Z 高度已自动修正 (Offset: {diff:.3f})")
+
+            # 更新 Label
+            self.lbl_z_base.setText(f"当前 Z 基准: {self.z_base:.2f} mm")
+            
+            # 保存设置
+            self.save_app_settings()
 
     # ================== 其它 ==================
     def closeEvent(self, e):

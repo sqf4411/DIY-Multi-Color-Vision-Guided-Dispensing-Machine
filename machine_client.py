@@ -131,6 +131,12 @@ class MachineClient:
             print(f"[MachineClient] 发送 G-code 失败: {e}  script={script!r}")
             return False
 
+    def send_gcode(self, script: str):
+        """
+        发送 G-code (公开接口)
+        """
+        return self._post_gcode(script)
+
     def _sync_toolhead_status(self) -> bool:
         """
         从 Klipper 读取状态：
@@ -177,7 +183,145 @@ class MachineClient:
 
         except Exception as e:
             self._log("[MachineClient] 读取状态请求异常:", e)
+        except Exception as e:
+            self._log("[MachineClient] 读取状态请求异常:", e)
             return False
+
+    def query_probe_status(self) -> str:
+        """
+        查询探针状态。
+        优先查询 [gcode_macro TOOL_STATE] 的 state 变量 (用户自定义)。
+        如果失败，再尝试查询 [probe] 对象。
+        返回: 'open', 'triggered', or 'unknown'
+        """
+        if not self.base_url or not self.connected:
+            return 'unknown'
+
+        # --- 方案 A: 查询用户自定义宏 TOOL_STATE ---
+        # URL: /printer/objects/query?gcode_macro TOOL_STATE
+        url = f"{self.base_url}/printer/objects/query"
+        # 注意空格要编码，requests 会自动处理 params
+        params = {"gcode_macro TOOL_STATE": ""}
+        
+        try:
+            r = self.session.get(url, params=params, headers=self._headers(), timeout=1)
+            data = r.json()
+            # 路径: result -> status -> gcode_macro TOOL_STATE -> state
+            macro_status = data.get("result", {}).get("status", {}).get("gcode_macro TOOL_STATE", {})
+            
+            if macro_status:
+                state = macro_status.get("state")
+                # 用户配置: 1=Triggered, 0=Open
+                if state is not None:
+                    try:
+                        val = int(state)
+                        return 'triggered' if val == 1 else 'open'
+                    except:
+                        pass
+        except Exception:
+            pass
+
+        # --- 方案 B: 标准 Probe 对象 (备用) ---
+        # 1. 发送 QUERY_PROBE (可能会刷屏，仅作为备用)
+        # self._post_gcode("QUERY_PROBE") 
+        
+        # 2. 读取 probe 对象
+        params = {"probe": ""}
+        try:
+            r = self.session.get(url, params=params, headers=self._headers(), timeout=1)
+            data = r.json()
+            probe_data = data.get("result", {}).get("status", {}).get("probe", {})
+            if probe_data:
+                last_query = probe_data.get("last_query")
+                if last_query is not None:
+                    return 'triggered' if last_query else 'open'
+        except Exception:
+            pass
+            
+        return 'unknown'
+
+    def get_probe_status(self) -> str:
+        """
+        查询探针状态。
+        返回: 'open', 'triggered', or 'unknown'
+        """
+        if not self.base_url or not self.connected:
+            return 'unknown'
+
+        # Klipper 的 probe 对象通常叫 "probe"
+        # 我们查询 /printer/objects/query?probe
+        url = f"{self.base_url}/printer/objects/query"
+        params = {"probe": ""}
+        
+        try:
+            # 注意：如果不先发送 QUERY_PROBE，这个值可能不会更新。
+            # 但频繁发送 QUERY_PROBE 会导致 Klipper 繁忙。
+            # 我们先尝试直接读。如果用户发现不更新，可能需要手动发指令。
+            # 或者，我们可以发送 QUERY_PROBE 命令，然后解析返回结果。
+            # 这里为了实时性，我们尝试直接读对象。
+            r = self.session.get(url, params=params, headers=self._headers(), timeout=2)
+            data = r.json()
+            status = data.get("result", {}).get("status", {}).get("probe", {})
+            
+            # last_query: True (Triggered) / False (Open) ? 
+            # 或者 last_z_result?
+            # Klipper 文档：probe.last_query: The result of the last QUERY_PROBE command.
+            # 所以必须发 QUERY_PROBE 才能更新这个值。
+            # 这对实时显示灯不太友好。
+            
+            # 替代方案：查询 endstops? 如果探针接在 endstop 上。
+            # /printer/objects/query?query_endstops
+            # 这也需要 QUERY_ENDSTOPS 命令。
+            
+            # 既然用户要求“针触碰到了对刀仪并触发，灯灭”，说明他可能在手动测试。
+            # 我们可以每秒发一次 QUERY_PROBE 吗？
+            # 让我们尝试发送 QUERY_PROBE 并解析 response。
+            pass
+        except:
+            pass
+            
+        # 方案 C: 发送 QUERY_PROBE 并解析 console output? 太麻烦。
+        # 方案 D: 假设用户配置了 [probe] 且 Klipper 会自动更新某些状态？
+        # 通常不会。
+        
+        # 让我们先实现一个简单的：发送 QUERY_PROBE，然后读 output。
+        # 或者，只在“手动对刀模式”下开启高频轮询。
+        
+        return 'unknown'
+
+    def send_and_get_probe_status(self) -> str:
+        """
+        发送 QUERY_PROBE 并返回状态。
+        """
+        if not self.base_url: return 'unknown'
+        
+        # 这是一个 hack，因为我们没法直接拿到命令返回值（_post_gcode 不返回内容）
+        # 但我们可以通过 objects/query?probe 来读 last_query
+        # 前提是我们先发了 QUERY_PROBE
+        
+        self._post_gcode("QUERY_PROBE")
+        
+        # 稍等一下？或者直接读？
+        # Klipper 处理命令是异步的。
+        # 也许我们不需要实时显示灯？
+        # 用户说：“还要显示这个对刀灯在ui界面...灯灭，说明触发了”
+        # 这意味着必须实时。
+        
+        # 如果探针是接在 endstop 上的（例如 z_min），我们可以查询 query_endstops?
+        # 还是需要发命令。
+        
+        # 让我们尝试读 probe 对象，假设它能反映状态。
+        url = f"{self.base_url}/printer/objects/query"
+        params = {"probe": ""}
+        try:
+            r = self.session.get(url, params=params, headers=self._headers(), timeout=1)
+            data = r.json()
+            val = data.get("result", {}).get("status", {}).get("probe", {}).get("last_query")
+            # last_query: 1 (triggered) / 0 (open)
+            if val is None: return 'unknown'
+            return 'triggered' if val else 'open'
+        except:
+            return 'unknown'
 
     # ------------------------------------------------------------------ #
     # 坐标查询
@@ -227,9 +371,51 @@ class MachineClient:
             self._z += dz
 
 
-    # ------------------------------------------------------------------ #
+    def move_z_absolute(self, z: float, feedrate: float = 600.0):
+        """
+        Z轴绝对运动
+        """
+        if not self.connected:
+            return
+
+        script = f"G90\nG0 Z{z:.3f} F{feedrate:.0f}"
+        ok = self._post_gcode(script)
+        if ok:
+            self._z = z
+            
+    def move_xy_absolute(self, x: float, y: float, feedrate: float = 6000.0):
+        """
+        XY绝对运动
+        """
+        if not self.connected:
+            return
+
+        script = f"G90\nG0 X{x:.3f} Y{y:.3f} F{feedrate:.0f}"
+        ok = self._post_gcode(script)
+        if ok:
+            self._x = x
+            self._y = y
+
+    def wait_for_move(self):
+        """
+        等待运动结束 (M400)
+        """
+        if not self.connected:
+            return
+        self._post_gcode("M400")
     # 回零
     # ------------------------------------------------------------------ #
+    def wait_until_idle(self):
+        """
+        等待机器空闲 (M400 + G4 P100)
+        """
+        if not self.connected:
+            return
+        # M400 等待移动结束
+        self._post_gcode("M400")
+        # G4 P100 强制停留 100ms，确保状态同步
+        self._post_gcode("G4 P100")
+
     def home_all(self):
         if not self.connected:
             return

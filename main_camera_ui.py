@@ -1883,12 +1883,18 @@ class MainWindow(QWidget):
             for path in flat_paths:
                 # path 是 (N, 2) 的数组，需要转成 int32
                 pts = path.reshape((-1, 1, 2)).astype(np.int32)
-                cv2.polylines(vis_img, [pts], False, (0, 255, 0), 2, cv2.LINE_AA)
+                
+                if len(path) == 1:
+                    # Draw Dot (Magenta)
+                    cx, cy = int(path[0][0]), int(path[0][1])
+                    cv2.circle(vis_img, (cx, cy), 8, (255, 0, 255), -1)
+                else:
+                    cv2.polylines(vis_img, [pts], False, (0, 255, 0), 2, cv2.LINE_AA)
 
-                # 标记起点
-                if len(path) > 0:
-                    sx, sy = int(path[0][0]), int(path[0][1])
-                    cv2.circle(vis_img, (sx, sy), 5, (0, 0, 255), -1)
+                    # 标记起点
+                    if len(path) > 0:
+                        sx, sy = int(path[0][0]), int(path[0][1])
+                        cv2.circle(vis_img, (sx, sy), 5, (0, 0, 255), -1)
 
             cv2.putText(vis_img, "DRY RUNNING...", (20, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)

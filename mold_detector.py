@@ -629,6 +629,84 @@ def get_calculated_paths(gray: np.ndarray):
             if not match_success:
                 box0 = _order_points(_TEMPLATES[0])
                 c0_x = (min(box0[:, 0]) + max(box0[:, 0])) / 2
+    return color_img, big_box, cell_boxes, cell_centers
+
+
+# ====== Add this function to the end of mold_detector.py ======
+
+def get_calculated_paths(gray: np.ndarray):
+    """
+    Interface for UI:
+    Returns dispensing paths (pixel coords) for all detected cells in current frame.
+    Format: [ path1, path2, ... ]
+              where path1 is (N, 2) numpy array
+    """
+    # Ensure env loaded
+    _load_golden_and_paths()
+
+    # 1. Find big frame & matrix
+    rect, big_box = _find_big_mold(gray)
+    if big_box is None or _TEMPLATES is None or _WARP_SIZE is None:
+        return []
+
+    goldW, goldH = int(_WARP_SIZE[0]), int(_WARP_SIZE[1])
+
+    # Calculate Current -> Golden matrix
+    pts = big_box.astype(np.float32)
+    s = pts.sum(axis=1)
+    tl, br = pts[np.argmin(s)], pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    tr, bl = pts[np.argmin(diff)], pts[np.argmax(diff)]
+    rect_pts = np.array([tl, tr, br, bl], dtype=np.float32)
+    dst_pts = np.array([[0, 0], [goldW - 1, 0], [goldW - 1, goldH - 1], [0, goldH - 1]], dtype=np.float32)
+
+    # We need Minv: Golden -> Current
+    Minv_cur = cv2.getPerspectiveTransform(dst_pts, rect_pts)
+
+    # 2. Prepare corrected image for matching
+    M_cur = cv2.getPerspectiveTransform(rect_pts, dst_pts)
+    curr_warped = cv2.warpPerspective(gray, M_cur, (goldW, goldH))
+
+    all_paths_pixels = []
+
+    # 3. Iterate each cell, calculate path
+    if (_PATH_POLY is not None) and (_CORE_TEMPLATE is not None):
+        th, tw = _CORE_TEMPLATE.shape[:2]
+        search_pad = 60
+
+        for idx in range(_TEMPLATES.shape[0]):
+            product_paths = [] # Paths for this specific product
+
+            # --- A. Template Match for Offset ---
+            guess_box = _order_points(_TEMPLATES[idx])
+            bx = int((min(guess_box[:, 0]) + max(guess_box[:, 0])) / 2)
+            by = int((min(guess_box[:, 1]) + max(guess_box[:, 1])) / 2)
+
+            rx = max(0, bx - search_pad - tw // 2)
+            ry = max(0, by - search_pad - th // 2)
+            rw, rh = tw + 2 * search_pad, th + 2 * search_pad
+            if rx + rw > goldW: rw = goldW - rx
+            if ry + rh > goldH: rh = goldH - ry
+
+            roi = curr_warped[ry:ry + rh, rx:rx + rw]
+
+            offset = np.array([0, 0], dtype=np.float32)
+            match_success = False
+
+            if roi.shape[0] >= th and roi.shape[1] >= tw:
+                res = cv2.matchTemplate(roi, _CORE_TEMPLATE, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                if max_val > 0.3:
+                    match_success = True
+                    match_x = rx + max_loc[0]
+                    match_y = ry + max_loc[1]
+                    current_live_tl = np.array([match_x, match_y], dtype=np.float32)
+                    offset = current_live_tl - _CORE_REF_TL
+
+            # Fallback
+            if not match_success:
+                box0 = _order_points(_TEMPLATES[0])
+                c0_x = (min(box0[:, 0]) + max(box0[:, 0])) / 2
                 c0_y = (min(box0[:, 1]) + max(box0[:, 1])) / 2
                 offset = np.array([bx - c0_x, by - c0_y], dtype=np.float32)
 
@@ -642,6 +720,18 @@ def get_calculated_paths(gray: np.ndarray):
 
                 if res_o is not None:
                     product_paths.append(res_o.reshape(-1, 2))  # (N, 2)
+
+            # --- C. Generate Dot Paths ---
+            if _PATH_DOTS is not None:
+                pts_gold = _PATH_DOTS + offset
+                pts_w = pts_gold.reshape(-1, 1, 2)
+                res_o = cv2.perspectiveTransform(pts_w, Minv_cur)
+                if res_o is not None:
+                    # res_o is (N, 1, 2). Each point is a dot.
+                    # We want to add each dot as a separate path of shape (1, 2)
+                    dots = res_o.reshape(-1, 2)
+                    for dot in dots:
+                        product_paths.append(dot.reshape(1, 2))
             
             if product_paths:
                 all_paths_pixels.append(product_paths)

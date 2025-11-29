@@ -33,6 +33,8 @@ class DryRunDialog(QDialog):
         self.work_z = initial_params.get('work_z', 5.0)
         self.speed_xy = initial_params.get('speed_xy', 2000)
         self.speed_z = initial_params.get('speed_z', 500)
+        self.dwell_ms = initial_params.get('dwell_ms', 100)      # Dot Dwell
+        self.line_dwell_ms = initial_params.get('line_dwell_ms', 0) # Line Start Dwell
 
         self.init_ui()
         self.generate_gcode()
@@ -84,6 +86,22 @@ class DryRunDialog(QDialog):
         self.spn_speed_z.valueChanged.connect(self.on_param_changed)
         param_layout.addWidget(self.spn_speed_z, 2, 3)
 
+        # Dot Dwell
+        param_layout.addWidget(QLabel("点胶延时 (ms):"), 3, 0)
+        self.spn_dwell = QSpinBox()
+        self.spn_dwell.setRange(0, 5000)
+        self.spn_dwell.setValue(self.dwell_ms)
+        self.spn_dwell.valueChanged.connect(self.on_param_changed)
+        param_layout.addWidget(self.spn_dwell, 3, 1)
+
+        # Line Dwell
+        param_layout.addWidget(QLabel("画线延时 (ms):"), 3, 2)
+        self.spn_line_dwell = QSpinBox()
+        self.spn_line_dwell.setRange(0, 5000)
+        self.spn_line_dwell.setValue(self.line_dwell_ms)
+        self.spn_line_dwell.valueChanged.connect(self.on_param_changed)
+        param_layout.addWidget(self.spn_line_dwell, 3, 3)
+
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
 
@@ -124,6 +142,8 @@ class DryRunDialog(QDialog):
         self.work_z = self.spn_work_z.value()
         self.speed_xy = self.spn_speed_xy.value()
         self.speed_z = self.spn_speed_z.value()
+        self.dwell_ms = self.spn_dwell.value()
+        self.line_dwell_ms = self.spn_line_dwell.value()
         self.generate_gcode()
 
     def generate_gcode(self):
@@ -164,11 +184,23 @@ class DryRunDialog(QDialog):
                 # 3. Down to Work Z
                 gcode_lines.append(f"G0 Z{self.work_z:.2f} F{self.speed_z}")
 
-                # 4. Dispense Path
-                for pt in path_machine[1:]:
-                    pt_x = pt[0] + self.nozzle_offset_x
-                    pt_y = pt[1] + self.nozzle_offset_y
-                    gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{self.speed_xy}")
+                # Check if it is a Dot (1 point) or Line (>1 points)
+                if len(path_machine) == 1:
+                    # --- Dot Dispensing ---
+                    # Dwell
+                    if self.dwell_ms > 0:
+                        gcode_lines.append(f"G4 P{self.dwell_ms}")
+                else:
+                    # --- Line Dispensing ---
+                    # Line Start Dwell
+                    if self.line_dwell_ms > 0:
+                        gcode_lines.append(f"G4 P{self.line_dwell_ms}")
+
+                    # 4. Dispense Path
+                    for pt in path_machine[1:]:
+                        pt_x = pt[0] + self.nozzle_offset_x
+                        pt_y = pt[1] + self.nozzle_offset_y
+                        gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{self.speed_xy}")
 
                 # 5. Lift after segment
                 # If this is the LAST segment of the product, lift to Product Safe Z

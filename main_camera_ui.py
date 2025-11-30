@@ -583,6 +583,10 @@ class MainWindow(QWidget):
         # 为了在画面上画出将要标定的腔体中心点和编号
         self.calib_points_for_ui = None
 
+        # ====== ✅ 新增：普通模式下的十字中心开关 ======
+        self.show_center_crosshair = False
+        # ==========================================
+
         # ===== Z 高度参数 =====
         # 空跑/点胶时的安全高度与工作高度（mm）
         # 用户反馈：Z轴最大200+（上），0是下。
@@ -668,6 +672,14 @@ class MainWindow(QWidget):
 
         # ✅ 新增：连接点击信号
         self.label.clicked_pos.connect(self.on_label_clicked)
+
+        # ====== ✅ 新增：显示中心按钮 (放在画面下方) ======
+        self.btn_show_crosshair = QPushButton("显示中心")
+        self.btn_show_crosshair.setCheckable(True) # 可以做成 toggle 样式
+        self.btn_show_crosshair.clicked.connect(self.on_toggle_crosshair)
+        
+        left_layout.addWidget(self.btn_show_crosshair)
+        # ==============================================
 
         # ---- 相机信息 ----
         self.lbl_cam_res = QLabel("-")
@@ -2099,6 +2111,18 @@ class MainWindow(QWidget):
                 cv2.putText(vis_img, msg, (30, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
 
         # ====== 🎨 E. 空跑路径显示 (新增 + 相机中心十字 = 点胶针) ======
+        # 优先处理普通模式下的十字中心显示 (用户请求)
+        if self.show_center_crosshair:
+             # 画中心十字 (全屏长线)
+            cv2.line(vis_img, (cx, 0), (cx, h), (0, 0, 255), 1)
+            cv2.line(vis_img, (0, cy), (w, cy), (0, 0, 255), 1)
+            # 画个小圈
+            cv2.circle(vis_img, (cx, cy), 20, (0, 0, 255), 2)
+            
+            # 显示文字提示
+            cv2.putText(vis_img, "CENTER CROSSHAIR", (20, h - 60), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
         if len(self.dry_run_paths_to_draw) > 0:
             # 1️⃣ 空跑时先画“相机中心 = 点胶针”十字线
             cv2.line(vis_img, (cx, 0), (cx, h), (0, 0, 255), 1)   # 竖线
@@ -2339,6 +2363,20 @@ class MainWindow(QWidget):
             reload_golden_templates()
         else:
             self.log("⚠ 黄金示教取消或失败")
+
+    # ================== 十字中心开关 ==================
+    def on_toggle_crosshair(self):
+        """切换显示中心十字"""
+        self.show_center_crosshair = not self.show_center_crosshair
+        
+        if self.show_center_crosshair:
+            self.btn_show_crosshair.setText("关闭中心")
+            self.log("✅ 已开启中心十字显示")
+        else:
+            self.btn_show_crosshair.setText("显示中心")
+            self.log("⏹ 已关闭中心十字显示")
+            
+        self.render_current_frame()
 
     # ================== 点胶路径编辑 ==================
     def on_edit_path(self):

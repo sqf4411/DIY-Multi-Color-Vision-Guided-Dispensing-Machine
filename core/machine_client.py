@@ -404,8 +404,7 @@ class MachineClient:
         if not self.connected:
             return
         self._post_gcode("M400")
-    # 回零
-    # ------------------------------------------------------------------ #
+
     def wait_until_idle(self):
         """
         等待机器空闲 (M400 + G4 P100)
@@ -448,6 +447,26 @@ class MachineClient:
             self.is_homed = True
             self._sync_toolhead_status()
             print("[MachineClient] 已执行 G28 Z。")
+
+    # ------------------------------------------------------------------ #
+    # 运动控制 (新增 move_to)
+    # ------------------------------------------------------------------ #
+    def move_to(self, x: float = None, y: float = None, z: float = None, speed: float = 3000):
+        """
+        绝对移动
+        """
+        parts = []
+        if x is not None: parts.append(f"X{x:.3f}")
+        if y is not None: parts.append(f"Y{y:.3f}")
+        if z is not None: parts.append(f"Z{z:.3f}")
+        
+        if not parts:
+            return True
+
+        # G90: 绝对定位
+        cmd = "G1 " + " ".join(parts) + f" F{int(speed)}"
+        script = f"G90\n{cmd}"
+        return self._post_gcode(script)
 
     # ------------------------------------------------------------------ #
     # 阀门控制 (新增)

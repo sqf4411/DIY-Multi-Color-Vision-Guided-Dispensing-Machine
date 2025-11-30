@@ -40,6 +40,7 @@ from PyQt5.QtGui import QImage, QPixmap
 # 你的检测函数
 from core.mold_detector import detect_mold_and_cells, reload_golden_templates
 from core.dry_run_dialog import DryRunDialog, DryRunControlDialog
+from core.batch_run_dialog import BatchRunDialog
 
 # ---- 按你的实际路径修改 ----
 sys.path.append(r"H:\MVS\Development\Samples\Python\MvImport")
@@ -811,6 +812,7 @@ class MainWindow(QWidget):
         self.btn_virtual = QPushButton("相机空跑")
         self.btn_dry_run = QPushButton("针头空跑")
         self.btn_real_run = QPushButton("开始点胶")
+        self.btn_batch_run = QPushButton("批量运行")
         self.btn_test_valve = QPushButton("测试出胶")
 
 
@@ -832,6 +834,7 @@ class MainWindow(QWidget):
         task_layout.addWidget(self.btn_virtual)
         task_layout.addWidget(self.btn_dry_run)
         task_layout.addWidget(self.btn_real_run)
+        task_layout.addWidget(self.btn_batch_run)
         task_layout.addWidget(self.btn_test_valve)
 
         # ---- 曝光 ----
@@ -1147,6 +1150,7 @@ class MainWindow(QWidget):
         self.btn_virtual.clicked.connect(self.on_virtual_run)
         self.btn_dry_run.clicked.connect(self.on_dry_run)
         self.btn_real_run.clicked.connect(self.on_real_run)
+        self.btn_batch_run.clicked.connect(self.on_batch_run)
         self.btn_test_valve.clicked.connect(self.on_test_valve)
 
         # 相机参数联动
@@ -1352,8 +1356,8 @@ class MainWindow(QWidget):
         self.lbl_pos_y.setText(f"Y: {display_y:.2f}")
         self.lbl_pos_z.setText(f"Z: {display_z:.2f}")
         # ====== ✅ 新增：Z轴基准日志显示 ======
-        if hasattr(self, "lbl_z_ref"):
-            self.lbl_z_ref.setText(f"当前 Z 基准: {self.pos_z:.2f} mm")
+        # if hasattr(self, "lbl_z_ref"):
+        #     self.lbl_z_ref.setText(f"当前 Z 基准: {self.pos_z:.2f} mm")
     def on_home_axis(self, axis: str):
         """
         单轴 / 全部归位：X / Y / Z / all
@@ -1387,6 +1391,7 @@ class MainWindow(QWidget):
 
 
     # ---- 一键对刀（占位） ----
+    # ---- 一键对刀（占位） ----
     def on_tool_probe_clicked(self):
         """
         一键对刀入口（当前是占位实现，后续对接 Klipper 对刀宏）。
@@ -1394,7 +1399,7 @@ class MainWindow(QWidget):
         QMessageBox.information(
             self,
             "一键对刀（占位）",
-            "对刀仪一键对刀功能尚未与 Klipper 宏联动，\n"
+            "对刀仪一键对刀功能尚未与 Klipper 宏联动，\\n"
             "当前版本仅作为 UI 按钮和日志占位。"
         )
         self.log("TODO", "一键对刀逻辑将在后续版本中与 Klipper 对刀宏对接。")
@@ -1835,7 +1840,17 @@ class MainWindow(QWidget):
 
     def save_app_settings(self):
         """保存应用设置：速度和加速度"""
-        settings = {
+        # 1. 先读取旧配置，避免覆盖其他模块（如批量运行）写入的参数
+        settings = {}
+        if os.path.exists(SETTINGS_FILE):
+            try:
+                with open(SETTINGS_FILE, 'r') as f:
+                    settings = json.load(f)
+            except:
+                pass
+
+        # 2. 更新本模块管理的参数
+        settings.update({
             'feedrate_xy': self.feedrate_xy,
             'feedrate_z': self.feedrate_z,
             'accel': self.accel,
@@ -1852,7 +1867,7 @@ class MainWindow(QWidget):
             'cam_safe_z_cavity': self.cam_safe_z_cavity,
             'cam_safe_z_product': self.cam_safe_z_product,
             'cam_work_z': self.cam_work_z,
-        }
+        })
 
         try:
             with open(SETTINGS_FILE, 'w') as f:
@@ -2771,6 +2786,22 @@ class MainWindow(QWidget):
             self.log(f"❌ 点胶准备出错: {e}")
             import traceback
             traceback.print_exc()
+
+    def on_batch_run(self):
+        """
+        按钮：批量运行
+        打开批量运行配置对话框
+        """
+        # 1. 基础检查
+        if self.cam2mach_matrix is None:
+            QMessageBox.warning(self, "未标定", "请先完成【标定坐标系】！")
+            return
+        if self.last_frame is None:
+            QMessageBox.warning(self, "无图像", "请先启动相机！")
+            return
+            
+        dlg = BatchRunDialog(self)
+        dlg.exec_()
 
     def on_test_valve(self):
         """

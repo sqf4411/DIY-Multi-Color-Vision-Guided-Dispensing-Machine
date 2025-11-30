@@ -2,12 +2,15 @@
     "feedrate_xy": 1818.0,
     "feedrate_z": 647.0,
     "accel": 263.0,
-    "safe_z_cavity": 216.9,
-    "safe_z_product": 220.0,
-    "work_z": 215.0,
+    "safe_z_cavity": 104.0,
+    "safe_z_product": 120.0,
+    "work_z": 101.5,
     "z_base": 116.10000000000014,
     "tool_setter_x": 303.86199999999985,
     "tool_setter_y": 79.43399999999997,
-    "nozzle_offset_x": 0.0,
-    "nozzle_offset_y": 0.0
+    "nozzle_offset_x": -30.0,
+    "nozzle_offset_y": -41.50000000000003,
+    "cam_safe_z_cavity": 217.0,
+    "cam_safe_z_product": 220.0,
+    "cam_work_z": 215.0
 }

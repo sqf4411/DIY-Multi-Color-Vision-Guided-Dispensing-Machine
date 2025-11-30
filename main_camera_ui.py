@@ -600,6 +600,12 @@ class MainWindow(QWidget):
         self.safe_z_product = 50.0  # 产品安全高度 (大抬刀)
         self.work_z = 1.0           # 点胶 / 下刀高度 (接近0)
         
+        # ====== ✅ 新增：相机空跑专用高度参数 ======
+        self.cam_safe_z_cavity = 20.0
+        self.cam_safe_z_product = 50.0
+        self.cam_work_z = 10.0 # 相机通常比针头高，避免撞到
+        # =======================================
+        
         # 对刀基准 (上次对刀时的 Z 坐标)
         self.z_base = 0.0
         
@@ -802,8 +808,8 @@ class MainWindow(QWidget):
         self.btn_verify = QPushButton("验证精度")
         self.btn_verify.setToolTip("点击开启/关闭【点击定位】功能")
         # ================================
-        self.btn_virtual = QPushButton("虚拟跑")
-        self.btn_dry_run = QPushButton("空跑")
+        self.btn_virtual = QPushButton("相机空跑")
+        self.btn_dry_run = QPushButton("针头空跑")
         self.btn_real_run = QPushButton("开始点胶")
         self.btn_test_valve = QPushButton("测试出胶")
 
@@ -1084,6 +1090,7 @@ class MainWindow(QWidget):
         self.lbl_offset_x = QLabel("ΔX: 0.000 mm")
         self.lbl_offset_y = QLabel("ΔY: 0.000 mm")
         self.btn_calib_nozzle = QPushButton("标定针头偏移")
+        self.btn_calib_nozzle.clicked.connect(self.on_calibrate_nozzle_offset)
 
         offset_layout.addWidget(self.lbl_offset_x)
         offset_layout.addWidget(self.lbl_offset_y)
@@ -1402,61 +1409,40 @@ class MainWindow(QWidget):
 
     def on_calibrate_nozzle_offset(self):
         """
-        标定针头偏移：相机对点 (Step 1) -> 针头对点 (Step 2) -> 计算
+        标定针头偏移：使用非模态对话框，允许用户同时操作 XYZ 移动。
         """
-        if self.nozzle_calib_step == 0:
-            # 启动流程
-            self.nozzle_calib_step = 1
-            self.show_crosshair = True  # 显示十字准星
-            self.log("▶ 启动针头偏移标定 (步骤 1/2)")
-            self.btn_calib_nozzle.setText("记录相机中心位置")
-            self.btn_calib_nozzle.setStyleSheet("background-color: #F59E0B;")  # 橙色
+        # 如果对话框已经存在且可见，就置顶
+        if hasattr(self, 'nozzle_calib_dlg') and self.nozzle_calib_dlg.isVisible():
+            self.nozzle_calib_dlg.raise_()
+            self.nozzle_calib_dlg.activateWindow()
+            return
 
-            QMessageBox.information(
-                self,
-                "针头标定 - 步骤 1",
-                "请将相机中心（红十字）对准一个清晰的物理标记点（例如模具的尖角），然后点击按钮记录坐标。"
-            )
-
-        elif self.nozzle_calib_step == 1:
-            # 记录相机位置
-            self.cam_x, self.cam_y, self.cam_z = self.machine.get_position()  # 记录Z轴，防止后续出错
-            self.nozzle_calib_step = 2
-            self.log(f"📍 记录相机中心 ({self.cam_x:.3f}, {self.cam_y:.3f})")
-            self.btn_calib_nozzle.setText("记录针头中心位置")
-
-            QMessageBox.information(
-                self,
-                "针头标定 - 步骤 2",
-                "请手动控制机器移动，使针头尖端对准刚才的那个物理标记点，然后点击按钮记录坐标。"
-            )
-
-        elif self.nozzle_calib_step == 2:
-            # 记录针头位置并计算偏移
-            self.nozzle_x, self.nozzle_y, _ = self.machine.get_position()
-
-            # 计算偏移量： ΔX = 针头位置 - 相机位置
-            delta_x = self.nozzle_x - self.cam_x
-            delta_y = self.nozzle_y - self.cam_y
-
-            self.nozzle_offset_x = delta_x
-            self.nozzle_offset_y = delta_y
-
-            # 刷新显示
-            self.update_nozzle_offset_display()
-
-            self.log(f"✅ 针头偏移标定完成！")
-            self.log(f"   ΔX: {delta_x:.3f} mm")
-            self.log(f"   ΔY: {delta_y:.3f} mm")
-
-            self.save_app_settings()  # ✅ 保存参数
-            QMessageBox.information(self, "完成", "针头偏移量已计算并保存！")
-
-            # 流程结束，恢复状态
-            self.nozzle_calib_step = 0
-            self.show_crosshair = False
-            self.btn_calib_nozzle.setText("标定针头偏移")
-            self.btn_calib_nozzle.setStyleSheet("")
+        # 1. 启动标定
+        self.log("▶ 启动针头偏移标定...")
+        self.show_crosshair = True # 显示十字
+        
+        # 2. 创建并显示对话框
+        from core.nozzle_calibration_dialog import NozzleCalibrationDialog
+        self.nozzle_calib_dlg = NozzleCalibrationDialog(self, self.machine)
+        self.nozzle_calib_dlg.calibration_finished.connect(self.on_nozzle_calib_finished)
+        self.nozzle_calib_dlg.finished.connect(self.on_nozzle_calib_closed) # 无论如何关闭都触发
+        self.nozzle_calib_dlg.show()
+        
+    def on_nozzle_calib_finished(self, dx, dy):
+        """标定完成的回调"""
+        self.nozzle_offset_x = dx
+        self.nozzle_offset_y = dy
+        self.update_nozzle_offset_display()
+        self.save_app_settings()
+        
+        self.log(f"✅ 针头偏移标定完成并保存！")
+        self.log(f"   ΔX: {dx:.3f} mm")
+        self.log(f"   ΔY: {dy:.3f} mm")
+        
+    def on_nozzle_calib_closed(self, result):
+        """对话框关闭时（无论是保存还是取消），关闭十字准星"""
+        self.show_crosshair = False
+        self.log("⏹ 针头标定结束。")
 
     def on_wheel_zoom(self, delta_y: int):
         """
@@ -1835,11 +1821,17 @@ class MainWindow(QWidget):
                         self.nozzle_offset_y = float(ny)
                         self.update_nozzle_offset_display()
 
+                # 9. 恢复相机空跑高度
+                if 'cam_safe_z_cavity' in settings: self.cam_safe_z_cavity = float(settings['cam_safe_z_cavity'])
+                if 'cam_safe_z_product' in settings: self.cam_safe_z_product = float(settings['cam_safe_z_product'])
+                if 'cam_work_z' in settings: self.cam_work_z = float(settings['cam_work_z'])
+
             # 可以在日志中记录成功加载
             self.log("✅ 成功加载历史速度/加速度参数。")
 
         except Exception as e:
             self.log(f"❌ 加载应用参数失败: {e}")
+
 
     def save_app_settings(self):
         """保存应用设置：速度和加速度"""
@@ -1856,6 +1848,10 @@ class MainWindow(QWidget):
             'tool_setter_y': self.tool_setter_y,
             'nozzle_offset_x': self.nozzle_offset_x,
             'nozzle_offset_y': self.nozzle_offset_y,
+
+            'cam_safe_z_cavity': self.cam_safe_z_cavity,
+            'cam_safe_z_product': self.cam_safe_z_product,
+            'cam_work_z': self.cam_work_z,
         }
 
         try:
@@ -1863,7 +1859,6 @@ class MainWindow(QWidget):
                 json.dump(settings, f, indent=4)
         except Exception as e:
             self.log(f"❌ 保存应用参数失败: {e}")
-
 
 
     def update_image(self, img: np.ndarray):
@@ -1928,6 +1923,19 @@ class MainWindow(QWidget):
 
                 msg = "ADJUST: Press [1-4] to Switch | [WASD] to Move"
                 cv2.putText(vis_img, msg, (30, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+
+        # ====== F. 针头标定模式 (新增) ======
+        # 注意：现在使用非模态对话框，不再依赖 self.nozzle_calib_step
+        # 只要 self.show_crosshair 为 True 且不是在其他特定模式下，就会显示十字
+        # 但为了避免混淆，我们可以检查一下是否正在标定
+        elif hasattr(self, 'nozzle_calib_dlg') and self.nozzle_calib_dlg.isVisible():
+             if self.show_crosshair:
+                # 画中心十字 (红色)
+                cv2.line(vis_img, (cx, 0), (cx, h), (0, 0, 255), 1)
+                cv2.line(vis_img, (0, cy), (w, cy), (0, 0, 255), 1)
+                cv2.circle(vis_img, (cx, cy), 20, (0, 0, 255), 2)
+                cv2.putText(vis_img, "NOZZLE CALIBRATION", (20, h - 60), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
         # ====== 🎨 E. 空跑路径显示 (新增 + 相机中心十字 = 点胶针) ======
         # 优先处理普通模式下的十字中心显示 (用户请求)
@@ -2251,18 +2259,20 @@ class MainWindow(QWidget):
                 self.log("🚫 操作已取消")
                 return
         # ============================
-        try:
-            from core.path_teach import run_path_teach
-            ok = run_path_teach(cell_index=0, img_path="config/mold2.png")
-            if ok:
-                self.log("✅ 点胶路径已保存到 disp_poly_cell0.npy / disp_dots_cell0.npy，已重新加载")
-                from core.mold_detector import reload_golden_templates
-                reload_golden_templates()
-            else:
-                self.log("⚠ 点胶路径编辑已取消或未保存")
-        except Exception as e:
-            self.log(f"❌ 打开路径示教失败：{e}")
 
+        from core.path_teach import run_path_teach
+        
+        # 暂时默认编辑第 0 个格子
+        cell_idx = 0
+        self.log(f"🧵 启动路径编辑器 (Cell {cell_idx})...")
+        
+        # 运行编辑器 (会阻塞直到窗口关闭)
+        ok = run_path_teach(cell_index=cell_idx)
+        
+        if ok:
+            self.log(f"✅ 路径示教完成 (Cell {cell_idx})")
+        else:
+            self.log("⚠ 路径示教取消或未保存")
     # ================== 点胶任务按钮（占位） ==================
         # 替换原有的 on_calibrate_coords
     def on_calibrate_coords(self):
@@ -2494,22 +2504,70 @@ class MainWindow(QWidget):
 
     def on_virtual_run(self):
         """
-        按钮：相机虚拟跑
-        思路：在当前画面上，把4个产品的点胶路径按顺序“画一遍”，不动机器，只用于视觉检查。
-        当前先占位。
+        按钮：相机空跑 (原虚拟跑)
+        使用相机中心进行路径演示，不加偏移，使用【相机专用】高度参数。
         """
-        if self.last_frame is None:
-            self.log("❌ 当前没有画面，先启动相机或载入示例图再虚拟跑。")
-            return
-        self.log("👁️ 虚拟跑：后续会在画面上动态显示点胶路径（当前为占位）。")
+        # 准备相机高度参数
+        height_params = {
+            'safe_z_cavity': self.cam_safe_z_cavity,
+            'safe_z_product': self.cam_safe_z_product,
+            'work_z': self.cam_work_z,
+            'speed_xy': int(self.feedrate_xy),
+            'speed_z': int(self.feedrate_z)
+        }
+        
+        def save_cam_params(dialog):
+            self.cam_safe_z_cavity = dialog.safe_z_cavity
+            self.cam_safe_z_product = dialog.safe_z_product
+            self.cam_work_z = dialog.work_z
+            # 速度参数是共享的，也顺便更新一下
+            self.feedrate_xy = dialog.speed_xy
+            self.feedrate_z = dialog.speed_z
+            self.save_app_settings()
+
+        self._prepare_dry_run(
+            use_nozzle_offset=False, 
+            title="相机空跑 (Camera Dry Run)",
+            initial_params=height_params,
+            save_callback=save_cam_params
+        )
 
     def on_dry_run(self):
         """
-        按钮：空跑 (流程升级版)
-        1. 识别并计算路径。
-        2. 屏幕绘制绿线（视觉检查）。
-        3. 弹出参数设置窗口 (DryRunDialog)。
-        4. 用户确认后，后台发送指令。
+        按钮：针头空跑
+        使用针头进行路径演示，加上偏移，使用【主界面】高度参数。
+        """
+        # 准备针头高度参数 (直接取主界面值)
+        height_params = {
+            'safe_z_cavity': float(self.safe_z_cavity),
+            'safe_z_product': float(self.safe_z_product),
+            'work_z': float(self.work_z),
+            'speed_xy': int(self.feedrate_xy),
+            'speed_z': int(self.feedrate_z)
+        }
+
+        def save_nozzle_params(dialog):
+            # 更新主界面控件，控件会自动更新变量
+            self.spn_safe_z_cavity.setValue(dialog.safe_z_cavity)
+            self.spn_safe_z_product.setValue(dialog.safe_z_product)
+            self.spn_work_z.setValue(dialog.work_z)
+            self.feedrate_xy = dialog.speed_xy
+            self.feedrate_z = dialog.speed_z
+            self.save_app_settings()
+
+        self._prepare_dry_run(
+            use_nozzle_offset=True, 
+            title="针头空跑 (Nozzle Dry Run)",
+            initial_params=height_params,
+            save_callback=save_nozzle_params
+        )
+
+    def _prepare_dry_run(self, use_nozzle_offset=False, title="空跑", initial_params=None, save_callback=None):
+        """
+        统一的空跑准备逻辑
+        :param use_nozzle_offset: 是否应用针头偏移
+        :param initial_params: 初始高度和速度参数 (dict)
+        :param save_callback: 保存参数的回调函数 (func(dialog))
         """
         # 1. 基础检查
         if self.cam2mach_matrix is None:
@@ -2519,7 +2577,7 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, "无图像", "请先启动相机！")
             return
 
-        # 暂停实时识别，防止干扰
+        # 暂停实时识别
         if self.live_detect:
             self.detect_mold()
 
@@ -2534,7 +2592,7 @@ class MainWindow(QWidget):
                 QMessageBox.warning(self, "未识别", "未识别到模具路径！")
                 return
 
-            # --- B. 视觉反馈：立即画出绿线 ---
+            # --- B. 视觉反馈 ---
             self.dry_run_paths_to_draw = paths_px
             self.show_crosshair = True
             self.render_current_frame()
@@ -2543,18 +2601,23 @@ class MainWindow(QWidget):
             h_img, w_img = img_dry.shape[:2]
             center_x, center_y = w_img / 2, h_img / 2
             
-            # 准备初始参数
-            initial_params = {
-                'safe_z_cavity': float(self.safe_z_cavity),
-                'safe_z_product': float(self.safe_z_product),
-                'work_z': float(self.work_z),
-                'speed_xy': int(self.feedrate_xy),
-                'speed_z': int(self.feedrate_z)
-            }
+            # 如果没有传入参数，就用默认的 (防呆)
+            if initial_params is None:
+                initial_params = {
+                    'safe_z_cavity': float(self.safe_z_cavity),
+                    'safe_z_product': float(self.safe_z_product),
+                    'work_z': float(self.work_z),
+                    'speed_xy': int(self.feedrate_xy),
+                    'speed_z': int(self.feedrate_z)
+                }
             
-            # 获取当前机器坐标作为原点
             origin_pos = self.machine.get_position()
-            nozzle_offset = (self.nozzle_offset_x, self.nozzle_offset_y)
+            
+            # 根据模式决定偏移量
+            if use_nozzle_offset:
+                nozzle_offset = (self.nozzle_offset_x, self.nozzle_offset_y)
+            else:
+                nozzle_offset = (0.0, 0.0)
 
             dialog = DryRunDialog(
                 self, 
@@ -2563,40 +2626,38 @@ class MainWindow(QWidget):
                 origin_pos, 
                 nozzle_offset, 
                 initial_params,
-                (center_x, center_y)
+                (center_x, center_y),
+                is_real_run=False # 空跑都不出胶
             )
+            
+            dialog.setWindowTitle(f"{title} - 参数确认")
 
             if dialog.exec_() == QDialog.Accepted:
                 # --- D. 执行 ---
                 full_script = dialog.get_gcode()
-                self.log("🚀 开始执行空跑 (逐行模式)...")
+                self.log(f"🚀 开始执行【{title}】...")
                 
-                # 1. 拆分指令
                 lines = full_script.split('\n')
-                
-                # 2. 创建逐行 Worker
                 self.dry_run_worker = GCodeLineWorker(self.machine, lines)
                 self.dry_run_worker.finished_signal.connect(self.on_dry_run_finished)
-                self.dry_run_worker.log_signal.connect(self.log) # 连接日志
+                self.dry_run_worker.log_signal.connect(self.log)
                 self.dry_run_worker.start()
                 
-                # 可选：更新界面上的默认值，方便下次使用
-                self.spn_safe_z_cavity.setValue(dialog.safe_z_cavity)
-                self.spn_safe_z_product.setValue(dialog.safe_z_product)
-                self.spn_work_z.setValue(dialog.work_z)
-                self.feedrate_xy = dialog.speed_xy
-                self.feedrate_z = dialog.speed_z
+                # 回调保存参数
+                if save_callback:
+                    save_callback(dialog)
 
-                # 3. 弹出控制面板 (传入 worker)
+                # 弹出控制面板
                 self.dry_run_ctrl_dlg = DryRunControlDialog(self, self.dry_run_worker)
+                self.dry_run_ctrl_dlg.setWindowTitle(f"{title} - 运行中")
                 self.dry_run_ctrl_dlg.exec_()
             else:
-                self.log("🚫 用户取消空跑")
-                self.dry_run_paths_to_draw = []  # 清除绿线
+                self.log(f"🚫 用户取消{title}")
+                self.dry_run_paths_to_draw = []
                 self.render_current_frame()
 
         except Exception as e:
-            self.log(f"❌ 空跑准备出错: {e}")
+            self.log(f"❌ {title}准备出错: {e}")
             import traceback
             traceback.print_exc()
 
@@ -2621,19 +2682,108 @@ class MainWindow(QWidget):
 
     def on_real_run(self):
         """
-        按钮：开始点胶
+        按钮：开始点胶 (真实模式)
+        逻辑与空跑类似，但会生成 VALVE_ON / VALVE_OFF 指令。
         """
+        # 1. 基础检查
         if self.cam2mach_matrix is None:
-            self.log("⚠ 还没有做坐标标定（cam2mach_matrix 为 None），不能开始真实点胶。")
+            QMessageBox.warning(self, "未标定", "请先完成【标定坐标系】！")
             return
-        self.log("💧 开始点胶：将来会真正控制 XYZ 和点胶阀（当前为占位）。")
+        if self.last_frame is None:
+            QMessageBox.warning(self, "无图像", "请先启动相机！")
+            return
+
+        # 暂停实时识别
+        if self.live_detect:
+            self.detect_mold()
+
+        try:
+            # --- A. 图像处理 & 识别 ---
+            from core.mold_detector import get_calculated_paths
+            img_dry = self.last_frame.copy()
+            img_dry = cv2.flip(img_dry, -1)  # 翻转
+
+            paths_px = get_calculated_paths(img_dry)
+            if not paths_px:
+                QMessageBox.warning(self, "未识别", "未识别到模具路径！")
+                return
+
+            # --- B. 视觉反馈 ---
+            self.dry_run_paths_to_draw = paths_px
+            self.show_crosshair = True
+            self.render_current_frame()
+
+            # --- C. 弹出参数对话框 (is_real_run=True) ---
+            h_img, w_img = img_dry.shape[:2]
+            center_x, center_y = w_img / 2, h_img / 2
+            
+            initial_params = {
+                'safe_z_cavity': float(self.safe_z_cavity),
+                'safe_z_product': float(self.safe_z_product),
+                'work_z': float(self.work_z),
+                'speed_xy': int(self.feedrate_xy),
+                'speed_z': int(self.feedrate_z)
+            }
+            
+            origin_pos = self.machine.get_position()
+            nozzle_offset = (self.nozzle_offset_x, self.nozzle_offset_y)
+
+            # 关键：传入 is_real_run=True
+            dialog = DryRunDialog(
+                self, 
+                paths_px, 
+                self.cam2mach_matrix, 
+                origin_pos, 
+                nozzle_offset, 
+                initial_params,
+                (center_x, center_y),
+                is_real_run=True
+            )
+
+            if dialog.exec_() == QDialog.Accepted:
+                # --- D. 执行 ---
+                full_script = dialog.get_gcode()
+                self.log("🚀 开始执行【真实点胶】...")
+                
+                lines = full_script.split('\n')
+                self.dry_run_worker = GCodeLineWorker(self.machine, lines)
+                self.dry_run_worker.finished_signal.connect(self.on_dry_run_finished)
+                self.dry_run_worker.log_signal.connect(self.log)
+                self.dry_run_worker.start()
+                
+                # 保存参数
+                self.spn_safe_z_cavity.setValue(dialog.safe_z_cavity)
+                self.spn_safe_z_product.setValue(dialog.safe_z_product)
+                self.spn_work_z.setValue(dialog.work_z)
+                self.feedrate_xy = dialog.speed_xy
+                self.feedrate_z = dialog.speed_z
+
+                # 弹出控制面板
+                self.dry_run_ctrl_dlg = DryRunControlDialog(self, self.dry_run_worker)
+                self.dry_run_ctrl_dlg.setWindowTitle("点胶控制 (运行中)")
+                self.dry_run_ctrl_dlg.exec_()
+            else:
+                self.log("🚫 用户取消点胶")
+                self.dry_run_paths_to_draw = []
+                self.render_current_frame()
+
+        except Exception as e:
+            self.log(f"❌ 点胶准备出错: {e}")
+            import traceback
+            traceback.print_exc()
 
     def on_test_valve(self):
         """
-        按钮：测试出胶
-        将来会通过 MachineClient 触发继电器 / MOS，控制电磁阀 ON/OFF。
+        按钮：测试出胶 (点动测试)
+        打开阀门 0.5秒 后关闭
         """
-        self.log("🔧 测试出胶：后续会接继电器/MOS 控制信号（当前为占位，只打印日志）。")
+        self.log("🔧 测试出胶：打开阀门 0.5s ...")
+        self.machine.valve_on()
+        # 注意：这里会阻塞 UI 0.5s，简单测试没问题，复杂逻辑建议用 Worker
+        import time
+        time.sleep(0.5)
+        self.machine.valve_off()
+        self.log("🔧 测试出胶：关闭阀门。")
 
     # ================== 相机参数联动 ==================
     def sync_from_camera_to_ui(self):

@@ -6,9 +6,10 @@ from PyQt5.QtWidgets import (
 import numpy as np
 
 class DryRunDialog(QDialog):
-    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center):
+    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False):
         super().__init__(parent)
-        self.setWindowTitle("空跑参数设置 & G-code 预览")
+        self.is_real_run = is_real_run
+        self.setWindowTitle("点胶参数设置 & G-code 预览" if is_real_run else "空跑参数设置 & G-code 预览")
         self.resize(800, 600)
 
         self.paths_px = paths_px
@@ -189,7 +190,9 @@ class DryRunDialog(QDialog):
                     # --- Dot Dispensing ---
                     # Dwell
                     if self.dwell_ms > 0:
+                        if self.is_real_run: gcode_lines.append("VALVE_ON")
                         gcode_lines.append(f"G4 P{self.dwell_ms}")
+                        if self.is_real_run: gcode_lines.append("VALVE_OFF")
                 else:
                     # --- Line Dispensing ---
                     # Line Start Dwell
@@ -197,10 +200,12 @@ class DryRunDialog(QDialog):
                         gcode_lines.append(f"G4 P{self.line_dwell_ms}")
 
                     # 4. Dispense Path
+                    if self.is_real_run: gcode_lines.append("VALVE_ON")
                     for pt in path_machine[1:]:
                         pt_x = pt[0] + self.nozzle_offset_x
                         pt_y = pt[1] + self.nozzle_offset_y
                         gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{self.speed_xy}")
+                    if self.is_real_run: gcode_lines.append("VALVE_OFF")
 
                 # 5. Lift after segment
                 # If this is the LAST segment of the product, lift to Product Safe Z

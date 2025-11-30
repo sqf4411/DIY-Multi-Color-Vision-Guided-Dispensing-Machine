@@ -448,3 +448,18 @@ class MachineClient:
             self.is_homed = True
             self._sync_toolhead_status()
             print("[MachineClient] 已执行 G28 Z。")
+
+    # ------------------------------------------------------------------ #
+    # 阀门控制 (新增)
+    # ------------------------------------------------------------------ #
+    def valve_on(self):
+        """打开点胶阀 (发送 VALVE_ON 宏)"""
+        if not self.connected: return
+        self._post_gcode("VALVE_ON")
+        print("[MachineClient] VALVE_ON")
+
+    def valve_off(self):
+        """关闭点胶阀 (发送 VALVE_OFF 宏)"""
+        if not self.connected: return
+        self._post_gcode("VALVE_OFF")
+        print("[MachineClient] VALVE_OFF")

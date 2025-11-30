@@ -108,6 +108,63 @@ class HomeWorker(QThread):
         # 为了方便，我们在 machine_client 里加了 _x, _y, _z 缓存，但最好还是读一下
         self.finished_signal.emit(self.machine._x, self.machine._y, self.machine._z)
 
+# ================== 线程：异步移动 (解决 UI 卡顿) ==================
+class MovementWorker(QThread):
+    """
+    专门用于执行相对移动 (Jog)，防止 HTTP 请求阻塞主线程
+    """
+    finished_signal = pyqtSignal(float, float, float)
+
+    def __init__(self, machine, dx, dy, dz, f_xy, f_z):
+        super().__init__()
+        self.machine = machine
+        self.dx = dx
+        self.dy = dy
+        self.dz = dz
+        self.f_xy = f_xy
+        self.f_z = f_z
+
+    def run(self):
+        # 执行移动
+        self.machine.move_rel(self.dx, self.dy, self.dz, self.f_xy, self.f_z)
+        # 移动完立即查询一次位置
+        x, y, z = self.machine.get_position()
+        self.finished_signal.emit(x, y, z)
+
+# ================== 线程：后台轮询状态 (解决 UI 卡顿) ==================
+class PollingWorker(QThread):
+    """
+    后台轮询机器位置和探针状态
+    """
+    pos_signal = pyqtSignal(float, float, float)
+    probe_signal = pyqtSignal(str)
+
+    def __init__(self, machine):
+        super().__init__()
+        self.machine = machine
+        self.running = True
+
+    def run(self):
+        while self.running:
+            if getattr(self.machine, "connected", False):
+                try:
+                    # 1. 查询坐标
+                    x, y, z = self.machine.get_position()
+                    self.pos_signal.emit(x, y, z)
+                    
+                    # 2. 查询探针
+                    status = self.machine.query_probe_status()
+                    self.probe_signal.emit(status)
+                except Exception:
+                    pass
+            
+            # 间隔 0.5 秒
+            time.sleep(0.5)
+
+    def stop(self):
+        self.running = False
+        self.wait()
+
 # ================== 线程：自动对刀 ==================
 class AutoToolSetWorker(QThread):
     finished_signal = pyqtSignal(bool, float, str) # success, new_z_base, msg
@@ -130,19 +187,21 @@ class AutoToolSetWorker(QThread):
             self.machine.wait_until_idle()
             time.sleep(0.5)
 
-            # 3. 快速下降到 Z=150 (用户指定起始高度)
-            self.machine.logger(f"🚀 快速下降到 Z=150.0...")
-            self.machine.move_z_absolute(150.0, 600)
+            # 3. 快速下降到 Z=125 (接近对刀仪，节省时间)
+            # 用户提示对刀仪在 116 左右，我们从 125 开始探，留 9mm 余量防止针头变长
+            self.machine.logger(f"🚀 快速下降到 Z=125.0...")
+            self.machine.move_z_absolute(125.0, 600)
             self.machine.wait_until_idle()
             time.sleep(0.5)
 
-            # 4. 第一阶段：粗探 (Z=150 -> 120, step=1.0)
-            self.machine.logger(f"🔍 第一阶段粗探 (Z=150->120, step=1.0)...")
+            # 4. 第一阶段：粗探 (Z=125 -> 115, step=0.5)
+            # 步长 0.5mm，下限 115.0mm (用户对刀仪在 116，行程 1mm，所以 115 是极限)
+            self.machine.logger(f"🔍 第一阶段粗探 (Z=125->115, step=0.5)...")
             trigger_z = None
-            current_z = 150.0
+            current_z = 125.0
             found = False
             
-            while current_z > 120.0:
+            while current_z > 115.0:
                 status = self.machine.query_probe_status()
                 if status == 'triggered':
                     found = True
@@ -150,34 +209,64 @@ class AutoToolSetWorker(QThread):
                     self.machine.logger(f"✅ 粗探触发于 Z={current_z:.2f}")
                     break
                 
-                current_z -= 1.0
+                current_z -= 0.5  # 步长 0.5mm
                 self.machine.move_z_absolute(current_z, 600)
                 self.machine.wait_until_idle()
-                time.sleep(0.1)
-
-            # 5. 第二阶段：精探 (Z=120 -> 0, step=0.1)
-            if not found:
-                self.machine.logger(f"🔍 第二阶段精探 (Z={current_z}->0.0, step=0.1)...")
-                while current_z > 0.0:
-                    status = self.machine.query_probe_status()
-                    if status == 'triggered':
-                        found = True
-                        trigger_z = current_z
-                        self.machine.logger(f"✅ 精探触发于 Z={current_z:.2f}")
-                        break
-                    
-                    current_z -= 0.1
-                    self.machine.move_z_absolute(current_z, 300)
-                    self.machine.wait_until_idle()
-                    time.sleep(0.1)
 
             if not found:
-                self.finished_signal.emit(False, 0.0, "全程未检测到信号")
+                self.machine.logger(f"❌ 粗探失败：已达 Z=115.0mm 仍未触发！")
+                # 失败后立即抬起 Z，防止误操作
+                self.machine.move_z_absolute(self.safe_z, 600)
+                self.finished_signal.emit(False, 0.0, "粗探未检测到信号 (已归位)")
                 return
 
-            # 6. 抬起并完成
+            # 5. 准备精探：抬起 3mm (优化：从 5mm 改为 3mm)
+            self.machine.move_rel(0, 0, 3.0, feedrate_z=600)
+            self.machine.wait_until_idle()
+            time.sleep(0.5)
+
+            # 6. 第二阶段：双次精探 (step=0.1)
+            # 恢复双次探测取平均，保证精度
+            results = []
+            for i in range(2):
+                self.machine.logger(f"🔍 精探第 {i+1} 次 (step=0.1)...")
+                
+                # 既然是手动精探，我们需要从当前位置慢慢往下挪
+                # 当前位置应该是 粗探点 + 3mm (第一次) 或 上次精探点 + 2mm (第二次)
+                start_z = self.machine.get_position()[2]
+                limit_z = start_z - 10.0
+                curr_z = start_z
+                hit = False
+                
+                while curr_z > limit_z:
+                    status = self.machine.query_probe_status()
+                    if status == 'triggered':
+                        hit = True
+                        results.append(curr_z)
+                        self.machine.logger(f"✅ 第 {i+1} 次结果: {curr_z:.3f}")
+                        break
+                    
+                    curr_z -= 0.1
+                    self.machine.move_z_absolute(curr_z, 300) # 慢速 F300
+                    self.machine.wait_until_idle()
+                
+                if not hit:
+                    self.finished_signal.emit(False, 0.0, f"精探第 {i+1} 次失败")
+                    return
+
+                # 抬起 2mm 准备下一次
+                if i < 1:
+                    self.machine.move_rel(0, 0, 2.0, feedrate_z=600)
+                    self.machine.wait_until_idle()
+                    time.sleep(0.2)
+
+            # 7. 计算平均值
+            avg_z = sum(results) / len(results)
+            self.machine.logger(f"📊 双次精探平均值: {avg_z:.3f}")
+
+            # 8. 抬起并完成
             self.machine.move_z_absolute(self.safe_z, 600)
-            self.finished_signal.emit(True, trigger_z, "对刀成功")
+            self.finished_signal.emit(True, avg_z, "对刀成功")
 
         except Exception as e:
             self.finished_signal.emit(False, 0.0, f"对刀过程出错: {e}")
@@ -415,6 +504,8 @@ class MainWindow(QWidget):
         self.map2 = None
         self.calib_size = None # (w, h)
         self._calib_loaded = False
+        
+        self.cam2mach_matrix = None  # ✅ 新增：坐标变换矩阵
 
         # ====== 坐标标定相关 ======
         self.calib_step = 0  # 0=闲置, 10=微调视觉点, 1-4=记录机器点
@@ -510,10 +601,10 @@ class MainWindow(QWidget):
         # 对刀模式：False=正常, True=手动找对刀点
         self.manual_tool_set_mode = False
 
-        # 实时坐标轮询定时器（连接后开启，断开后停止）
-        self.pos_timer = QTimer(self)
-        self.pos_timer.setInterval(500)  # 200ms 刷新一次
-        self.pos_timer.timeout.connect(self.poll_machine_position)
+        # 实时坐标轮询 (使用后台线程，防止卡顿)
+        self.poll_worker = PollingWorker(self.machine)
+        self.poll_worker.pos_signal.connect(self.update_xyz_display)
+        self.poll_worker.probe_signal.connect(self.update_probe_status)
 
         # ==========================================
         # 在所有 UI 元素初始化完成后，调用加载设置
@@ -1095,7 +1186,8 @@ class MainWindow(QWidget):
             self.log(f"🔄 同步坐标成功: X={mx:.2f}, Y={my:.2f}, Z={mz:.2f}")
             self.log(f"✅ 已连接到 Klipper: {full_url}")
             # 开启实时坐标轮询
-            self.pos_timer.start()
+            if not self.poll_worker.isRunning():
+                self.poll_worker.start()
             # ===========================================
         else:
             self.btn_connect_klipper.setText("重试")
@@ -1110,29 +1202,17 @@ class MainWindow(QWidget):
             self.log(f"⚠ 连接 Klipper 失败: {full_url}")
             QMessageBox.critical(self, "连接失败", f"无法连接到 {full_url}\n请检查网络或 IP 设置")
 
-    def poll_machine_position(self):
-        """定时从 Klipper 读取当前位置，并刷新到界面。"""
-        try:
-            if not getattr(self.machine, "connected", False):
-                return
-            x, y, z = self.machine.get_position()
-            self.update_xyz_display(x, y, z)
-            
-            # 始终轮询探针状态 (因为现在是读取变量，开销较小)
-            status = self.machine.query_probe_status()
-            if status == 'triggered':
-                self.lbl_probe_status.setStyleSheet("color: #EF4444; font-size: 20px;") # 红
-                self.lbl_probe_status.setText("● (触发)")
-            elif status == 'open':
-                self.lbl_probe_status.setStyleSheet("color: #10B981; font-size: 20px;") # 绿
-                self.lbl_probe_status.setText("● (未触发)")
-            else:
-                self.lbl_probe_status.setStyleSheet("color: #9CA3AF; font-size: 20px;") # 灰
-                self.lbl_probe_status.setText("● (未知)")
-
-        except Exception:
-            # 这里静默，避免刷屏
-            pass
+    def update_probe_status(self, status):
+        """更新探针状态显示 (由 PollingWorker 触发)"""
+        if status == 'triggered':
+            self.lbl_probe_status.setStyleSheet("color: #EF4444; font-size: 20px;") # 红
+            self.lbl_probe_status.setText("● (触发)")
+        elif status == 'open':
+            self.lbl_probe_status.setStyleSheet("color: #10B981; font-size: 20px;") # 绿
+            self.lbl_probe_status.setText("● (未触发)")
+        else:
+            self.lbl_probe_status.setStyleSheet("color: #9CA3AF; font-size: 20px;") # 灰
+            self.lbl_probe_status.setText("● (未知)")
 
 
     def on_emergency_stop_clicked(self):
@@ -1149,9 +1229,10 @@ class MainWindow(QWidget):
                              "🚨 急停指令已发送！\n机器已停止所有动作。\n\n请排除故障后重启 Klipper 固件。")
 
     # ================== 运动 / 坐标相关 ==================
+    # ================== 运动 / 坐标相关 ==================
     def on_jog(self, axis: str, direction: int):
         """
-        [动态速度版] - 修复：恢复坐标更新和日志打印
+        [异步版] 使用 MovementWorker 执行移动，防止卡顿 UI
         """
         step = float(self.spn_step.value())
         dx = dy = dz = 0.0
@@ -1163,23 +1244,15 @@ class MainWindow(QWidget):
         elif axis == 'z':
             dz = direction * step
 
-        # 1. 执行移动指令 (会更新 machine client 内部的 _x, _y)
-        self.machine.move_rel(dx, dy, dz,
-                              feedrate_xy=self.feedrate_xy,
-                              feedrate_z=self.feedrate_z)
+        # 创建并启动线程
+        self.jog_worker = MovementWorker(self.machine, dx, dy, dz, self.feedrate_xy, self.feedrate_z)
+        self.jog_worker.finished_signal.connect(self.on_jog_finished)
+        self.jog_worker.start()
 
-        # 2. 从 machine client 读取更新后的本地坐标
-        self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
-
-        # 3. 刷新 UI 显示
-        self.update_xyz_display()
-
-        # 4. 打印日志 (原来这部分逻辑是缺失的)
-        self.log(
-            "JOG:",
-            f"dX={dx:.2f}, dY={dy:.2f}, dZ={dz:.2f} -> "
-            f"X={self.pos_x:.2f}, Y={self.pos_y:.2f}, Z={self.pos_z:.2f}"
-        )
+    def on_jog_finished(self, x, y, z):
+        """移动结束后的回调"""
+        self.update_xyz_display(x, y, z)
+        self.log(f"✅ 移动完成: X={x:.2f}, Y={y:.2f}, Z={z:.2f}")
 
     # ====== ✅ 新增：速度/加速度 响应函数 (请复制这一整块) ======
     def on_speed_changed(self):
@@ -1268,8 +1341,8 @@ class MainWindow(QWidget):
         self.update_xyz_display(x, y, z)
         self.log(f"✅ 归位完成: X={x:.2f}, Y={y:.2f}, Z={z:.2f}")
 
-        # 清理线程对象
-        self.home_worker = None
+        # 不要在这里销毁线程对象，否则会报 "QThread: Destroyed while thread is still running"
+        # self.home_worker = None
 
     # ================== 相机相关 ==================
     def start_cam(self):
@@ -1808,6 +1881,18 @@ class MainWindow(QWidget):
         else:
             print(msg)
 
+        # ====== ✅ 新增：加载坐标标定矩阵 (cam2mach_matrix.npy) ======
+        try:
+            if os.path.exists("cam2mach_matrix.npy"):
+                self.cam2mach_matrix = np.load("cam2mach_matrix.npy")
+                self.log("✅ 已加载坐标标定矩阵 cam2mach_matrix.npy")
+            else:
+                self.cam2mach_matrix = None
+                self.log("ℹ️ 未找到坐标标定矩阵，请先执行【标定坐标系】")
+        except Exception as e:
+            self.cam2mach_matrix = None
+            self.log(f"❌ 加载坐标标定矩阵失败: {e}")
+
     # ===== 黄金模板 =====
     def load_golden_templates(self):
         try:
@@ -1915,8 +2000,11 @@ class MainWindow(QWidget):
 
                 # 7. 恢复对刀仪坐标
                 if 'tool_setter_x' in settings and 'tool_setter_y' in settings:
-                    self.tool_setter_x = float(settings['tool_setter_x'])
-                    self.tool_setter_y = float(settings['tool_setter_y'])
+                    tx = settings['tool_setter_x']
+                    ty = settings['tool_setter_y']
+                    if tx is not None and ty is not None:
+                        self.tool_setter_x = float(tx)
+                        self.tool_setter_y = float(ty)
 
             # 可以在日志中记录成功加载
             self.log("✅ 成功加载历史速度/加速度参数。")
@@ -2978,6 +3066,10 @@ class MainWindow(QWidget):
 
     # ================== 其它 ==================
     def closeEvent(self, e):
+        # 停止轮询线程
+        if hasattr(self, 'poll_worker'):
+            self.poll_worker.stop()
+
         self.stop_cam()
         # 【新增】关闭前保存所有参数
         self.save_app_settings()

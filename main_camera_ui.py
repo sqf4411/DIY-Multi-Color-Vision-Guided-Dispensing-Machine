@@ -400,6 +400,11 @@ class MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle("DIY 视觉点胶机控制台 (No30 还原版)")
         self.resize(1280, 800)
+        
+        # 设置图标
+        from PyQt5.QtGui import QIcon
+        if os.path.exists("logo.svg"):
+            self.setWindowIcon(QIcon("logo.svg"))
 
         # 连接日志信号
         self.log_signal.connect(self._log_impl)

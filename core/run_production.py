@@ -1,11 +1,11 @@
 import cv2
 import numpy as np
-from mold_detector import detect_big_mold   # 你需要从 mold_detector 里提取一个“只识别大框”的函数
+from core.mold_detector import detect_big_mold   # 你需要从 mold_detector 里提取一个“只识别大框”的函数
 
 # ---------- 读取黄金模板 ----------
-slot_templates = np.load("slot_templates.npy")     # shape (4,4,2)
-M = np.load("mold_warp_M.npy")                     # 原图 → 拉正
-Minv = np.load("mold_warp_Minv.npy")               # 拉正 → 原图
+slot_templates = np.load("config/slot_templates.npy")     # shape (4,4,2)
+M = np.load("config/mold_warp_M.npy")                     # 原图 → 拉正
+Minv = np.load("config/mold_warp_Minv.npy")               # 拉正 → 原图
 
 def map_slot_boxes_back(boxes_warped):
     """

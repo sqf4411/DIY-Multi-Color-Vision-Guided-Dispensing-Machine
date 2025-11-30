@@ -2,10 +2,10 @@
 # 心理更踏实版：大框四角手动微调工具
 import cv2
 import numpy as np
-from mold_detector import detect_mold_and_cells
+from core.mold_detector import detect_mold_and_cells
 
-IMG_PATH = "mold2.png"              # 黄金基准图
-OUT_PATH = "golden_corners.npy"     # 手动微调后的四角坐标 (4,2)
+IMG_PATH = "config/mold2.png"              # 黄金基准图
+OUT_PATH = "config/golden_corners.npy"     # 手动微调后的四角坐标 (4,2)
 
 WINDOW_MAIN = "角点微调 - 基准图"
 WINDOW_ZOOM = "放大视图"

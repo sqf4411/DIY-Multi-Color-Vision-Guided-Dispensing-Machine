@@ -121,18 +121,18 @@ def _load_golden_and_paths():
     # --- 1. Load Basic Data ---
     if _TEMPLATES is None:
         try:
-            _TEMPLATES = np.load("slot_templates.npy")
-            _WARP_SIZE = np.load("warp_size.npy").astype(int)
+            _TEMPLATES = np.load("config/slot_templates.npy")
+            _WARP_SIZE = np.load("config/warp_size.npy").astype(int)
             print(f"[mold_detector] Golden data loaded: {_TEMPLATES.shape}")
         except:
-            print("[mold_detector] Missing slot_templates.npy")
+            print("[mold_detector] Missing config/slot_templates.npy")
             return
 
     # --- 2. Load Path Files ---
-    if _PATH_POLY is None and os.path.exists("disp_poly_cell0.npy"):
+    if _PATH_POLY is None and os.path.exists("config/disp_poly_cell0.npy"):
         try:
             # Allow pickle to load object arrays
-            arr = np.load("disp_poly_cell0.npy", allow_pickle=True)
+            arr = np.load("config/disp_poly_cell0.npy", allow_pickle=True)
             
             if arr.dtype == object:
                 # New format: list of polylines
@@ -147,17 +147,17 @@ def _load_golden_and_paths():
         except:
             pass
 
-    if _PATH_DOTS is None and os.path.exists("disp_dots_cell0.npy"):
+    if _PATH_DOTS is None and os.path.exists("config/disp_dots_cell0.npy"):
         try:
-            arr = np.load("disp_dots_cell0.npy").astype(np.float32)
+            arr = np.load("config/disp_dots_cell0.npy").astype(np.float32)
             _PATH_DOTS = arr if arr.size > 0 else None
         except:
             pass
 
     # --- 3. Key Logic: Extract Core Template ---
-    if _CORE_TEMPLATE is None and os.path.exists("mold2.png"):
+    if _CORE_TEMPLATE is None and os.path.exists("config/mold2.png"):
         try:
-            gold_raw = cv2.imread("mold2.png", cv2.IMREAD_GRAYSCALE)
+            gold_raw = cv2.imread("config/mold2.png", cv2.IMREAD_GRAYSCALE)
             if gold_raw is None: return
 
             # 3.1 Find big frame on golden image and correct perspective

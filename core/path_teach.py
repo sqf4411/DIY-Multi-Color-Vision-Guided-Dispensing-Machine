@@ -18,13 +18,13 @@ def order_points(pts: np.ndarray) -> np.ndarray:
 
 
 def run_path_teach(cell_index: int = 0,
-                   img_path: str = "mold2.png") -> bool:
+                   img_path: str = "config/mold2.png") -> bool:
     """在黄金示教后的某一个小格子中编辑点胶路径。"""
 
     # ---------- 0. 读取黄金模板 ----------
     try:
-        templates = np.load("slot_templates.npy")          # (4,4,2) in 黄金
-        warp_size = np.load("warp_size.npy").astype(int)   # [W,H]
+        templates = np.load("config/slot_templates.npy")          # (4,4,2) in 黄金
+        warp_size = np.load("config/warp_size.npy").astype(int)   # [W,H]
     except Exception as e:
         print("❌ 需要先完成黄金示教，未找到 slot_templates.npy / warp_size.npy：", e)
         return False
@@ -118,8 +118,8 @@ def run_path_teach(cell_index: int = 0,
     disp_h = int(maxH * scale)
 
     # ---------- 4. 尝试加载小格坐标下的历史路径 ----------
-    poly_file = f"cell_{cell_index}_polylines.npy"
-    dots_file = f"cell_{cell_index}_dots.npy"
+    poly_file = f"config/cell_{cell_index}_polylines.npy"
+    dots_file = f"config/cell_{cell_index}_dots.npy"
 
     polylines = []  # list of (N,2)
     dots = []       # list of (2,)
@@ -286,7 +286,7 @@ def run_path_teach(cell_index: int = 0,
                         poly_disp_list.append(seg_gold)
                 
                 # 保存为对象数组 (允许不规则形状)
-                np.save(f"disp_poly_cell{cell_index}.npy", np.array(poly_disp_list, dtype=object))
+                np.save(f"config/disp_poly_cell{cell_index}.npy", np.array(poly_disp_list, dtype=object))
 
                 if dots:
                     dots_arr = np.array(dots, dtype=np.float32)
@@ -294,7 +294,7 @@ def run_path_teach(cell_index: int = 0,
                 else:
                     dots_disp = np.zeros((0, 2), dtype=np.float32)
 
-                np.save(f"disp_dots_cell{cell_index}.npy", dots_disp)
+                np.save(f"config/disp_dots_cell{cell_index}.npy", dots_disp)
                 print(f"✅ 已保存显示路径 disp_poly_cell{cell_index}.npy / disp_dots_cell{cell_index}.npy")
             except Exception as e:
                 print("⚠ 生成显示路径失败：", e)

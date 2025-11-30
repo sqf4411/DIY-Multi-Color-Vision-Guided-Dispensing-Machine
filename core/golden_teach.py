@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from mold_detector import detect_mold_and_cells
+from core.mold_detector import detect_mold_and_cells
 
 WINDOW_NAME = "黄金示教"
 
@@ -93,7 +93,7 @@ def run_golden_teach():
     start_point = (0, 0)
     current_point = (0, 0)
 
-    img = cv2.imread("mold2.png", cv2.IMREAD_GRAYSCALE)
+    img = cv2.imread("config/mold2.png", cv2.IMREAD_GRAYSCALE)
     if img is None:
         print("❌ 无法读取 mold2.png")
         return False
@@ -170,8 +170,8 @@ def run_golden_teach():
                 # (Optional, but print is visible in console)
                 continue
 
-            np.save("slot_templates.npy", np.array(slot_boxes))
-            np.save("warp_size.npy", np.array([W, H], dtype=np.int32))
+            np.save("config/slot_templates.npy", np.array(slot_boxes))
+            np.save("config/warp_size.npy", np.array([W, H], dtype=np.int32))
 
             print("✅ 已保存 slot_templates.npy 和 warp_size.npy")
             cv2.destroyAllWindows()

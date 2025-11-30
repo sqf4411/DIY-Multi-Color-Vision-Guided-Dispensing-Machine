@@ -7,7 +7,7 @@ import json
 import time
 import cv2
 import numpy as np
-from machine_client import MachineClient
+from core.machine_client import MachineClient
 
 def add_mvs_dll_path():
     dll_dir = os.getenv("MVS_DLL_DIR")
@@ -38,8 +38,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QImage, QPixmap
 
 # 你的检测函数
-from mold_detector import detect_mold_and_cells, reload_golden_templates
-from dry_run_dialog import DryRunDialog, DryRunControlDialog
+from core.mold_detector import detect_mold_and_cells, reload_golden_templates
+from core.dry_run_dialog import DryRunDialog, DryRunControlDialog
 
 # ---- 按你的实际路径修改 ----
 sys.path.append(r"H:\MVS\Development\Samples\Python\MvImport")
@@ -389,7 +389,7 @@ class ImageLabel(QLabel):
 import json # 确保 json 库已经导入
 import os   # 确保 os 库已经导入
 # 这个文件将用于保存速度、加速度等应用参数
-SETTINGS_FILE = "app_settings.json"
+SETTINGS_FILE = "config/app_settings.json"
 # ==========================================
 # ================== 主窗口 ==================
 class MainWindow(QWidget):
@@ -485,7 +485,7 @@ class MainWindow(QWidget):
         """)
 
         self.cam = None
-        self.config_path = "params.json"  # ✅ 新增：定义参数文件路径
+        self.config_path = "config/params.json"  # ✅ 新增：定义参数文件路径
         self.thread = None
         self.last_frame = None
         self.freeze_display = False  # 是否冻结画面
@@ -758,6 +758,21 @@ class MainWindow(QWidget):
 
         conn_layout.addStretch()  # ✅ 关键修改：弹簧放在这里，把后面的东西顶到最右边
 
+        # 5. 相机控制按钮 (移到这里)
+        self.btn_start = QPushButton("启动相机")
+        self.btn_stop = QPushButton("停止相机")
+        self.btn_stop.setEnabled(False)
+
+        # 样式微调，让它们看起来协调
+        for btn in [self.btn_start, self.btn_stop]:
+            btn.setMinimumHeight(28)
+            btn.setFixedWidth(80)
+
+        conn_layout.addWidget(self.btn_start)
+        conn_layout.addSpacing(5)
+        conn_layout.addWidget(self.btn_stop)
+        conn_layout.addSpacing(10) # 与连接按钮隔开
+
         conn_layout.addWidget(self.btn_connect_klipper)
         conn_layout.addSpacing(5)  # 两个按钮之间留一点小缝隙，不要贴太死
         conn_layout.addWidget(self.btn_estop)
@@ -769,8 +784,7 @@ class MainWindow(QWidget):
 
 
         # ---- 控制按钮 ----
-        self.btn_start = QPushButton("启动相机")
-        self.btn_stop = QPushButton("停止相机")
+
         self.btn_save = QPushButton("保存图片")
         self.btn_detect = QPushButton("识别模具")
         self.btn_golden = QPushButton("黄金示教")
@@ -788,13 +802,12 @@ class MainWindow(QWidget):
         self.btn_real_run = QPushButton("开始点胶")
         self.btn_test_valve = QPushButton("测试出胶")
 
-        self.btn_stop.setEnabled(False)
+
         self.btn_save.setEnabled(False)
 
         # 第一排：相机 & 示教
         btn_layout = QHBoxLayout()
-        btn_layout.addWidget(self.btn_start)
-        btn_layout.addWidget(self.btn_stop)
+
         btn_layout.addWidget(self.btn_save)
         btn_layout.addWidget(self.btn_detect)
         btn_layout.addWidget(self.btn_golden)
@@ -1357,213 +1370,9 @@ class MainWindow(QWidget):
         # self.home_worker = None
 
     # ================== 相机相关 ==================
-    def start_cam(self):
-        if self.cam:
-            return
 
-        deviceList = MV_CC_DEVICE_INFO_LIST()
-        MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, deviceList)
 
-        if deviceList.nDeviceNum == 0:
-            self.log("No camera found")
-            return
 
-        dev_info = ctypes.cast(
-            deviceList.pDeviceInfo[0], ctypes.POINTER(MV_CC_DEVICE_INFO)
-        ).contents
-
-        self.cam = MvCamera()
-        self.cam.MV_CC_CreateHandle(dev_info)
-        self.cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
-
-        self.cam.MV_CC_SetEnumValue("ExposureAuto", 0)
-        self.cam.MV_CC_SetEnumValue("GainAuto", 0)
-        self.cam.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_Mono8)
-
-        try:
-            self.cam.MV_CC_SetBoolValue("GammaEnable", True)
-        except:
-            pass
-
-        self.read_param_ranges()
-        self.read_cam_info()
-        self.apply_saved_params()
-
-        self.cam.MV_CC_StartGrabbing()
-        self.sync_from_camera_to_ui()
-
-        self.thread = CameraThread(self.cam)
-        self.thread.frame_signal.connect(self.update_image)
-        self.thread.start()
-
-        self.btn_start.setEnabled(False)
-        self.btn_stop.setEnabled(True)
-        self.btn_save.setEnabled(True)
-
-    def stop_cam(self):
-        if not self.cam:
-            return
-
-        if self.thread:
-            self.thread.stop()
-            self.thread.wait()
-            self.thread = None
-
-        self.cam.MV_CC_StopGrabbing()
-        self.cam.MV_CC_CloseDevice()
-        self.cam.MV_CC_DestroyHandle()
-        self.cam = None
-
-        self.label.setText("已停止")
-        self.btn_start.setEnabled(True)
-        self.btn_stop.setEnabled(False)
-        self.btn_save.setEnabled(False)
-
-        self.lbl_cam_res.setText("-")
-        self.lbl_cam_fps.setText("-")
-        self.lbl_cam_fmt.setText("-")
-
-    def read_param_ranges(self):
-        # 曝光
-        try:
-            v = MVCC_FLOATVALUE()
-            self.cam.MV_CC_GetFloatValue("ExposureTime", v)
-            self.exp_min = max(self.exp_min, v.fMin)
-            self.exp_max = min(self.exp_max, v.fMax)
-        except:
-            pass
-
-        # 增益
-        try:
-            v = MVCC_FLOATVALUE()
-            self.cam.MV_CC_GetFloatValue("Gain", v)
-            self.gain_min = max(self.gain_min, v.fMin)
-            self.gain_max = min(self.gain_max, v.fMax)
-        except:
-            pass
-
-        # Gamma
-        try:
-            v = MVCC_FLOATVALUE()
-            self.cam.MV_CC_GetFloatValue("Gamma", v)
-            self.gamma_min = max(self.gamma_min, v.fMin)
-            self.gamma_max = min(self.gamma_max, v.fMax)
-        except:
-            pass
-
-        self.spn_exp.setRange(self.exp_min, self.exp_max)
-        self.spn_gain.setRange(self.gain_min, self.gain_max)
-        self.spn_gamma.setRange(self.gamma_min, self.gamma_max)
-
-    def read_cam_info(self):
-        if not self.cam:
-            return
-
-        try:
-            w_val = MVCC_INTVALUE()
-            h_val = MVCC_INTVALUE()
-            self.cam.MV_CC_GetIntValue("Width", w_val)
-            self.cam.MV_CC_GetIntValue("Height", h_val)
-            self.lbl_cam_res.setText(f"{w_val.nCurValue} x {h_val.nCurValue}")
-        except:
-            self.lbl_cam_res.setText("-")
-
-        try:
-            fps_val = MVCC_FLOATVALUE()
-            ret = self.cam.MV_CC_GetFloatValue("AcquisitionFrameRate", fps_val)
-            if ret != 0:
-                ret = self.cam.MV_CC_GetFloatValue("ResultingFrameRate", fps_val)
-            if ret == 0:
-                self.lbl_cam_fps.setText(f"{fps_val.fCurValue:.2f} fps")
-            else:
-                self.lbl_cam_fps.setText("-")
-        except:
-            self.lbl_cam_fps.setText("-")
-
-        try:
-            enum_val = MVCC_ENUMVALUE()
-            ret = self.cam.MV_CC_GetEnumValue("PixelFormat", enum_val)
-            if ret == 0:
-                if enum_val.nCurValue == PixelType_Gvsp_Mono8:
-                    self.lbl_cam_fmt.setText("Mono8")
-                else:
-                    self.lbl_cam_fmt.setText(f"0x{enum_val.nCurValue:X}")
-            else:
-                self.lbl_cam_fmt.setText("-")
-        except:
-            self.lbl_cam_fmt.setText("-")
-
-    def load_saved_params(self):
-        try:
-            if os.path.exists(self.config_path):
-                with open(self.config_path, "r", encoding="utf-8") as f:
-                    self.saved_params = json.load(f)
-            else:
-                self.saved_params = {}
-        except Exception as e:
-            self.log("读取参数文件失败：", e)
-            self.saved_params = {}
-
-    def init_calibration(self):
-        """从 calib 目录加载相机标定参数（camera_matrix.npy / dist_coeffs.npy）"""
-        try:
-            calib_dir = os.path.join(os.path.dirname(__file__), "calib")
-            cam_path = os.path.join(calib_dir, "camera_matrix.npy")
-            dist_path = os.path.join(calib_dir, "dist_coeffs.npy")
-
-            if os.path.exists(cam_path) and os.path.exists(dist_path):
-                self.K = np.load(cam_path)
-                self.D = np.load(dist_path)
-                self._calib_loaded = True
-                msg = "✅ 已加载标定参数 camera_matrix.npy / dist_coeffs.npy"
-            else:
-                self._calib_loaded = False
-                msg = "⚠ calib 目录下未找到 camera_matrix.npy 或 dist_coeffs.npy，将使用原始图像"
-
-        except Exception as e:
-            self._calib_loaded = False
-            msg = f"⚠ 加载标定参数失败：{e}"
-
-        if hasattr(self, "log_box"):
-            self.log(msg)
-        else:
-            print(msg)
-
-    # ===== 黄金模板 =====
-    def load_golden_templates(self):
-        try:
-            if os.path.exists("slot_templates.npy"):
-                self.slot_templates = np.load("slot_templates.npy")
-                self.log(f"✅ 黄金模板 slot_templates.npy 加载成功，形状：{self.slot_templates.shape}")
-            else:
-                self.log("⚠ 未找到 slot_templates.npy，暂时无法做黄金对位")
-        except Exception as e:
-            self.log("加载黄金模板失败：", e)
-            self.slot_templates = None
-
-    def apply_saved_params(self):
-        if not self.cam or not self.saved_params:
-            return
-
-        self.log(f"🔄 正在应用保存的相机参数: {self.saved_params}")
-        if "ExposureTime" in self.saved_params:
-            self.set_exposure(float(self.saved_params["ExposureTime"]))
-        if "Gain" in self.saved_params:
-            self.set_gain(float(self.saved_params["Gain"]))
-        if "Gamma" in self.saved_params:
-            self.set_gamma(float(self.saved_params["Gamma"]))
-
-    def save_params(self):
-        try:
-            data = {
-                "ExposureTime": float(self.spn_exp.value()),
-                "Gain": float(self.spn_gain.value()),
-                "Gamma": float(self.spn_gamma.value())
-            }
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            self.log("保存参数失败：", e)
 
     # ---- 一键对刀（占位） ----
     def on_tool_probe_clicked(self):
@@ -1635,6 +1444,7 @@ class MainWindow(QWidget):
             self.log(f"   ΔX: {delta_x:.3f} mm")
             self.log(f"   ΔY: {delta_y:.3f} mm")
 
+            self.save_app_settings()  # ✅ 保存参数
             QMessageBox.information(self, "完成", "针头偏移量已计算并保存！")
 
             # 流程结束，恢复状态
@@ -1871,7 +1681,7 @@ class MainWindow(QWidget):
     def init_calibration(self):
         """从 calib 目录加载相机标定参数（camera_matrix.npy / dist_coeffs.npy）"""
         try:
-            calib_dir = os.path.join(os.path.dirname(__file__), "calib")
+            calib_dir = os.path.join(os.path.dirname(__file__), "config", "calib")
             cam_path = os.path.join(calib_dir, "camera_matrix.npy")
             dist_path = os.path.join(calib_dir, "dist_coeffs.npy")
 
@@ -1882,7 +1692,7 @@ class MainWindow(QWidget):
                 msg = "✅ 已加载标定参数 camera_matrix.npy / dist_coeffs.npy"
             else:
                 self._calib_loaded = False
-                msg = "⚠ calib 目录下未找到 camera_matrix.npy 或 dist_coeffs.npy，将使用原始图像"
+                msg = "⚠ config/calib 目录下未找到 camera_matrix.npy 或 dist_coeffs.npy，将使用原始图像"
 
         except Exception as e:
             self._calib_loaded = False
@@ -1895,8 +1705,8 @@ class MainWindow(QWidget):
 
         # ====== ✅ 新增：加载坐标标定矩阵 (cam2mach_matrix.npy) ======
         try:
-            if os.path.exists("cam2mach_matrix.npy"):
-                self.cam2mach_matrix = np.load("cam2mach_matrix.npy")
+            if os.path.exists("config/cam2mach_matrix.npy"):
+                self.cam2mach_matrix = np.load("config/cam2mach_matrix.npy")
                 self.log("✅ 已加载坐标标定矩阵 cam2mach_matrix.npy")
             else:
                 self.cam2mach_matrix = None
@@ -1908,11 +1718,11 @@ class MainWindow(QWidget):
     # ===== 黄金模板 =====
     def load_golden_templates(self):
         try:
-            if os.path.exists("slot_templates.npy"):
-                self.slot_templates = np.load("slot_templates.npy")
-                self.log(f"✅ 黄金模板 slot_templates.npy 加载成功，形状：{self.slot_templates.shape}")
+            if os.path.exists("config/slot_templates.npy"):
+                self.slot_templates = np.load("config/slot_templates.npy")
+                self.log(f"✅ 黄金模板 config/slot_templates.npy 加载成功，形状：{self.slot_templates.shape}")
             else:
-                self.log("⚠ 未找到 slot_templates.npy，暂时无法做黄金对位")
+                self.log("⚠ 未找到 config/slot_templates.npy，暂时无法做黄金对位")
         except Exception as e:
             self.log("加载黄金模板失败：", e)
             self.slot_templates = None
@@ -1939,13 +1749,6 @@ class MainWindow(QWidget):
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             self.log("保存参数失败：", e)
-
-    # ====================================================================
-    # 应用参数持久化 (速度/加速度)
-    # ====================================================================
-    SETTINGS_FILE = "app_settings.json"  # 在文件开头定义这个常量
-
-    # ... (在 class MainWindow(QWidget) 内部) ...
 
     def load_app_settings(self):
         """加载应用设置：速度和加速度"""
@@ -2018,6 +1821,15 @@ class MainWindow(QWidget):
                         self.tool_setter_x = float(tx)
                         self.tool_setter_y = float(ty)
 
+                # 8. 恢复针头偏移
+                if 'nozzle_offset_x' in settings and 'nozzle_offset_y' in settings:
+                    nx = settings['nozzle_offset_x']
+                    ny = settings['nozzle_offset_y']
+                    if nx is not None and ny is not None:
+                        self.nozzle_offset_x = float(nx)
+                        self.nozzle_offset_y = float(ny)
+                        self.update_nozzle_offset_display()
+
             # 可以在日志中记录成功加载
             self.log("✅ 成功加载历史速度/加速度参数。")
 
@@ -2030,13 +1842,15 @@ class MainWindow(QWidget):
             'feedrate_xy': self.feedrate_xy,
             'feedrate_z': self.feedrate_z,
             'accel': self.accel,
-            'accel': self.accel,
+
             'safe_z_cavity': self.safe_z_cavity,
             'safe_z_product': self.safe_z_product,
             'work_z': self.work_z,
             'z_base': self.z_base,
             'tool_setter_x': self.tool_setter_x,
             'tool_setter_y': self.tool_setter_y,
+            'nozzle_offset_x': self.nozzle_offset_x,
+            'nozzle_offset_y': self.nozzle_offset_y,
         }
 
         try:
@@ -2186,7 +2000,7 @@ class MainWindow(QWidget):
             
             # 每 3 帧检测一次 (降低 66% 负荷)
             if self._detect_frame_count % 3 == 0:
-                from mold_detector import detect_mold_and_cells
+                from core.mold_detector import detect_mold_and_cells
                 detected_img, _, _, _ = detect_mold_and_cells(img)
                 self._last_detected_img = detected_img
                 vis_img = detected_img
@@ -2321,17 +2135,17 @@ class MainWindow(QWidget):
             if msg_box.clickedButton() == btn_use_latest:
                 try:
                     # 1. 备份旧的
-                    if os.path.exists("mold2.png"):
-                        shutil.copy("mold2.png", "mold2.bak")
-                        self.log("ℹ️ 已备份原 mold2.png 为 mold2.bak")
+                    if os.path.exists("config/mold2.png"):
+                        shutil.copy("config/mold2.png", "config/mold2.bak")
+                        self.log("ℹ️ 已备份原 config/mold2.png 为 config/mold2.bak")
 
                     # 2. 读取最新图片并旋转 180 度
                     img_latest = cv2.imread(candidate_path)
                     if img_latest is not None:
                         # 旋转 180 度 (flip -1)
                         img_rotated = cv2.flip(img_latest, -1)
-                        cv2.imwrite("mold2.png", img_rotated)
-                        self.log(f"✅ 已旋转180度并更新 mold2.png 为: {filename}")
+                        cv2.imwrite("config/mold2.png", img_rotated)
+                        self.log(f"✅ 已旋转180度并更新 config/mold2.png 为: {filename}")
                     else:
                         self.log("❌ 读取最新图片失败")
                         self.freeze_display = False
@@ -2341,19 +2155,19 @@ class MainWindow(QWidget):
                     self.freeze_display = False
                     return
             elif msg_box.clickedButton() == btn_use_mold2:
-                self.log("ℹ️ 继续使用现有 mold2.png")
+                self.log("ℹ️ 继续使用现有 config/mold2.png")
             else:
                 self.log("🚫 操作已取消")
                 self.freeze_display = False
                 return
         # ============================
 
-        if not os.path.exists("mold2.png"):
-            self.log("❌ 未找到 mold2.png，请先准备好这张图片")
+        if not os.path.exists("config/mold2.png"):
+            self.log("❌ 未找到 config/mold2.png，请先准备好这张图片")
             self.freeze_display = False
             return
 
-        from golden_teach import run_golden_teach
+        from core.golden_teach import run_golden_teach
         ok = run_golden_teach()
 
         self.freeze_display = False
@@ -2409,17 +2223,17 @@ class MainWindow(QWidget):
             if msg_box.clickedButton() == btn_use_latest:
                 try:
                     # 1. 备份旧的
-                    if os.path.exists("mold2.png"):
-                        shutil.copy("mold2.png", "mold2.bak")
-                        self.log("ℹ️ 已备份原 mold2.png 为 mold2.bak")
+                    if os.path.exists("config/mold2.png"):
+                        shutil.copy("config/mold2.png", "config/mold2.bak")
+                        self.log("ℹ️ 已备份原 config/mold2.png 为 config/mold2.bak")
 
                     # 2. 读取最新图片并旋转 180 度
                     img_latest = cv2.imread(candidate_path)
                     if img_latest is not None:
                         # 旋转 180 度 (flip -1)
                         img_rotated = cv2.flip(img_latest, -1)
-                        cv2.imwrite("mold2.png", img_rotated)
-                        self.log(f"✅ 已旋转180度并更新 mold2.png 为: {filename}")
+                        cv2.imwrite("config/mold2.png", img_rotated)
+                        self.log(f"✅ 已旋转180度并更新 config/mold2.png 为: {filename}")
                     else:
                         self.log("❌ 读取最新图片失败")
                         return
@@ -2427,17 +2241,17 @@ class MainWindow(QWidget):
                     self.log(f"❌ 处理图片失败: {e}")
                     return
             elif msg_box.clickedButton() == btn_use_mold2:
-                self.log("ℹ️ 继续使用现有 mold2.png")
+                self.log("ℹ️ 继续使用现有 config/mold2.png")
             else:
                 self.log("🚫 操作已取消")
                 return
         # ============================
         try:
-            from path_teach import run_path_teach
-            ok = run_path_teach(cell_index=0, img_path="mold2.png")
+            from core.path_teach import run_path_teach
+            ok = run_path_teach(cell_index=0, img_path="config/mold2.png")
             if ok:
                 self.log("✅ 点胶路径已保存到 disp_poly_cell0.npy / disp_dots_cell0.npy，已重新加载")
-                from mold_detector import reload_golden_templates
+                from core.mold_detector import reload_golden_templates
                 reload_golden_templates()
             else:
                 self.log("⚠ 点胶路径编辑已取消或未保存")
@@ -2463,13 +2277,13 @@ class MainWindow(QWidget):
             # =========================================
 
             # 1. 使用翻转后的图去识别
-            from mold_detector import detect_mold_and_cells
+            from core.mold_detector import detect_mold_and_cells
             _, big_box, _, _ = detect_mold_and_cells(img_to_detect)
 
             if big_box is not None:
                 self.calib_vision_pts = big_box.astype(np.float32)
                 # 排序: 左上, 右上, 右下, 左下
-                from mold_detector import _order_points
+                from core.mold_detector import _order_points
                 self.calib_vision_pts = _order_points(self.calib_vision_pts)
                 self.log("✅ 自动识别到大框，进入微调模式。")
             elif os.path.exists("golden_corners.npy"):
@@ -2706,7 +2520,7 @@ class MainWindow(QWidget):
 
         try:
             # --- A. 图像处理 & 识别 ---
-            from mold_detector import get_calculated_paths
+            from core.mold_detector import get_calculated_paths
             img_dry = self.last_frame.copy()
             img_dry = cv2.flip(img_dry, -1)  # 翻转
 
@@ -3121,8 +2935,16 @@ class MainWindow(QWidget):
         self.save_app_settings()
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    w = MainWindow()
-    w.resize(1600, 950)   # 或者 1800,1000 自己看感觉
-    w.show()
-    sys.exit(app.exec_())
+    print("🚀 App Starting...")
+    try:
+        app = QApplication(sys.argv)
+        w = MainWindow()
+        w.resize(1600, 950)
+        w.show()
+        print("✅ App Window Shown. Entering Event Loop...")
+        sys.exit(app.exec_())
+    except Exception as e:
+        print(f"❌ Critical Error: {e}")
+        import traceback
+        traceback.print_exc()
+        input("Press Enter to exit...")

@@ -398,7 +398,7 @@ class MainWindow(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DIY 视觉点胶机控制台 (No30 还原版)")
+        self.setWindowTitle("DIY多色视觉点胶机控制台")
         self.resize(1280, 800)
         
         # 设置图标
@@ -2941,8 +2941,20 @@ class MainWindow(QWidget):
 
 if __name__ == "__main__":
     print("🚀 App Starting...")
+    
+    # 1. 告诉 Windows 这是一个独立的应用程序，以便在任务栏显示图标
+    if sys.platform == 'win32':
+        myappid = 'mycompany.myproduct.subproduct.version' # 任意字符串
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
     try:
         app = QApplication(sys.argv)
+        
+        # 2. 给 QApplication 也设置图标
+        from PyQt5.QtGui import QIcon
+        if os.path.exists("logo.svg"):
+            app.setWindowIcon(QIcon("logo.svg"))
+            
         w = MainWindow()
         w.resize(1600, 950)
         w.show()

@@ -5,7 +5,8 @@ import cv2
 import numpy as np
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox, 
-    QSpinBox, QPushButton, QGroupBox, QFormLayout, QMessageBox, QTextEdit
+    QSpinBox, QPushButton, QGroupBox, QFormLayout, QMessageBox, QTextEdit,
+    QProgressBar
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 
@@ -28,6 +29,14 @@ class BatchWorker(QThread):
         self.running = True
         self.paused = False
 
+    def pause(self):
+        self.paused = True
+        self.log_signal.emit("⏸ 已暂停...")
+
+    def resume(self):
+        self.paused = False
+        self.log_signal.emit("▶ 继续运行...")
+
     def run(self):
         rows = self.cfg['rows']
         cols = self.cfg['cols']
@@ -47,6 +56,11 @@ class BatchWorker(QThread):
         title = mode_names.get(self.mode, "未知模式")
 
         self.log_signal.emit(f"🚀 开始【{title}】：{rows}x{cols}，共 {total} 个")
+        
+        # 0. 开启十字光标 (方便观察)
+        # 注意：主界面使用的是 show_center_crosshair
+        self.mw.show_center_crosshair = True
+        self.mw.render_current_frame() # 立即刷新
 
         # 1. 确保 Z 轴抬起 (根据模式选择安全高度)
         if self.mode == 'camera_dry':
@@ -62,6 +76,13 @@ class BatchWorker(QThread):
                 if not self.running:
                     self.finished_signal.emit(False, "用户停止")
                     return
+
+                # 检查暂停
+                while self.paused:
+                    if not self.running:
+                        self.finished_signal.emit(False, "用户停止")
+                        return
+                    self.msleep(100)
 
                 count += 1
                 self.progress_signal.emit(count, total)
@@ -109,7 +130,18 @@ class BatchWorker(QThread):
                     
                     # 逐行发送
                     for line in gcode_lines:
-                        if not self.running: return
+                        # 1. 检查停止
+                        if not self.running:
+                            self.finished_signal.emit(False, "用户停止")
+                            return
+
+                        # 2. 检查暂停 (立即生效)
+                        while self.paused:
+                            if not self.running:
+                                self.finished_signal.emit(False, "用户停止")
+                                return
+                            self.msleep(100)
+
                         self.mw.machine._post_gcode(line)
                     
                     self.mw.machine.wait_until_idle()
@@ -275,9 +307,16 @@ class BatchRunDialog(QDialog):
         form_z = QFormLayout()
         
         # 相机空跑高度
+        # 相机空跑高度
+        # 智能默认值：如果主界面参数看起来是默认值(<=20.0)，但 Z 基准很大(>100)，则使用 Z 基准
+        # 这样可以防止用户忘记设置参数时机器撞向底部
+        def_cam_safe = self.mw.cam_safe_z_cavity
+        if def_cam_safe <= 20.0 and self.mw.z_base > 100:
+            def_cam_safe = self.mw.z_base
+            
         self.spn_cam_safe_cavity = QDoubleSpinBox()
         self.spn_cam_safe_cavity.setRange(-500, 500)
-        self.spn_cam_safe_cavity.setValue(self.mw.cam_safe_z_cavity)
+        self.spn_cam_safe_cavity.setValue(def_cam_safe)
         
         self.spn_cam_safe_product = QDoubleSpinBox()
         self.spn_cam_safe_product.setRange(-500, 500)
@@ -326,6 +365,14 @@ class BatchRunDialog(QDialog):
         self.log_box.setReadOnly(True)
         layout.addWidget(self.log_box)
 
+        # --- 3.5 进度条 ---
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%v / %m")
+        layout.addWidget(self.progress_bar)
+
         # --- 4. 按钮 ---
         btn_layout = QHBoxLayout()
         self.btn_save = QPushButton("保存配置")
@@ -342,6 +389,17 @@ class BatchRunDialog(QDialog):
         self.btn_start.setStyleSheet("background-color: #10B981; color: white; font-weight: bold; font-size: 14px;")
         self.btn_start.clicked.connect(lambda: self.on_start('real'))
         
+        self.btn_pause = QPushButton("暂停")
+        self.btn_pause.setStyleSheet("background-color: #F59E0B; color: white; font-weight: bold;")
+        self.btn_pause.clicked.connect(self.on_pause)
+        self.btn_pause.setEnabled(False)
+
+        self.btn_resume = QPushButton("继续")
+        self.btn_resume.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold;")
+        self.btn_resume.clicked.connect(self.on_resume)
+        self.btn_resume.setEnabled(False)
+        self.btn_resume.setVisible(False) # 初始隐藏
+
         self.btn_stop = QPushButton("停止")
         self.btn_stop.setStyleSheet("background-color: #EF4444; color: white;")
         self.btn_stop.clicked.connect(self.on_stop)
@@ -352,6 +410,8 @@ class BatchRunDialog(QDialog):
         btn_layout.addWidget(self.btn_cam_dry)
         btn_layout.addWidget(self.btn_nozzle_dry)
         btn_layout.addWidget(self.btn_start)
+        btn_layout.addWidget(self.btn_pause)
+        btn_layout.addWidget(self.btn_resume)
         btn_layout.addWidget(self.btn_stop)
         
         layout.addLayout(btn_layout)
@@ -382,18 +442,74 @@ class BatchRunDialog(QDialog):
 
     def on_start(self, mode):
         cfg = self.get_config()
+        
+        # ====== 安全检查 ======
+        # 1. Z 基准检查 (防止原点在底部时撞车)
+        if self.mw.z_base > 100:
+            safe_z = cfg['cam_safe_z_cavity'] if 'camera' in mode else cfg['nozzle_safe_z_cavity']
+            if safe_z < 50:
+                ret = QMessageBox.warning(self, "高度警告", 
+                                          f"检测到安全高度 ({safe_z:.1f}) 远小于 Z 基准 ({self.mw.z_base:.1f})！\n\n"
+                                          "这可能导致机器撞向底部。\n"
+                                          "是否确实要继续？",
+                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if ret == QMessageBox.No:
+                    return
+
+        # 2. 相机与针头高度差异检查 (防止忘记设置相机高度)
+        # 如果针头安全高度很高 (>80)，但相机安全高度很低 (<30)，提示用户
+        if 'camera' in mode:
+            nz_safe = cfg['nozzle_safe_z_cavity']
+            cam_safe = cfg['cam_safe_z_cavity']
+            if nz_safe > 80 and cam_safe < 30:
+                ret = QMessageBox.warning(self, "参数可疑", 
+                                          f"检测到相机安全高度 ({cam_safe:.1f}) 远小于 针头安全高度 ({nz_safe:.1f})！\n\n"
+                                          "您可能忘记设置【相机空跑】的高度参数了。\n"
+                                          "继续运行可能会导致撞车。\n\n"
+                                          "是否确实要继续？",
+                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if ret == QMessageBox.No:
+                    return
+        # =====================
         # 不再反向更新主界面参数，保持独立性
         # self.mw.cam_safe_z_cavity = cfg['cam_safe_z'] ...
         
         self.worker = BatchWorker(self.mw, cfg, mode)
         self.worker.log_signal.connect(self.log)
+        self.worker.progress_signal.connect(self.update_progress)
         self.worker.finished_signal.connect(self.on_finished)
         
         self.btn_cam_dry.setEnabled(False)
         self.btn_nozzle_dry.setEnabled(False)
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
+        self.btn_pause.setEnabled(True)
+        self.btn_pause.setVisible(True)
+        self.btn_resume.setVisible(False)
+        
+        # 设置进度条最大值
+        total = cfg['rows'] * cfg['cols']
+        self.progress_bar.setMaximum(total)
+        self.progress_bar.setValue(0)
+        
         self.worker.start()
+
+    def update_progress(self, current, total):
+        self.progress_bar.setMaximum(total)
+        self.progress_bar.setValue(current)
+
+    def on_pause(self):
+        if hasattr(self, 'worker'):
+            self.worker.pause()
+            self.btn_pause.setVisible(False)
+            self.btn_resume.setVisible(True)
+            self.btn_resume.setEnabled(True)
+
+    def on_resume(self):
+        if hasattr(self, 'worker'):
+            self.worker.resume()
+            self.btn_resume.setVisible(False)
+            self.btn_pause.setVisible(True)
 
     def on_stop(self):
         if hasattr(self, 'worker'):
@@ -405,10 +521,18 @@ class BatchRunDialog(QDialog):
         self.btn_nozzle_dry.setEnabled(True)
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
+        self.btn_pause.setEnabled(False)
+        self.btn_resume.setVisible(False)
+        self.btn_pause.setVisible(True)
         if success:
             QMessageBox.information(self, "完成", msg)
         else:
-            QMessageBox.warning(self, "中止", msg)
+            # 如果是用户停止，更新状态显示
+            if msg == "用户停止":
+                self.log("🛑 已停止运行")
+                QMessageBox.warning(self, "已停止", "批量运行已停止")
+            else:
+                QMessageBox.warning(self, "中止", msg)
 
     def log(self, msg):
         self.log_box.append(msg)
@@ -470,9 +594,22 @@ class BatchRunDialog(QDialog):
         settings['batch_space_x'] = self.spn_space_x.value()
         settings['batch_space_y'] = self.spn_space_y.value()
 
-        # 注意：Z轴高度参数由主界面管理，这里不保存到文件，
-        # 避免混淆。用户在批量界面修改的高度仅对本次运行有效，
-        # 若要永久修改，请在主界面或通过“保存全局配置”进行。
+        # 2. 保存高度参数 (用户希望在批量界面修改后能保存)
+        settings['cam_safe_z_cavity'] = self.spn_cam_safe_cavity.value()
+        settings['cam_safe_z_product'] = self.spn_cam_safe_product.value()
+        settings['cam_work_z'] = self.spn_cam_work.value()
+        
+        settings['safe_z_cavity'] = self.spn_nozzle_safe_cavity.value()
+        settings['safe_z_product'] = self.spn_nozzle_safe_product.value()
+        settings['work_z'] = self.spn_nozzle_work.value()
+
+        # 同时更新主界面变量，以便下次打开时同步
+        self.mw.cam_safe_z_cavity = settings['cam_safe_z_cavity']
+        self.mw.cam_safe_z_product = settings['cam_safe_z_product']
+        self.mw.cam_work_z = settings['cam_work_z']
+        self.mw.safe_z_cavity = settings['safe_z_cavity']
+        self.mw.safe_z_product = settings['safe_z_product']
+        self.mw.work_z = settings['work_z']
 
         try:
             with open(settings_file, 'w') as f:

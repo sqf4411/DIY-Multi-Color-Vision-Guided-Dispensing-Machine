@@ -6,8 +6,9 @@ from PyQt5.QtWidgets import (
 import numpy as np
 
 class DryRunDialog(QDialog):
-    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False):
+    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None):
         super().__init__(parent)
+        self.save_callback = save_callback
         self.is_real_run = is_real_run
         self.setWindowTitle("点胶参数设置 & G-code 预览" if is_real_run else "空跑参数设置 & G-code 预览")
         self.resize(800, 600)
@@ -128,12 +129,22 @@ class DryRunDialog(QDialog):
         layout.addWidget(self.text_preview)
 
         # 4. 按钮区
+        btn_layout = QHBoxLayout()
+        
+        self.btn_save = QPushButton("仅保存参数 (Save)")
+        self.btn_save.clicked.connect(self.on_save_clicked)
+        if self.save_callback is None:
+            self.btn_save.setEnabled(False)
+            
         btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btn_box.button(QDialogButtonBox.Ok).setText("执行 (Run)")
         btn_box.button(QDialogButtonBox.Cancel).setText("取消")
         btn_box.accepted.connect(self.accept)
         btn_box.rejected.connect(self.reject)
-        layout.addWidget(btn_box)
+        
+        btn_layout.addWidget(self.btn_save)
+        btn_layout.addWidget(btn_box)
+        layout.addLayout(btn_layout)
 
         self.setLayout(layout)
 
@@ -223,6 +234,17 @@ class DryRunDialog(QDialog):
 
     def get_gcode(self):
         return self.text_preview.toPlainText()
+
+    def on_save_clicked(self):
+        """点击保存按钮：调用回调保存参数，但不关闭窗口"""
+        if self.save_callback:
+            try:
+                self.save_callback(self)
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.information(self, "保存成功", "参数已保存！")
+            except Exception as e:
+                from PyQt5.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "保存失败", f"保存参数时出错: {e}")
 
 from PyQt5.QtWidgets import QPushButton, QProgressBar
 

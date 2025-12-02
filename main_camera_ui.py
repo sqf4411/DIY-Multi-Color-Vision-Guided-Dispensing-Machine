@@ -2286,6 +2286,10 @@ class MainWindow(QWidget):
         
         if ok:
             self.log(f"✅ 路径示教完成 (Cell {cell_idx})")
+            # 关键修复：编辑完成后，必须强制刷新 mold_detector 的缓存
+            from core.mold_detector import reload_golden_templates
+            reload_golden_templates()
+            self.log("🔄 已刷新模具匹配模板")
         else:
             self.log("⚠ 路径示教取消或未保存")
     # ================== 点胶任务按钮（占位） ==================
@@ -2642,7 +2646,8 @@ class MainWindow(QWidget):
                 nozzle_offset, 
                 initial_params,
                 (center_x, center_y),
-                is_real_run=False # 空跑都不出胶
+                is_real_run=False, # 空跑都不出胶
+                save_callback=save_callback  # ✅ 传入回调，供“仅保存”按钮使用
             )
             
             dialog.setWindowTitle(f"{title} - 参数确认")
@@ -2752,7 +2757,8 @@ class MainWindow(QWidget):
                 nozzle_offset, 
                 initial_params,
                 (center_x, center_y),
-                is_real_run=True
+                is_real_run=True,
+                save_callback=self.on_dry_run.save_nozzle_params # 复用针头参数保存逻辑
             )
 
             if dialog.exec_() == QDialog.Accepted:

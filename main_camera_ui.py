@@ -402,6 +402,8 @@ class MainWindow(QWidget):
         self.setWindowTitle("DIY多色视觉点胶机控制台")
         self.resize(1280, 800)
         
+        self.init_done = False # 初始化标志
+
         # 设置图标
         from PyQt5.QtGui import QIcon
         if os.path.exists("logo.svg"):
@@ -596,15 +598,15 @@ class MainWindow(QWidget):
         # ===== Z 高度参数 =====
         # 空跑/点胶时的安全高度与工作高度（mm）
         # 用户反馈：Z轴最大200+（上），0是下。
-        self.safe_z = 20.0    # 抬刀 / 快移高度 (Legacy)
-        self.safe_z_cavity = 20.0   # 腔内安全高度 (小抬刀)
-        self.safe_z_product = 50.0  # 产品安全高度 (大抬刀)
-        self.work_z = 1.0           # 点胶 / 下刀高度 (接近0)
+        self.safe_z = None          # 抬刀 / 快移高度 (Legacy)
+        self.safe_z_cavity = None   # 腔内安全高度 (小抬刀)
+        self.safe_z_product = None  # 产品安全高度 (大抬刀)
+        self.work_z = None          # 点胶 / 下刀高度 (接近0)
         
         # ====== ✅ 新增：相机空跑专用高度参数 ======
-        self.cam_safe_z_cavity = 20.0
-        self.cam_safe_z_product = 50.0
-        self.cam_work_z = 10.0 # 相机通常比针头高，避免撞到
+        self.cam_safe_z_cavity = None
+        self.cam_safe_z_product = None
+        self.cam_work_z = None # 相机通常比针头高，避免撞到
         # =======================================
         
         # 对刀基准 (上次对刀时的 Z 坐标)
@@ -629,8 +631,8 @@ class MainWindow(QWidget):
         self.load_saved_params()
         self.load_golden_templates()
         self.init_calibration()
+        self.init_done = True
 
-    # ================== 日志相关 ==================
     def _log_impl(self, msg):
         """实际更新 UI 的槽函数，运行在主线程"""
         timestamp = datetime.now().strftime("[%H:%M:%S] ")
@@ -805,6 +807,7 @@ class MainWindow(QWidget):
 
         # 点胶任务相关按钮
         self.btn_calibrate = QPushButton("标定坐标系")
+        self.btn_calibrate.setFixedWidth(120) # 固定宽度防止文字变化导致界面抖动
         # ====== ✅ 新增：验证精度按钮 ======
         self.btn_verify = QPushButton("验证精度")
         self.btn_verify.setToolTip("点击开启/关闭【点击定位】功能")
@@ -922,7 +925,7 @@ class MainWindow(QWidget):
         self.spn_safe_z_cavity.setRange(0.0, 300.0)
         self.spn_safe_z_cavity.setDecimals(2)
         self.spn_safe_z_cavity.setSingleStep(0.1)
-        self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
+        self.spn_safe_z_cavity.setValue(self.safe_z_cavity if self.safe_z_cavity is not None else 0.0)
 
         # 2. 产品安全高度
         lbl_safe_product = QLabel("产品安全Z")
@@ -930,7 +933,7 @@ class MainWindow(QWidget):
         self.spn_safe_z_product.setRange(0.0, 300.0)
         self.spn_safe_z_product.setDecimals(2)
         self.spn_safe_z_product.setSingleStep(0.1)
-        self.spn_safe_z_product.setValue(self.safe_z_product)
+        self.spn_safe_z_product.setValue(self.safe_z_product if self.safe_z_product is not None else 0.0)
 
         # 3. 点胶高度
         lbl_work = QLabel("点胶Z")
@@ -938,7 +941,7 @@ class MainWindow(QWidget):
         self.spn_work_z.setRange(0.0, 300.0)
         self.spn_work_z.setDecimals(2)
         self.spn_work_z.setSingleStep(0.1)
-        self.spn_work_z.setValue(self.work_z)
+        self.spn_work_z.setValue(self.work_z if self.work_z is not None else 0.0)
 
         zparam_layout.addWidget(lbl_safe_cavity)
         zparam_layout.addWidget(self.spn_safe_z_cavity)
@@ -1827,12 +1830,19 @@ class MainWindow(QWidget):
                         self.update_nozzle_offset_display()
 
                 # 9. 恢复相机空跑高度
-                if 'cam_safe_z_cavity' in settings: self.cam_safe_z_cavity = float(settings['cam_safe_z_cavity'])
-                if 'cam_safe_z_product' in settings: self.cam_safe_z_product = float(settings['cam_safe_z_product'])
-                if 'cam_work_z' in settings: self.cam_work_z = float(settings['cam_work_z'])
+                # 9. 恢复相机空跑高度
+                if 'cam_safe_z_cavity' in settings: 
+                    val = settings['cam_safe_z_cavity']
+                    self.cam_safe_z_cavity = float(val) if val is not None else None
+                if 'cam_safe_z_product' in settings: 
+                    val = settings['cam_safe_z_product']
+                    self.cam_safe_z_product = float(val) if val is not None else None
+                if 'cam_work_z' in settings: 
+                    val = settings['cam_work_z']
+                    self.cam_work_z = float(val) if val is not None else None
 
             # 可以在日志中记录成功加载
-            self.log("✅ 成功加载历史速度/加速度参数。")
+            self.log(f"✅ 成功加载应用参数。CamSafeZ: {self.cam_safe_z_cavity}")
 
         except Exception as e:
             self.log(f"❌ 加载应用参数失败: {e}")
@@ -1840,6 +1850,10 @@ class MainWindow(QWidget):
 
     def save_app_settings(self):
         """保存应用设置：速度和加速度"""
+        if not getattr(self, 'init_done', False):
+            return
+
+        self.log(f"💾 保存应用参数... CamSafeZ: {self.cam_safe_z_cavity}")
         # 1. 先读取旧配置，避免覆盖其他模块（如批量运行）写入的参数
         settings = {}
         if os.path.exists(SETTINGS_FILE):
@@ -2333,7 +2347,7 @@ class MainWindow(QWidget):
             # 进入微调状态 (状态码设为 10)
             self.calib_step = 10
             self.calib_sel_idx = 0
-            self.btn_calibrate.setText("确认视觉角点 (下一步)")
+            self.btn_calibrate.setText("确认视觉角点")
             self.btn_calibrate.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold;")
 
             reply = QMessageBox.information(
@@ -2556,6 +2570,11 @@ class MainWindow(QWidget):
         按钮：针头空跑
         使用针头进行路径演示，加上偏移，使用【主界面】高度参数。
         """
+        # 0. 检查参数是否设置
+        if self.safe_z_cavity is None or self.safe_z_product is None or self.work_z is None:
+             QMessageBox.warning(self, "参数未设置", "检测到针头高度参数未设置！\n\n请先在批量运行或设置中配置高度参数。")
+             return
+
         # 准备针头高度参数 (直接取主界面值)
         height_params = {
             'safe_z_cavity': float(self.safe_z_cavity),
@@ -3004,6 +3023,11 @@ class MainWindow(QWidget):
     def on_btn_auto_tool_set(self):
         """一键对刀逻辑 (含手动找点模式)"""
         
+        # 0. 检查参数是否设置
+        if self.safe_z_product is None:
+             QMessageBox.warning(self, "参数未设置", "检测到【产品安全高度】未设置！\n\n对刀需要使用该高度作为安全移动高度。\n请先在设置中配置。")
+             return
+
         # --- 情况 A: 正在手动找点模式，用户点击按钮表示“确认位置” ---
         if self.manual_tool_set_mode:
             # 获取当前坐标

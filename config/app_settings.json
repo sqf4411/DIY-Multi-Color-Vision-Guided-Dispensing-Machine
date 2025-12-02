@@ -11,7 +11,7 @@
     "nozzle_offset_x": 0.0,
     "nozzle_offset_y": 0.0,
     "cam_safe_z_cavity": 212.0,
-    "cam_safe_z_product": 230.0,
+    "cam_safe_z_product": 220.0,
     "cam_work_z": 211.0,
     "batch_start_x": 111.38,
     "batch_start_y": 144.45,

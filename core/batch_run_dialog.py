@@ -390,7 +390,9 @@ class BatchRunDialog(QDialog):
         # 智能默认值：如果主界面参数看起来是默认值(<=20.0)，但 Z 基准很大(>100)，则使用 Z 基准
         # 这样可以防止用户忘记设置参数时机器撞向底部
         def_cam_safe = self.mw.cam_safe_z_cavity
-        if def_cam_safe <= 20.0 and self.mw.z_base > 100:
+        if def_cam_safe is None:
+            def_cam_safe = 0.0
+        elif def_cam_safe <= 20.0 and self.mw.z_base > 100:
             def_cam_safe = self.mw.z_base
             
         self.spn_cam_safe_cavity = QDoubleSpinBox()
@@ -399,11 +401,11 @@ class BatchRunDialog(QDialog):
         
         self.spn_cam_safe_product = QDoubleSpinBox()
         self.spn_cam_safe_product.setRange(-500, 500)
-        self.spn_cam_safe_product.setValue(self.mw.cam_safe_z_product)
+        self.spn_cam_safe_product.setValue(self.mw.cam_safe_z_product if self.mw.cam_safe_z_product is not None else 0.0)
 
         self.spn_cam_work = QDoubleSpinBox()
         self.spn_cam_work.setRange(-500, 500)
-        self.spn_cam_work.setValue(self.mw.cam_work_z)
+        self.spn_cam_work.setValue(self.mw.cam_work_z if self.mw.cam_work_z is not None else 0.0)
         
         h_cam_z = QHBoxLayout()
         h_cam_z.addWidget(QLabel("腔内安全:"))
@@ -417,15 +419,15 @@ class BatchRunDialog(QDialog):
         # 针头/真实高度
         self.spn_nozzle_safe_cavity = QDoubleSpinBox()
         self.spn_nozzle_safe_cavity.setRange(-500, 500)
-        self.spn_nozzle_safe_cavity.setValue(self.mw.safe_z_cavity)
+        self.spn_nozzle_safe_cavity.setValue(self.mw.safe_z_cavity if self.mw.safe_z_cavity is not None else 0.0)
         
         self.spn_nozzle_safe_product = QDoubleSpinBox()
         self.spn_nozzle_safe_product.setRange(-500, 500)
-        self.spn_nozzle_safe_product.setValue(self.mw.safe_z_product)
+        self.spn_nozzle_safe_product.setValue(self.mw.safe_z_product if self.mw.safe_z_product is not None else 0.0)
 
         self.spn_nozzle_work = QDoubleSpinBox()
         self.spn_nozzle_work.setRange(-500, 500)
-        self.spn_nozzle_work.setValue(self.mw.work_z)
+        self.spn_nozzle_work.setValue(self.mw.work_z if self.mw.work_z is not None else 0.0)
         
         h_nozzle_z = QHBoxLayout()
         h_nozzle_z.addWidget(QLabel("腔内安全:"))
@@ -533,11 +535,17 @@ class BatchRunDialog(QDialog):
 
     def on_start(self, mode):
         # 自动保存配置 (符合用户直觉：运行即保存)
-        self.save_settings()
+        self.save_settings(silent=True)
         
         cfg = self.get_config()
         
         # ====== 安全检查 ======
+        # 0. 检查参数是否未设置 (为0)
+        safe_z = cfg['cam_safe_z_cavity'] if 'camera' in mode else cfg['nozzle_safe_z_cavity']
+        if safe_z == 0.0:
+             QMessageBox.warning(self, "参数未设置", "检测到安全高度为 0！\n\n请先设置【安全高度】，否则可能会撞车。")
+             return
+
         # 1. Z 基准检查 (防止原点在底部时撞车)
         if self.mw.z_base > 100:
             safe_z = cfg['cam_safe_z_cavity'] if 'camera' in mode else cfg['nozzle_safe_z_cavity']
@@ -678,32 +686,51 @@ class BatchRunDialog(QDialog):
         try:
             with open(settings_file, 'r') as f:
                 settings = json.load(f)
+                # self.log(f"DEBUG: Loaded settings: {settings}") # 调试用
+
+                def safe_float(key, default=0.0):
+                    val = settings.get(key)
+                    if val is None:
+                        return default
+                    try:
+                        return float(val)
+                    except:
+                        return default
+
+                def safe_int(key, default=0):
+                    val = settings.get(key)
+                    if val is None:
+                        return default
+                    try:
+                        return int(val)
+                    except:
+                        return default
                 
                 # 加载阵列参数
-                if 'batch_start_x' in settings: self.spn_start_x.setValue(float(settings['batch_start_x']))
-                if 'batch_start_y' in settings: self.spn_start_y.setValue(float(settings['batch_start_y']))
-                if 'batch_start_z' in settings: self.spn_start_z.setValue(float(settings['batch_start_z'])) # 新增 Z
-                if 'batch_rows' in settings: self.spn_rows.setValue(int(settings['batch_rows']))
-                if 'batch_cols' in settings: self.spn_cols.setValue(int(settings['batch_cols']))
-                if 'batch_space_x' in settings: self.spn_space_x.setValue(float(settings['batch_space_x']))
-                if 'batch_space_y' in settings: self.spn_space_y.setValue(float(settings['batch_space_y']))
+                if 'batch_start_x' in settings: self.spn_start_x.setValue(safe_float('batch_start_x'))
+                if 'batch_start_y' in settings: self.spn_start_y.setValue(safe_float('batch_start_y'))
+                if 'batch_start_z' in settings: self.spn_start_z.setValue(safe_float('batch_start_z'))
+                if 'batch_rows' in settings: self.spn_rows.setValue(safe_int('batch_rows', 1))
+                if 'batch_cols' in settings: self.spn_cols.setValue(safe_int('batch_cols', 1))
+                if 'batch_space_x' in settings: self.spn_space_x.setValue(safe_float('batch_space_x'))
+                if 'batch_space_y' in settings: self.spn_space_y.setValue(safe_float('batch_space_y'))
                 
-                # Z轴参数通常跟随主界面，但如果用户在批量界面改了并保存，也可以加载
-                if 'cam_safe_z_cavity' in settings: self.spn_cam_safe_cavity.setValue(float(settings['cam_safe_z_cavity']))
-                if 'cam_safe_z_product' in settings: self.spn_cam_safe_product.setValue(float(settings['cam_safe_z_product']))
-                if 'cam_work_z' in settings: self.spn_cam_work.setValue(float(settings['cam_work_z']))
+                # Z轴参数
+                if 'cam_safe_z_cavity' in settings: self.spn_cam_safe_cavity.setValue(safe_float('cam_safe_z_cavity'))
+                if 'cam_safe_z_product' in settings: self.spn_cam_safe_product.setValue(safe_float('cam_safe_z_product'))
+                if 'cam_work_z' in settings: self.spn_cam_work.setValue(safe_float('cam_work_z'))
                 
-                if 'safe_z_cavity' in settings: self.spn_nozzle_safe_cavity.setValue(float(settings['safe_z_cavity']))
-                if 'safe_z_product' in settings: self.spn_nozzle_safe_product.setValue(float(settings['safe_z_product']))
-                if 'work_z' in settings: self.spn_nozzle_work.setValue(float(settings['work_z']))
+                if 'safe_z_cavity' in settings: self.spn_nozzle_safe_cavity.setValue(safe_float('safe_z_cavity'))
+                if 'safe_z_product' in settings: self.spn_nozzle_safe_product.setValue(safe_float('safe_z_product'))
+                if 'work_z' in settings: self.spn_nozzle_work.setValue(safe_float('work_z'))
                 
         except Exception as e:
             self.log(f"❌ 加载配置失败: {e}")
 
-    def save_settings(self):
+    def save_settings(self, silent=False):
         """
         保存配置到 app_settings.json
-        仅保存阵列参数 (Grid Config)
+        silent: 是否静默保存 (不弹窗)
         """
         settings_file = "config/app_settings.json"
         settings = {}
@@ -746,6 +773,14 @@ class BatchRunDialog(QDialog):
             with open(settings_file, 'w') as f:
                 json.dump(settings, f, indent=4)
             self.log("✅ 批量阵列配置已保存")
-            QMessageBox.information(self, "保存成功", "批量阵列配置已保存！")
+            if not silent:
+                QMessageBox.information(self, "保存成功", "批量阵列配置已保存！")
         except Exception as e:
             self.log(f"❌ 保存失败: {e}")
+            if not silent:
+                QMessageBox.warning(self, "保存失败", f"无法保存配置: {e}")
+
+    def closeEvent(self, event):
+        """关闭窗口时自动保存"""
+        self.save_settings(silent=True)
+        event.accept()

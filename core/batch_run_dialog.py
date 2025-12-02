@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 
-from core.mold_detector import get_calculated_paths
+from core.mold_detector import get_calculated_paths, get_paths_and_image
 
 class BatchWorker(QThread):
     """
@@ -20,6 +20,7 @@ class BatchWorker(QThread):
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)
     progress_signal = pyqtSignal(int, int)  # current, total
+    image_signal = pyqtSignal(np.ndarray)   # 新增：发送带框的图像
 
     def __init__(self, main_window, grid_config, mode='real'):
         super().__init__()
@@ -109,17 +110,22 @@ class BatchWorker(QThread):
                 img = cv2.flip(img, -1) # 保持和主界面一致的翻转
 
                 self.log_signal.emit("👀 正在识别模具...")
-                paths_groups = get_calculated_paths(img)
+                # 使用新函数同时获取路径和图像
+                paths_groups, debug_img = get_paths_and_image(img)
+                
+                # 发送图像到主界面显示
+                if debug_img is not None:
+                    self.image_signal.emit(debug_img)
                 
                 if not paths_groups:
                     self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})，跳过")
                     continue
                 
-                # Flatten groups to single list of paths
-                paths_px = [p for group in paths_groups for p in group]
-
+                # Do NOT flatten groups. Keep structure: List[List[Path]]
+                # paths_groups = [Product1_Paths, Product2_Paths, ...]
+                
                 try:
-                    gcode_lines = self.generate_dispense_gcode(paths_px, target_x, target_y)
+                    gcode_lines = self.generate_dispense_gcode(paths_groups, target_x, target_y)
                     
                     if not gcode_lines:
                         self.log_signal.emit("⚠ 生成 G-code 失败，跳过")
@@ -146,16 +152,41 @@ class BatchWorker(QThread):
                     
                     self.mw.machine.wait_until_idle()
                     self.log_signal.emit("✅ 单个完成")
+                    
+                    # 关键修复：单个完成后，确保 Z 轴抬升到【移动安全高度】
+                    # 这样移动到下一个阵列点时（XY移动）就不会撞到模具壁
+                    # generate_dispense_gcode 最后一行是 safe_z_cavity，可能不够高
+                    if self.mode == 'camera_dry':
+                        safe_z_move = float(self.cfg['cam_safe_z_product'])
+                    else:
+                        safe_z_move = float(self.cfg['nozzle_safe_z_product'])
+                        
+                    self.mw.machine.move_to(z=safe_z_move, speed=self.mw.feedrate_z)
+                    self.mw.machine.wait_until_idle()
 
                 except Exception as e:
                     self.log_signal.emit(f"❌ 执行出错: {e}")
 
         # 结束
+        # 结束 - 返回起始点
+        self.log_signal.emit("🔙 正在返回起始点...")
+        # 1. 确保 Z 在最高安全位
+        if self.mode == 'camera_dry':
+            final_safe_z = float(self.cfg['cam_safe_z_product'])
+        else:
+            final_safe_z = float(self.cfg['nozzle_safe_z_product'])
+        self.mw.machine.move_to(z=final_safe_z, speed=self.mw.feedrate_z)
+        
+        # 2. 移动回起始 XY
+        self.mw.machine.move_to(x=start_x, y=start_y, speed=self.mw.feedrate_xy)
+        self.mw.machine.wait_until_idle()
+
         self.finished_signal.emit(True, f"{title}完成")
 
-    def generate_dispense_gcode(self, paths_px, current_x, current_y):
+    def generate_dispense_gcode(self, paths_groups, current_x, current_y):
         """
-        根据识别到的像素路径，生成绝对坐标 G-code
+        根据识别到的像素路径组，生成绝对坐标 G-code
+        paths_groups: List[List[Path]]，每个内部List代表一个产品的多条路径
         """
         M = self.mw.cam2mach_matrix
         if M is None:
@@ -187,42 +218,53 @@ class BatchWorker(QThread):
         lines = []
         lines.append("G90") # 绝对模式
         
-        for path in paths_px:
-            first_pt = True
-            for (px, py) in path:
-                # 像素 -> 相对 mm
-                dx_pix = px - center_x
-                dy_pix = py - center_y
-                
-                dx_mm = M[0, 0] * dx_pix + M[0, 1] * dy_pix
-                dy_mm = M[1, 0] * dx_pix + M[1, 1] * dy_pix
-                
-                # 目标机器坐标 = 相机中心 + 视觉偏移 - 针头偏移
-                target_mach_x = current_x + dx_mm - off_x
-                target_mach_y = current_y + dy_mm - off_y
-                
-                if first_pt:
-                    # 1. 抬起
-                    lines.append(f"G1 Z{safe_z_cavity:.2f} F{speed_z}")
-                    # 2. 移动到第一个点上方
-                    lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
-                    # 3. 下降到工作高度
-                    lines.append(f"G1 Z{work_z:.2f} F{speed_z}")
-                    # 4. 开阀 (仅真实模式)
-                    if valve_on:
-                        lines.append("M106 S255")
-                    first_pt = False
-                else:
-                    # 移动到后续点
-                    lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
-            
-            # 一条路径结束：关阀，抬起
-            if valve_on:
-                lines.append("M107") # 关阀
-            lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
+        # 初始抬升到产品安全高度 (最高)
+        lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
 
-        # 最后抬起到最高安全高度
-        lines.append(f"G1 Z{safe_z_cavity:.2f} F{speed_z}")
+        for prod_idx, product_paths in enumerate(paths_groups):
+            lines.append(f"; --- Product {prod_idx + 1} ---")
+            
+            for seg_idx, path in enumerate(product_paths):
+                first_pt = True
+                for (px, py) in path:
+                    # 像素 -> 相对 mm
+                    dx_pix = px - center_x
+                    dy_pix = py - center_y
+                    
+                    dx_mm = M[0, 0] * dx_pix + M[0, 1] * dy_pix
+                    dy_mm = M[1, 0] * dx_pix + M[1, 1] * dy_pix
+                    
+                    # 目标机器坐标 = 相机中心 + 视觉偏移 - 针头偏移
+                    target_mach_x = current_x + dx_mm - off_x
+                    target_mach_y = current_y + dy_mm - off_y
+                    
+                    if first_pt:
+                        # 1. 移动到第一个点上方 (保持当前高度，可能是 Product Z 或 Cavity Z)
+                        lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
+                        # 2. 下降到工作高度
+                        lines.append(f"G1 Z{work_z:.2f} F{speed_z}")
+                        # 3. 开阀 (仅真实模式)
+                        if valve_on:
+                            lines.append("M106 S255")
+                        first_pt = False
+                    else:
+                        # 移动到后续点
+                        lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
+                
+                # 一条路径(Segment)结束：关阀
+                if valve_on:
+                    lines.append("M107") # 关阀
+                
+                # 抬升逻辑：
+                # 如果是该产品的最后一段 -> 抬升到【产品安全高度】(准备去下一个产品)
+                # 否则 -> 抬升到【腔内安全高度】(准备去同产品的下一段)
+                if seg_idx == len(product_paths) - 1:
+                    lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
+                else:
+                    lines.append(f"G1 Z{safe_z_cavity:.2f} F{speed_z}")
+
+        # 最后确保在最高安全高度
+        lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
         
         return lines
 
@@ -478,6 +520,8 @@ class BatchRunDialog(QDialog):
         self.worker.log_signal.connect(self.log)
         self.worker.progress_signal.connect(self.update_progress)
         self.worker.finished_signal.connect(self.on_finished)
+        # 连接图像信号到主界面的 update_image
+        self.worker.image_signal.connect(self.mw.update_image)
         
         self.btn_cam_dry.setEnabled(False)
         self.btn_nozzle_dry.setEnabled(False)

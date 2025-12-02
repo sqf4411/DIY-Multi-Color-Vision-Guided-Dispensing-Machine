@@ -737,3 +737,116 @@ def get_calculated_paths(gray: np.ndarray):
                 all_paths_pixels.append(product_paths)
 
     return all_paths_pixels
+
+
+def get_paths_and_image(gray: np.ndarray):
+    """
+    Returns both the calculated paths and the visualized debug image.
+    """
+    # Reuse the logic of get_calculated_paths but also return the image
+    # Note: get_calculated_paths creates its own local variables. 
+    # To avoid code duplication, we can copy the logic or refactor.
+    # For safety and speed now, I will copy the logic of get_calculated_paths 
+    # and add the image drawing from detect_mold_and_cells.
+    
+    _load_golden_and_paths()
+    color_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+    # 1. Find big frame
+    rect, big_box = _find_big_mold(gray)
+    if big_box is None or _TEMPLATES is None or _WARP_SIZE is None:
+        return [], color_img
+
+    # Draw big frame
+    cv2.drawContours(color_img, [big_box], 0, (0, 255, 0), 3)
+
+    goldW, goldH = int(_WARP_SIZE[0]), int(_WARP_SIZE[1])
+
+    # Matrix
+    pts = big_box.astype(np.float32)
+    s = pts.sum(axis=1)
+    tl, br = pts[np.argmin(s)], pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    tr, bl = pts[np.argmin(diff)], pts[np.argmax(diff)]
+    rect_pts = np.array([tl, tr, br, bl], dtype=np.float32)
+    dst_pts = np.array([[0, 0], [goldW - 1, 0], [goldW - 1, goldH - 1], [0, goldH - 1]], dtype=np.float32)
+
+    Minv_cur = cv2.getPerspectiveTransform(dst_pts, rect_pts)
+    M_cur = cv2.getPerspectiveTransform(rect_pts, dst_pts)
+    curr_warped = cv2.warpPerspective(gray, M_cur, (goldW, goldH))
+
+    all_paths_pixels = []
+
+    if (_PATH_POLY is not None) and (_CORE_TEMPLATE is not None):
+        th, tw = _CORE_TEMPLATE.shape[:2]
+        search_pad = 60
+
+        for idx in range(_TEMPLATES.shape[0]):
+            product_paths = [] 
+            
+            # Draw User Box (Green Thick)
+            box_w = _TEMPLATES[idx].astype(np.float32)
+            pts_w = box_w.reshape(-1, 1, 2)
+            pts_o = cv2.perspectiveTransform(pts_w, Minv_cur)
+            if pts_o is not None:
+                box_o = pts_o.reshape(-1, 2).astype(np.int32)
+                cv2.drawContours(color_img, [box_o], 0, (0, 255, 0), 5)
+
+            # Template Match
+            guess_box = _order_points(_TEMPLATES[idx])
+            bx = int((min(guess_box[:, 0]) + max(guess_box[:, 0])) / 2)
+            by = int((min(guess_box[:, 1]) + max(guess_box[:, 1])) / 2)
+
+            rx = max(0, bx - search_pad - tw // 2)
+            ry = max(0, by - search_pad - th // 2)
+            rw, rh = tw + 2 * search_pad, th + 2 * search_pad
+            if rx + rw > goldW: rw = goldW - rx
+            if ry + rh > goldH: rh = goldH - ry
+
+            roi = curr_warped[ry:ry + rh, rx:rx + rw]
+            offset = np.array([0, 0], dtype=np.float32)
+            match_success = False
+
+            if roi.shape[0] >= th and roi.shape[1] >= tw:
+                res = cv2.matchTemplate(roi, _CORE_TEMPLATE, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                if max_val > 0.3:
+                    match_success = True
+                    match_x = rx + max_loc[0]
+                    match_y = ry + max_loc[1]
+                    current_live_tl = np.array([match_x, match_y], dtype=np.float32)
+                    offset = current_live_tl - _CORE_REF_TL
+
+            if not match_success:
+                box0 = _order_points(_TEMPLATES[0])
+                c0_x = (min(box0[:, 0]) + max(box0[:, 0])) / 2
+                c0_y = (min(box0[:, 1]) + max(box0[:, 1])) / 2
+                offset = np.array([bx - c0_x, by - c0_y], dtype=np.float32)
+
+            # Generate Paths
+            for seg in _PATH_POLY:
+                pts_gold = seg + offset
+                pts_w = pts_gold.reshape(-1, 1, 2)
+                res_o = cv2.perspectiveTransform(pts_w, Minv_cur)
+                if res_o is not None:
+                    product_paths.append(res_o.reshape(-1, 2))
+                    
+                    # Draw Path on Image (Green Thin)
+                    pts = res_o.reshape(-1, 2).astype(np.int32)
+                    cv2.polylines(color_img, [pts], False, (0, 255, 0), 2, cv2.LINE_AA)
+
+            if _PATH_DOTS is not None:
+                pts_gold = _PATH_DOTS + offset
+                pts_w = pts_gold.reshape(-1, 1, 2)
+                res_o = cv2.perspectiveTransform(pts_w, Minv_cur)
+                if res_o is not None:
+                    dots = res_o.reshape(-1, 2)
+                    for dot in dots:
+                        product_paths.append(dot.reshape(1, 2))
+                        # Draw Dot
+                        cv2.circle(color_img, (int(dot[0]), int(dot[1])), 5, (0, 255, 0), -1)
+
+            if product_paths:
+                all_paths_pixels.append(product_paths)
+
+    return all_paths_pixels, color_img

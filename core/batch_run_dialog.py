@@ -19,8 +19,11 @@ class BatchWorker(QThread):
     """
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)
+    finished_signal = pyqtSignal(bool, str)
     progress_signal = pyqtSignal(int, int)  # current, total
-    image_signal = pyqtSignal(np.ndarray)   # 新增：发送带框的图像
+    gcode_signal = pyqtSignal(str)          # 新增：发送生成的完整 G-code
+    current_line_signal = pyqtSignal(str)   # 新增：发送当前执行的 G-code 行
+    current_index_signal = pyqtSignal(int)  # 新增：发送当前执行的 G-code 行号 (用于准确高亮)
 
     def __init__(self, main_window, grid_config, mode='real'):
         super().__init__()
@@ -110,12 +113,9 @@ class BatchWorker(QThread):
                 img = cv2.flip(img, -1) # 保持和主界面一致的翻转
 
                 self.log_signal.emit("👀 正在识别模具...")
-                # 使用新函数同时获取路径和图像
-                paths_groups, debug_img = get_paths_and_image(img)
-                
-                # 发送图像到主界面显示
-                if debug_img is not None:
-                    self.image_signal.emit(debug_img)
+                # 使用新函数同时获取路径和图像，但只使用路径
+                # 图像显示交给主界面的 live_detect
+                paths_groups, _ = get_paths_and_image(img)
                 
                 if not paths_groups:
                     self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})，跳过")
@@ -131,11 +131,18 @@ class BatchWorker(QThread):
                         self.log_signal.emit("⚠ 生成 G-code 失败，跳过")
                         continue
 
+                    # 发送完整 G-code 到界面显示
+                    full_gcode_str = "\n".join(gcode_lines)
+                    self.gcode_signal.emit(full_gcode_str)
+
                     # --- 5. 执行点胶 ---
                     self.log_signal.emit(f"💉 开始执行 (R{r}, C{c})...")
                     
                     # 逐行发送
-                    for line in gcode_lines:
+                    for i, line in enumerate(gcode_lines):
+                        # 发送当前行信号 (用于高亮)
+                        self.current_line_signal.emit(line)
+                        self.current_index_signal.emit(i)
                         # 1. 检查停止
                         if not self.running:
                             self.finished_signal.emit(False, "用户停止")
@@ -415,6 +422,13 @@ class BatchRunDialog(QDialog):
         self.progress_bar.setFormat("%v / %m")
         layout.addWidget(self.progress_bar)
 
+        # G-code 预览框 (新增)
+        layout.addWidget(QLabel("G-code 实时预览:"))
+        self.gcode_box = QTextEdit()
+        self.gcode_box.setReadOnly(True)
+        self.gcode_box.setStyleSheet("background-color: #1e1e1e; color: #dcdcdc; font-family: Consolas; font-size: 10pt;")
+        layout.addWidget(self.gcode_box)
+
         # --- 4. 按钮 ---
         btn_layout = QHBoxLayout()
         self.btn_save = QPushButton("保存配置")
@@ -520,8 +534,17 @@ class BatchRunDialog(QDialog):
         self.worker.log_signal.connect(self.log)
         self.worker.progress_signal.connect(self.update_progress)
         self.worker.finished_signal.connect(self.on_finished)
-        # 连接图像信号到主界面的 update_image
-        self.worker.image_signal.connect(self.mw.update_image)
+        self.worker.gcode_signal.connect(self.update_gcode_display)
+        self.worker.current_index_signal.connect(self.highlight_current_line)
+        
+        # 关闭实时识别 (防止卡顿和Z轴变化导致的误识别)
+        self.mw.live_detect = False
+        self.mw.btn_detect.setText("识别模具")
+        
+        # 开启中心十字 (辅助观察)
+        self.mw.show_center_crosshair = True
+        self.mw.btn_show_crosshair.setText("关闭中心")
+        self.mw.log("✅ 批量运行中：关闭实时识别，开启中心十字")
         
         self.btn_cam_dry.setEnabled(False)
         self.btn_nozzle_dry.setEnabled(False)
@@ -568,6 +591,11 @@ class BatchRunDialog(QDialog):
         self.btn_pause.setEnabled(False)
         self.btn_resume.setVisible(False)
         self.btn_pause.setVisible(True)
+        
+        # 关闭中心十字
+        self.mw.show_center_crosshair = False
+        self.mw.btn_show_crosshair.setText("显示中心")
+        self.mw.log("⏹ 批量运行结束：关闭中心十字")
         if success:
             QMessageBox.information(self, "完成", msg)
         else:
@@ -582,6 +610,24 @@ class BatchRunDialog(QDialog):
         self.log_box.append(msg)
         # 也可以同步到主界面日志
         # self.mw.log(f"[Batch] {msg}")
+
+    def update_gcode_display(self, full_gcode):
+        """显示完整的 G-code"""
+        self.gcode_box.setText(full_gcode)
+
+    def highlight_current_line(self, line_index):
+        """高亮当前执行的行 (根据行号)"""
+        # 移动光标到指定行
+        cursor = self.gcode_box.textCursor()
+        cursor.movePosition(cursor.Start)
+        
+        # 向下移动 line_index 行
+        cursor.movePosition(cursor.Down, cursor.MoveAnchor, line_index)
+        
+        # 选中该行
+        cursor.select(cursor.LineUnderCursor)
+        self.gcode_box.setTextCursor(cursor)
+        self.gcode_box.ensureCursorVisible()
 
     def load_settings(self):
         """

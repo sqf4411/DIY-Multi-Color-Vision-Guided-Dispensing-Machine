@@ -498,10 +498,10 @@ class MainWindow(QWidget):
         self.live_detect = False     # 是否实时识别模具
         # 缩放相关
         self.zoom_scale = 1.0        # 在“自适应基准”上的倍数
-        self.base_scale = None       # 适配窗口的基准比例（首帧或窗口变化时计算）
-
         # 新增：缩放比例
         self.zoom_scale = 1.0
+        
+        self.detect_skip_count = 0        # 新增：跳帧计数器
 
         # ==== 相机标定 / 去畸变 ====
         self.K = None          # 内参矩阵

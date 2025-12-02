@@ -46,11 +46,14 @@ class BatchWorker(QThread):
         cols = self.cfg['cols']
         start_x = self.cfg['start_x']
         start_y = self.cfg['start_y']
+        start_z = self.cfg.get('start_z', 0.0) # 新增 Start Z
         space_x = self.cfg['space_x']
         space_y = self.cfg['space_y']
         
-        total = rows * cols
-        count = 0
+        total_molds = rows * cols
+        molds_finished = 0
+        RESOLUTION = 1000
+        global_total_steps = total_molds * RESOLUTION
 
         mode_names = {
             'real': "真实批量点胶",
@@ -59,7 +62,7 @@ class BatchWorker(QThread):
         }
         title = mode_names.get(self.mode, "未知模式")
 
-        self.log_signal.emit(f"🚀 开始【{title}】：{rows}x{cols}，共 {total} 个")
+        self.log_signal.emit(f"🚀 开始【{title}】：{rows}x{cols}，共 {total_molds} 个")
         
         # 0. 开启十字光标 (方便观察)
         # 注意：主界面使用的是 show_center_crosshair
@@ -88,14 +91,18 @@ class BatchWorker(QThread):
                         return
                     self.msleep(100)
 
-                count += 1
-                self.progress_signal.emit(count, total)
+                # count += 1 # 移除旧计数
+                # self.progress_signal.emit(count, total) # 移除旧的进度更新
+                
+                # 更新当前模具的起始进度
+                current_base_progress = molds_finished * RESOLUTION
+                self.progress_signal.emit(current_base_progress, global_total_steps)
                 
                 # --- 1. 计算目标坐标 (相机位置) ---
                 target_x = start_x + c * space_x
                 target_y = start_y + r * space_y
                 
-                self.log_signal.emit(f"📍 [{count}/{total}] 移动到 (R{r}, C{c}): X{target_x:.2f}, Y{target_y:.2f}")
+                self.log_signal.emit(f"📍 [{molds_finished + 1}/{total_molds}] 移动到 (R{r}, C{c}): X{target_x:.2f}, Y{target_y:.2f}")
                 
                 # --- 2. 移动相机到位 ---
                 self.mw.machine.move_to(x=target_x, y=target_y, speed=self.mw.feedrate_xy)
@@ -119,6 +126,7 @@ class BatchWorker(QThread):
                 
                 if not paths_groups:
                     self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})，跳过")
+                    molds_finished += 1
                     continue
                 
                 # Do NOT flatten groups. Keep structure: List[List[Path]]
@@ -129,6 +137,7 @@ class BatchWorker(QThread):
                     
                     if not gcode_lines:
                         self.log_signal.emit("⚠ 生成 G-code 失败，跳过")
+                        molds_finished += 1
                         continue
 
                     # 发送完整 G-code 到界面显示
@@ -139,10 +148,19 @@ class BatchWorker(QThread):
                     self.log_signal.emit(f"💉 开始执行 (R{r}, C{c})...")
                     
                     # 逐行发送
+                    total_lines = len(gcode_lines)
+                    self.progress_signal.emit(0, total_lines) # 初始化进度条
+                    
                     for i, line in enumerate(gcode_lines):
                         # 发送当前行信号 (用于高亮)
                         self.current_line_signal.emit(line)
                         self.current_index_signal.emit(i)
+                        
+                        # 更新进度条 (全局行粒度)
+                        # 当前进度 = 已完成模具进度 + 当前模具内进度
+                        current_mold_progress = int((i + 1) / total_lines * RESOLUTION)
+                        global_current = (molds_finished * RESOLUTION) + current_mold_progress
+                        self.progress_signal.emit(global_current, global_total_steps)
                         # 1. 检查停止
                         if not self.running:
                             self.finished_signal.emit(False, "用户停止")
@@ -173,6 +191,8 @@ class BatchWorker(QThread):
 
                 except Exception as e:
                     self.log_signal.emit(f"❌ 执行出错: {e}")
+                
+                molds_finished += 1
 
         # 结束
         # 结束 - 返回起始点
@@ -186,6 +206,11 @@ class BatchWorker(QThread):
         
         # 2. 移动回起始 XY
         self.mw.machine.move_to(x=start_x, y=start_y, speed=self.mw.feedrate_xy)
+        self.mw.machine.wait_until_idle()
+
+        # 3. 恢复起始 Z (用户要求)
+        self.log_signal.emit(f"🔙 恢复起始高度 Z={start_z:.2f}")
+        self.mw.machine.move_to(z=start_z, speed=self.mw.feedrate_z)
         self.mw.machine.wait_until_idle()
 
         self.finished_signal.emit(True, f"{title}完成")
@@ -284,7 +309,7 @@ class BatchRunDialog(QDialog):
         super().__init__(main_window)
         self.mw = main_window
         self.setWindowTitle("批量运行 (Batch Run)")
-        self.resize(600, 500)
+        self.resize(600, 750) # 增加高度
         
         self.init_ui()
         self.load_settings()
@@ -302,6 +327,9 @@ class BatchRunDialog(QDialog):
         self.spn_start_y = QDoubleSpinBox()
         self.spn_start_y.setRange(-500, 500)
         
+        self.spn_start_z = QDoubleSpinBox() # 新增 Z
+        self.spn_start_z.setRange(-500, 500)
+
         btn_teach_start = QPushButton("示教当前位置")
         btn_teach_start.clicked.connect(self.on_teach_start)
         
@@ -310,6 +338,8 @@ class BatchRunDialog(QDialog):
         h_start.addWidget(self.spn_start_x)
         h_start.addWidget(QLabel("Y:"))
         h_start.addWidget(self.spn_start_y)
+        h_start.addWidget(QLabel("Z:"))     # 新增 Z
+        h_start.addWidget(self.spn_start_z)
         h_start.addWidget(btn_teach_start)
         
         form.addRow("起始点 (Start Pos):", h_start)
@@ -419,7 +449,10 @@ class BatchRunDialog(QDialog):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("%v / %m")
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p%") # 显示百分比
         layout.addWidget(self.progress_bar)
 
         # G-code 预览框 (新增)
@@ -477,12 +510,14 @@ class BatchRunDialog(QDialog):
         x, y, z = self.mw.machine.get_position()
         self.spn_start_x.setValue(x)
         self.spn_start_y.setValue(y)
-        self.log(f"已示教起始点: {x:.2f}, {y:.2f}")
+        self.spn_start_z.setValue(z) # 新增 Z
+        self.log(f"已示教起始点: X{x:.2f}, Y{y:.2f}, Z{z:.2f}")
 
     def get_config(self):
         return {
             'start_x': self.spn_start_x.value(),
             'start_y': self.spn_start_y.value(),
+            'start_z': self.spn_start_z.value(), # 新增 Z
             'rows': self.spn_rows.value(),
             'cols': self.spn_cols.value(),
             'space_x': self.spn_space_x.value(),
@@ -497,6 +532,9 @@ class BatchRunDialog(QDialog):
         }
 
     def on_start(self, mode):
+        # 自动保存配置 (符合用户直觉：运行即保存)
+        self.save_settings()
+        
         cfg = self.get_config()
         
         # ====== 安全检查 ======
@@ -555,8 +593,8 @@ class BatchRunDialog(QDialog):
         self.btn_resume.setVisible(False)
         
         # 设置进度条最大值
-        total = cfg['rows'] * cfg['cols']
-        self.progress_bar.setMaximum(total)
+        # total = cfg['rows'] * cfg['cols']
+        # self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(0)
         
         self.worker.start()
@@ -644,18 +682,20 @@ class BatchRunDialog(QDialog):
                 # 加载阵列参数
                 if 'batch_start_x' in settings: self.spn_start_x.setValue(float(settings['batch_start_x']))
                 if 'batch_start_y' in settings: self.spn_start_y.setValue(float(settings['batch_start_y']))
+                if 'batch_start_z' in settings: self.spn_start_z.setValue(float(settings['batch_start_z'])) # 新增 Z
                 if 'batch_rows' in settings: self.spn_rows.setValue(int(settings['batch_rows']))
                 if 'batch_cols' in settings: self.spn_cols.setValue(int(settings['batch_cols']))
                 if 'batch_space_x' in settings: self.spn_space_x.setValue(float(settings['batch_space_x']))
                 if 'batch_space_y' in settings: self.spn_space_y.setValue(float(settings['batch_space_y']))
                 
                 # Z轴参数通常跟随主界面，但如果用户在批量界面改了并保存，也可以加载
-                # 这里我们选择：初始化时用主界面参数(已在init_ui完成)，
-                # 但如果 JSON 里有专门的 batch_cam_safe_z 等，也可以覆盖。
-                # 现在的逻辑是：init_ui 用 self.mw 的值初始化，这里就不覆盖了，
-                # 除非我们想让批量界面的修改独立保存。
-                # 用户说：“点击相机批量那一定直接使用相机的3个高度参数啊”
-                # 所以最好保持同步。这里就不加载 Z 了，让它跟随 self.mw。
+                if 'cam_safe_z_cavity' in settings: self.spn_cam_safe_cavity.setValue(float(settings['cam_safe_z_cavity']))
+                if 'cam_safe_z_product' in settings: self.spn_cam_safe_product.setValue(float(settings['cam_safe_z_product']))
+                if 'cam_work_z' in settings: self.spn_cam_work.setValue(float(settings['cam_work_z']))
+                
+                if 'safe_z_cavity' in settings: self.spn_nozzle_safe_cavity.setValue(float(settings['safe_z_cavity']))
+                if 'safe_z_product' in settings: self.spn_nozzle_safe_product.setValue(float(settings['safe_z_product']))
+                if 'work_z' in settings: self.spn_nozzle_work.setValue(float(settings['work_z']))
                 
         except Exception as e:
             self.log(f"❌ 加载配置失败: {e}")
@@ -679,6 +719,7 @@ class BatchRunDialog(QDialog):
         # 1. 更新阵列参数
         settings['batch_start_x'] = self.spn_start_x.value()
         settings['batch_start_y'] = self.spn_start_y.value()
+        settings['batch_start_z'] = self.spn_start_z.value() # 新增 Z
         settings['batch_rows'] = self.spn_rows.value()
         settings['batch_cols'] = self.spn_cols.value()
         settings['batch_space_x'] = self.spn_space_x.value()

@@ -1,6 +1,6 @@
 {
-    "feedrate_xy": 2096.0,
-    "feedrate_z": 711.0,
+    "feedrate_xy": 2096,
+    "feedrate_z": 711,
     "accel": 316.0,
     "safe_z_cavity": 104.0,
     "safe_z_product": 120.0,
@@ -10,13 +10,14 @@
     "tool_setter_y": null,
     "nozzle_offset_x": 0.0,
     "nozzle_offset_y": 0.0,
-    "cam_safe_z_cavity": 20.0,
-    "cam_safe_z_product": 50.0,
-    "cam_work_z": 10.0,
+    "cam_safe_z_cavity": 212.0,
+    "cam_safe_z_product": 230.0,
+    "cam_work_z": 211.0,
     "batch_start_x": 111.38,
-    "batch_start_y": 139.45,
+    "batch_start_y": 144.45,
     "batch_rows": 1,
     "batch_cols": 4,
     "batch_space_x": 70.0,
-    "batch_space_y": 72.0
+    "batch_space_y": 72.0,
+    "batch_start_z": 220.0
 }

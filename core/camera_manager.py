@@ -5,16 +5,16 @@ import ctypes
 import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
 
-# Import MvImport SDK
-# Assuming MvImport is in the project root or accessible via sys.path
-# In main_camera_ui.py there was a sys.path append, we might need to handle it or assume it's set.
-# For now, we assume MvImport is importable.
+# 导入 MvImport SDK
+# 假设 MvImport 在项目根目录或可通过 sys.path 访问
+# 在 main_camera_ui.py 中有一个 sys.path append，我们可能需要处理它或假设它已设置。
+# 目前，我们假设 MvImport 可直接导入。
 try:
     from MvImport.MvCameraControl_class import *
 except ImportError:
-    # If standard import fails, try appending the path relative to this file
-    # But usually it's better to rely on the environment being efficient.
-    # Let's try to match what main_camera_ui.py did but cleanly.
+    # 如果标准导入失败，尝试附加相对于此文件的路径
+    # 但通常依赖高效的环境更好。
+    # 让我们尝试匹配 main_camera_ui.py 所做的，但更干净。
     pass
 
 class CameraWorker(QThread):
@@ -48,23 +48,23 @@ class CameraWorker(QThread):
                 self.frame_received.emit(img)
             else:
                 pass 
-                # potentially handle timeout/error, but keep loop for robustness? 
-                # or just ignore timeouts.
+                # 可能需要处理超时/错误，但为了稳健性保持循环？
+                # 或者直接忽略超时。
 
 class CameraManager:
     """
-    Encapsulates MvCamera operations.
+    封装 MvCamera 操作。
     """
     def __init__(self):
         self.cam = None
         self.worker = None
         
-        # Ranges
+        # 范围 (Ranges)
         self.exp_range = (100.0, 10000.0)
         self.gain_range = (0.0, 10.0)
         self.gamma_range = (0.5, 2.0)
         
-        # Info
+        # 信息 (Info)
         self.is_open = False
 
     def open_camera(self) -> bool:
@@ -95,7 +95,7 @@ class CameraManager:
             
         self.is_open = True
         
-        # Init defaults
+        # 初始化默认值
         self.cam.MV_CC_SetEnumValue("ExposureAuto", 0)
         self.cam.MV_CC_SetEnumValue("GainAuto", 0)
         self.cam.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_Mono8)
@@ -179,7 +179,7 @@ class CameraManager:
         except: pass
     
     def get_params(self):
-        # Read current params from camera
+        # 从相机读取当前参数
         res = {}
         if not self.cam: return res
         
@@ -197,7 +197,7 @@ class CameraManager:
 
     def get_cam_info(self):
         """
-        Returns a dict with: 'width', 'height', 'fps', 'pixel_format_str'
+        返回一个字典，包含: 'width', 'height', 'fps', 'pixel_format_str'
         """
         info = {'width': 0, 'height': 0, 'fps': 0.0, 'pixel_format_str': '-'}
         if not self.cam: return info

@@ -45,6 +45,7 @@ from core.batch_run_dialog import BatchRunDialog
 from core.machine_client import MachineClient
 from core.config_manager import ConfigManager
 from core.camera_manager import CameraManager
+from core.halcon_manager import HalconManager
 
 # MvImport dependency removed from UI (managed by CameraManager)
 # from MvImport.MvCameraControl_class import *
@@ -377,8 +378,16 @@ class MainWindow(QWidget):
         # ====== ✅ Initialize Managers ======
         self.config = ConfigManager()
         self.camera_manager = CameraManager()
+        self.halcon_manager = HalconManager()
         self.camera_manager.get_frame_signal().connect(self.update_image) if self.camera_manager.get_frame_signal() else None
+        # Load Config
+        # self.config = ConfigManager() # This line is duplicated and should be removed or moved.
+        # self.load_app_settings()  # Moved after UI init
+
+        # UI Setup
+        self.initUI()
         
+        self.load_app_settings() # Access UI here
         self.init_done = False # 初始化标志
 
         # 设置图标
@@ -817,66 +826,54 @@ class MainWindow(QWidget):
         task_layout.addWidget(self.btn_batch_run)
         task_layout.addWidget(self.btn_test_valve)
 
-        # ---- 曝光 ----
-        self.lbl_exp = QLabel("曝光(us)")
-        self.sld_exp = QSlider(Qt.Horizontal)
-        self.sld_exp.setRange(0, 100)
+        # ================== 2. 相机参数组 (重构) ==================
+        param_group = QGroupBox("相机参数")
+        param_layout = QGridLayout()
+
+        # 曝光
+        param_layout.addWidget(QLabel("曝光 (us):"), 0, 0)
         self.spn_exp = QDoubleSpinBox()
+        self.spn_exp.setRange(10, 1000000)
         self.spn_exp.setDecimals(0)
         self.spn_exp.setSuffix(" us")
+        self.spn_exp.valueChanged.connect(self.camera_manager.set_exposure)
+        param_layout.addWidget(self.spn_exp, 0, 1)
 
-        row_exp = QHBoxLayout()
-        row_exp.addWidget(self.sld_exp)
-        row_exp.addWidget(self.spn_exp)
-
-        # ---- 增益 ----
-        self.lbl_gain = QLabel("增益(dB)")
-        self.sld_gain = QSlider(Qt.Horizontal)
-        self.sld_gain.setRange(0, 100)
+        # 增益
+        param_layout.addWidget(QLabel("增益 (dB):"), 1, 0)
         self.spn_gain = QDoubleSpinBox()
-        self.spn_gain.setDecimals(2)
-        self.spn_gain.setSingleStep(0.1)
+        self.spn_gain.setRange(0, 24)
+        self.spn_gain.setDecimals(1)
         self.spn_gain.setSuffix(" dB")
+        self.spn_gain.valueChanged.connect(self.camera_manager.set_gain)
+        param_layout.addWidget(self.spn_gain, 1, 1)
 
-        row_gain = QHBoxLayout()
-        row_gain.addWidget(self.sld_gain)
-        row_gain.addWidget(self.spn_gain)
-
-        # ---- Gamma ----
-        self.lbl_gamma = QLabel("Gamma")
-        self.sld_gamma = QSlider(Qt.Horizontal)
-        self.sld_gamma.setRange(0, 100)
+        # Gamma
+        param_layout.addWidget(QLabel("Gamma:"), 2, 0)
         self.spn_gamma = QDoubleSpinBox()
-        self.spn_gamma.setDecimals(2)
+        self.spn_gamma.setRange(0.1, 4.0)
         self.spn_gamma.setSingleStep(0.1)
+        self.spn_gamma.valueChanged.connect(self.camera_manager.set_gamma)
+        param_layout.addWidget(self.spn_gamma, 2, 1)
 
-        row_gamma = QHBoxLayout()
-        row_gamma.addWidget(self.sld_gamma)
-        row_gamma.addWidget(self.spn_gamma)
+        param_group.setLayout(param_layout)
+        self.param_group = param_group
 
-        # ====== ✅ 第一步：加回翻转勾选框 ======
-        from PyQt5.QtWidgets import QCheckBox
-
-        row_flip = QHBoxLayout()
-        self.chk_flip_x = QCheckBox("水平翻转 (Flip X)")
-        self.chk_flip_y = QCheckBox("垂直翻转 (Flip Y)")
-
-        # 连接信号：一点击就刷新画面
-        self.chk_flip_x.stateChanged.connect(self.render_current_frame)
-        self.chk_flip_y.stateChanged.connect(self.render_current_frame)
-
-        row_flip.addWidget(self.chk_flip_x)
-        row_flip.addWidget(self.chk_flip_y)
-        # ====================================
-
-
-        # ---- 右边参数组 ----
-        param_group = QGroupBox("相机参数")
-        form = QFormLayout()
-        form.addRow(self.lbl_exp, row_exp)
-        form.addRow(self.lbl_gain, row_gain)
-        form.addRow(self.lbl_gamma, row_gamma)
-        param_group.setLayout(form)
+        # ================== 3. 视觉后端组 (Halcon) ==================
+        vision_group = QGroupBox("视觉后端")
+        vision_layout = QVBoxLayout()
+        
+        self.chk_use_halcon = QCheckBox("启用 Halcon 识别")
+        self.chk_use_halcon.clicked.connect(self.on_halcon_toggled)
+        
+        self.btn_load_halcon = QPushButton("加载 Halcon 脚本")
+        self.btn_load_halcon.setEnabled(False)
+        self.btn_load_halcon.clicked.connect(self.on_load_halcon_script)
+        
+        vision_layout.addWidget(self.chk_use_halcon)
+        vision_layout.addWidget(self.btn_load_halcon)
+        vision_group.setLayout(vision_layout)
+        self.vision_group = vision_group
 
 
         # ---- XYZ 运动控制 ----
@@ -1095,7 +1092,8 @@ class MainWindow(QWidget):
         right_layout.addWidget(self.offset_group)   # 针头偏移
         right_layout.addLayout(btn_layout)
         right_layout.addLayout(task_layout)         # 点胶任务按钮排
-        right_layout.addWidget(param_group)
+        right_layout.addWidget(self.param_group)
+        right_layout.addWidget(self.vision_group)
         right_layout.addWidget(self.log_box)
         right_layout.addStretch(1)
 
@@ -1847,11 +1845,18 @@ class MainWindow(QWidget):
             self._detect_frame_count += 1
             
             # 每 3 帧检测一次 (降低 66% 负荷)
+            # 每 3 帧检测一次 (降低 66% 负荷)
             if self._detect_frame_count % 3 == 0:
-                from core.mold_detector import detect_mold_and_cells
-                detected_img, _, _, _ = detect_mold_and_cells(img)
-                self._last_detected_img = detected_img
-                vis_img = detected_img
+                # Ensure grayscale for vision processing
+                if len(img.shape) == 3:
+                     gray_for_proc = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                else:
+                     gray_for_proc = img
+                     
+                _, detected_vis_img = self.get_vision_result(gray_for_proc)
+                
+                self._last_detected_img = detected_vis_img
+                vis_img = detected_vis_img
             else:
                 # 中间帧：如果有缓存就用缓存，没有就用原图
                 if self._last_detected_img is not None:
@@ -2431,11 +2436,16 @@ class MainWindow(QWidget):
 
         try:
             # --- A. 图像处理 & 识别 ---
-            from core.mold_detector import get_calculated_paths
+            # --- A. 图像处理 & 识别 ---
             img_dry = self.last_frame.copy()
             img_dry = cv2.flip(img_dry, -1)  # 翻转
+            
+            if len(img_dry.shape) == 3:
+                 gray_dry = cv2.cvtColor(img_dry, cv2.COLOR_BGR2GRAY)
+            else:
+                 gray_dry = img_dry
 
-            paths_px = get_calculated_paths(img_dry)
+            paths_px, _ = self.get_vision_result(gray_dry)
             if not paths_px:
                 QMessageBox.warning(self, "未识别", "未识别到模具路径！")
                 return
@@ -2935,6 +2945,43 @@ class MainWindow(QWidget):
         self.safe_z_product = float(self.spn_safe_z_product.value())
         self.work_z = float(self.spn_work_z.value())
         self.save_app_settings()
+
+    # ================== Halcon Integration ==================
+    def on_halcon_toggled(self):
+        enabled = self.chk_use_halcon.isChecked()
+        self.btn_load_halcon.setEnabled(enabled)
+        if enabled and not self.halcon_manager.is_initialized:
+            # Try init
+            if not self.halcon_manager.init_engine():
+                QMessageBox.warning(self, "Error", "Failed to initialize Halcon Engine.\nEnsure mvtec-halcon is installed.")
+                self.chk_use_halcon.setChecked(False)
+                self.btn_load_halcon.setEnabled(False)
+
+    def on_load_halcon_script(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load Halcon Script", "config", "Halcon Scripts (*.hdev *.shm)")
+        if path:
+            if self.halcon_manager.load_script(path):
+                self.log(f"✅ Halcon script loaded: {os.path.basename(path)}")
+            else:
+                self.log(f"❌ Failed to load Halcon script: {path}")
+
+    def get_vision_result(self, gray_img):
+        """
+        Unified vision interface.
+        Returns: (paths_pixels, debug_img_bgr)
+        """
+        if self.chk_use_halcon.isChecked():
+            # Use Halcon
+            res = self.halcon_manager.process_image(gray_img)
+            if res and "paths" in res:
+                # Assuming res['paths'] is list of numpy arrays
+                return res['paths'], cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR) # We might not get debug img from Halcon yet
+            else:
+                 return [], cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
+        else:
+            # Use Legacy OpenCV
+            from core.mold_detector import get_paths_and_image
+            return get_paths_and_image(gray_img)
 
 if __name__ == "__main__":
     print("🚀 App Starting...")

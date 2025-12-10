@@ -29,7 +29,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout,
     QFileDialog, QSlider,
     QGroupBox, QFormLayout, QDoubleSpinBox, QSpinBox, QTextEdit,
-    QMessageBox, QLineEdit, QScrollArea,QDialog, QDialogButtonBox
+    QMessageBox, QLineEdit, QScrollArea,QDialog, QDialogButtonBox,
+    QCheckBox
 )
 
 
@@ -383,17 +384,6 @@ class MainWindow(QWidget):
         # Load Config
         # self.config = ConfigManager() # This line is duplicated and should be removed or moved.
         # self.load_app_settings()  # Moved after UI init
-
-        # UI Setup
-        self.initUI()
-        
-        self.load_app_settings() # Access UI here
-        self.init_done = False # 初始化标志
-
-        # 设置图标
-        from PyQt5.QtGui import QIcon
-        if os.path.exists("logo.svg"):
-            self.setWindowIcon(QIcon("logo.svg"))
 
         # 连接日志信号
         self.log_signal.connect(self._log_impl)
@@ -1132,13 +1122,9 @@ class MainWindow(QWidget):
         self.btn_test_valve.clicked.connect(self.on_test_valve)
 
         # 相机参数联动
-        self.sld_exp.valueChanged.connect(self.on_exp_slider_changed)
-        self.sld_gain.valueChanged.connect(self.on_gain_slider_changed)
-        self.sld_gamma.valueChanged.connect(self.on_gamma_slider_changed)
+        # Slider signals removed as sliders were removed.
+        # SpinBox signals are already connected in definition to direct camera manager methods.
 
-        self.spn_exp.valueChanged.connect(self.on_exp_spin_changed)
-        self.spn_gain.valueChanged.connect(self.on_gain_spin_changed)
-        self.spn_gamma.valueChanged.connect(self.on_gamma_spin_changed)
 
         # XYZ 点动按钮
         self.btn_x_minus.clicked.connect(lambda: self.on_jog('x', -1))

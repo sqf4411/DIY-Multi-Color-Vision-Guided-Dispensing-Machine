@@ -1,0 +1,60 @@
+* ========================================================
+* 示例：Halcon 形状匹配脚本 (Sample matching script)
+* 难度：非常简单 (大部分代码由 HDevelop 助手自动生成)
+* ========================================================
+
+* 1. 初始化
+* 读取一张图片作为参考 (实际运行时这一步会由 Python 传入图像替换)
+read_image (Image, 'mold2.png')
+
+* 设置显示的颜色
+dev_set_color ('green')
+dev_set_draw ('margin')
+dev_set_line_width (3)
+
+* ========================================================
+* 2. 也是最关键的一步：创建模板 (通常只需做一次)
+* 在 HDevelop 软件里，你可以直接用鼠标画框，然后点 "Create Model"
+* 下面这几行代码通常是自动生成的：
+
+* 定义感兴趣区域 (ROI)，即你的那个“小产品”
+gen_rectangle1 (ROI_0, 100, 100, 300, 300)
+reduce_domain (Image, ROI_0, ImageReduced)
+
+* 创建形状模型 (Shape Model)
+* 参数解释：
+* 'auto': 自动金字塔层级
+* -0.39, 0.79: 允许的旋转角度范围 (弧度)
+* 'auto', 'auto', 'use_polarity', 'auto', 'auto': 其他高级参数通常默认即可
+create_shape_model (ImageReduced, 'auto', -0.39, 0.79, 'auto', 'auto', 'use_polarity', 'auto', 'auto', ModelID)
+
+* ========================================================
+* 3. 实时识别 (这就是 Python 会调用的部分)
+* 在全图中寻找匹配的所有实例
+
+* 寻找模型
+* 0.5: 最小匹配分数 (50%相似度)
+* 4:  我们要找 4 个产品
+* 0.5: 允许的最大重叠度
+find_shape_model (Image, ModelID, -0.39, 0.79, 0.5, 4, 0.5, 'least_squares', 0, 0.9, Row, Column, Angle, Score)
+
+* ========================================================
+* 4. 结果显示 (Python 会获取 Row, Column, Angle)
+
+* 遍历找到的 4 个结果，画出来看看
+for i := 0 to |Score| - 1 by 1
+    * 获取坐标和角度
+    CurrentRow := Row[i]
+    CurrentCol := Column[i]
+    CurrentAngle := Angle[i]
+    
+    * 在图上显示找到的轮廓
+    vector_angle_to_rigid (0, 0, 0, CurrentRow, CurrentCol, CurrentAngle, HomMat2D)
+    get_shape_model_contours (ModelContours, ModelID, 1)
+    affine_trans_contour_xld (ModelContours, ContoursAffine, HomMat2D)
+    dev_display (ContoursAffine)
+endfor
+
+* ========================================================
+* 5. 清理内存
+clear_shape_model (ModelID)

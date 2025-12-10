@@ -6,9 +6,9 @@ import numpy as np
 # 用户环境应安装 mvtec-halcon 或 halcon
 try:
     import halcon as ha
-except ImportError:
+except Exception as e:
     ha = None
-    # print("Warning: halcon module not found. Halcon features will be disabled.")
+    print(f"Warning: Failed to import halcon: {e}")
 
 class HalconManager:
     """

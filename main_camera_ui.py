@@ -30,7 +30,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QSlider,
     QGroupBox, QFormLayout, QDoubleSpinBox, QSpinBox, QTextEdit,
     QMessageBox, QLineEdit, QScrollArea,QDialog, QDialogButtonBox,
-    QCheckBox
+    QCheckBox, QTabWidget, QSplitter
 )
 
 
@@ -47,6 +47,7 @@ from core.machine_client import MachineClient
 from core.config_manager import ConfigManager
 from core.camera_manager import CameraManager
 from core.halcon_manager import HalconManager
+from core.visualizer_3d import Visualizer3D
 
 # MvImport dependency removed from UI (managed by CameraManager)
 # from MvImport.MvCameraControl_class import *
@@ -554,6 +555,7 @@ class MainWindow(QWidget):
         # 针头相对「相机参考点」的 XY 偏移量（mm）
         self.nozzle_offset_x = 0.0
         self.nozzle_offset_y = 0.0
+        self.nozzle_offset_z = 0.0
 
         # 相机像素 -> 机器 XY 的映射矩阵
         self.cam2mach_matrix = None
@@ -628,6 +630,39 @@ class MainWindow(QWidget):
             msg = f"{msg} " + " ".join(str(a) for a in args)
         self.log_signal.emit(str(msg))
 
+    # ================== Tool Set Group (New) ==================
+    def init_tool_set_group(self):
+        # ===== Z 高度 / 对刀 (独立组) =====
+        zbase_group = QGroupBox("Z 高度 / 对刀")
+        zbase_layout = QVBoxLayout()
+        
+        # 1. Z 基准显示
+        self.lbl_z_base = QLabel(f"当前 Z 基准: {self.z_base:.2f} mm")
+        self.lbl_z_base.setStyleSheet("font-weight: bold; font-size: 14px; color: #FCD34D;")
+        
+        # 2. 对刀仪状态灯 (圆形 Label)
+        status_layout = QHBoxLayout()
+        lbl_status_text = QLabel("对刀仪状态:")
+        self.lbl_probe_status = QLabel("●")
+        self.lbl_probe_status.setStyleSheet("color: #9CA3AF; font-size: 20px;") # 默认灰色
+        self.lbl_probe_status.setToolTip("灰色=未知, 绿色=未触发, 红色=已触发")
+        status_layout.addWidget(lbl_status_text)
+        status_layout.addWidget(self.lbl_probe_status)
+        status_layout.addStretch()
+
+        # 3. 按钮
+        self.btn_auto_tool_set = QPushButton("一键对刀")
+        self.btn_auto_tool_set.setMinimumHeight(30)
+        self.btn_auto_tool_set.setStyleSheet("background-color: #2563EB; font-weight: bold;")
+        self.btn_auto_tool_set.clicked.connect(self.on_btn_auto_tool_set)
+        
+        zbase_layout.addWidget(self.lbl_z_base)
+        zbase_layout.addLayout(status_layout)
+        zbase_layout.addWidget(self.btn_auto_tool_set)
+        zbase_group.setLayout(zbase_layout)
+        
+        return zbase_group
+
     # ================== UI ==================
     def init_ui(self):
         # ---- 左侧大画面 ----
@@ -685,28 +720,28 @@ class MainWindow(QWidget):
 
         # ---- Klipper 连接 ----
         conn_group = QGroupBox("Klipper 连接")
-        conn_layout = QHBoxLayout()
+        conn_layout = QHBoxLayout() # 单行布局
 
-        # 1. IP 输入框 (标签+框)
+        # 1. IP
         lbl_ip = QLabel("IP:")
         self.edit_ip = QLineEdit("192.168.60.26")
-        self.edit_ip.setFixedWidth(110)  # 给IP留够宽度
+        self.edit_ip.setFixedWidth(110)
         self.edit_ip.setAlignment(Qt.AlignCenter)
 
-        # 2. Port 输入框 (标签+框)
+        # 2. Port
         lbl_port = QLabel("Port:")
         self.edit_port = QLineEdit("7125")
-        self.edit_port.setFixedWidth(50)  # 端口号短一点
+        self.edit_port.setFixedWidth(50)
         self.edit_port.setAlignment(Qt.AlignCenter)
-
-        # 3. 连接按钮 (初始灰色)
+        
+        # 3. 按钮定义
         self.btn_connect_klipper = QPushButton("连接")
         self.btn_connect_klipper.setCursor(Qt.PointingHandCursor)
         self.btn_connect_klipper.setMinimumHeight(28)
-        self.btn_connect_klipper.setFixedWidth(80)  # ✅ 强制固定宽度
+        self.btn_connect_klipper.setFixedWidth(80)  
         self.btn_connect_klipper.setStyleSheet("""
                     QPushButton {
-                        background-color: #6B7280;  /* 灰色 */
+                        background-color: #6B7280;
                         color: white;
                         border-radius: 4px;
                         font-weight: bold;
@@ -716,11 +751,10 @@ class MainWindow(QWidget):
                     }
                 """)
 
-        # 4. 急停按钮 (红色 STOP)
         self.btn_estop = QPushButton("STOP")
         self.btn_estop.setCursor(Qt.PointingHandCursor)
         self.btn_estop.setMinimumHeight(28)
-        self.btn_estop.setFixedWidth(80)  # ✅ 与连接按钮宽度一致
+        self.btn_estop.setFixedWidth(80) 
         self.btn_estop.setStyleSheet("""
                     QPushButton {
                         background-color: #DC2626;  /* 红色 */
@@ -736,35 +770,32 @@ class MainWindow(QWidget):
                         background-color: #7F1D1D;
                     }
                 """)
-
-        # ====== 布局排列 (左侧输入框 -> 弹簧 -> 右侧按钮) ======
-        conn_layout.addWidget(lbl_ip)
-        conn_layout.addWidget(self.edit_ip)
-
-        conn_layout.addSpacing(10)  # IP 和 Port 之间稍微隔开一点
-
-        conn_layout.addWidget(lbl_port)
-        conn_layout.addWidget(self.edit_port)
-
-        conn_layout.addStretch()  # ✅ 关键修改：弹簧放在这里，把后面的东西顶到最右边
-
-        # 5. 相机控制按钮 (移到这里)
+        
         self.btn_start = QPushButton("启动相机")
         self.btn_stop = QPushButton("停止相机")
         self.btn_stop.setEnabled(False)
-
-        # 样式微调，让它们看起来协调
         for btn in [self.btn_start, self.btn_stop]:
             btn.setMinimumHeight(28)
             btn.setFixedWidth(80)
 
+        # ====== 布局排列 ======
+        # 左侧: IP + Port
+        conn_layout.addWidget(lbl_ip)
+        conn_layout.addWidget(self.edit_ip)
+        conn_layout.addSpacing(10)
+        conn_layout.addWidget(lbl_port)
+        conn_layout.addWidget(self.edit_port)
+        
+        # 中间: 弹簧 (把按钮顶到右边)
+        conn_layout.addStretch() 
+        
+        # 右侧: 按钮 [启动] [停止] [连接] [STOP]
         conn_layout.addWidget(self.btn_start)
         conn_layout.addSpacing(5)
         conn_layout.addWidget(self.btn_stop)
-        conn_layout.addSpacing(10) # 与连接按钮隔开
-
+        conn_layout.addSpacing(10)
         conn_layout.addWidget(self.btn_connect_klipper)
-        conn_layout.addSpacing(5)  # 两个按钮之间留一点小缝隙，不要贴太死
+        conn_layout.addSpacing(5)
         conn_layout.addWidget(self.btn_estop)
 
         conn_group.setLayout(conn_layout)
@@ -931,36 +962,6 @@ class MainWindow(QWidget):
 
         motion_layout.addLayout(zparam_layout)
         
-        # ===== Z 高度 / 对刀 =====
-        zbase_group = QGroupBox("Z 高度 / 对刀")
-        zbase_layout = QVBoxLayout()
-        
-        # 1. Z 基准显示
-        self.lbl_z_base = QLabel(f"当前 Z 基准: {self.z_base:.2f} mm")
-        self.lbl_z_base.setStyleSheet("font-weight: bold; font-size: 14px; color: #FCD34D;")
-        
-        # 2. 对刀仪状态灯 (圆形 Label)
-        status_layout = QHBoxLayout()
-        lbl_status_text = QLabel("对刀仪状态:")
-        self.lbl_probe_status = QLabel("●")
-        self.lbl_probe_status.setStyleSheet("color: #9CA3AF; font-size: 20px;") # 默认灰色
-        self.lbl_probe_status.setToolTip("灰色=未知, 绿色=未触发, 红色=已触发")
-        status_layout.addWidget(lbl_status_text)
-        status_layout.addWidget(self.lbl_probe_status)
-        status_layout.addStretch()
-
-        # 3. 按钮
-        self.btn_auto_tool_set = QPushButton("一键对刀")
-        self.btn_auto_tool_set.setMinimumHeight(30)
-        self.btn_auto_tool_set.setStyleSheet("background-color: #2563EB; font-weight: bold;")
-        self.btn_auto_tool_set.clicked.connect(self.on_btn_auto_tool_set)
-        
-        zbase_layout.addWidget(self.lbl_z_base)
-        zbase_layout.addLayout(status_layout)
-        zbase_layout.addWidget(self.btn_auto_tool_set)
-        zbase_group.setLayout(zbase_layout)
-        
-        motion_layout.addWidget(zbase_group)
 
         # 步长设置 + 预设按钮
         step_layout = QVBoxLayout()
@@ -1082,6 +1083,9 @@ class MainWindow(QWidget):
         offset_layout.addWidget(self.btn_calib_nozzle)
         offset_group.setLayout(offset_layout)
         self.offset_group = offset_group
+        
+        # New: 初始化独立的对刀组
+        self.tool_set_group = self.init_tool_set_group()
 
 
         # ---- 日志窗口 ----
@@ -1089,28 +1093,82 @@ class MainWindow(QWidget):
         self.log_box.setReadOnly(True)
         self.log_box.setMinimumHeight(150)
 
-        # ---- 右侧整体布局 ----
+        # ================== 右侧：单栏垂直布局 (宽版) ==================
+        
         right_layout = QVBoxLayout()
         right_layout.addWidget(info_group)
-        right_layout.addWidget(conn_group)          # ✅ 新增：Klipper 连接
-        right_layout.addWidget(self.motion_group)   # XYZ 控制
-        right_layout.addWidget(self.offset_group)   # 针头偏移
-        right_layout.addLayout(btn_layout)
-        right_layout.addLayout(task_layout)         # 点胶任务按钮排
+        right_layout.addWidget(conn_group)
+        right_layout.addWidget(self.motion_group)
+        right_layout.addWidget(self.tool_set_group) # [NEW] 放在这里 (XYZ 下面)
+        
+        right_layout.addWidget(self.offset_group)
+        right_layout.addLayout(btn_layout)   # 相机/示教按钮
+        right_layout.addLayout(task_layout)  # 点胶任务按钮
         right_layout.addWidget(self.param_group)
         right_layout.addWidget(self.vision_group)
+        
+        # 日志窗口
         right_layout.addWidget(self.log_box)
-        right_layout.addStretch(1)
+        
+        # 弹簧 (确保上方紧凑)
+        right_layout.addStretch()
 
-        # ---- 总布局 ----
-        main_layout = QHBoxLayout()
-        main_layout.addLayout(left_layout, stretch=4) #左侧视窗大小占比
-        main_layout.addLayout(right_layout, stretch=2)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(12)
+        # ---- 右侧容器 ----
+        right_widget = QWidget()
+        right_widget.setLayout(right_layout)
+        # right_widget.setFixedWidth(500) # 移除固定宽度，交给 Splitter 管理
+
+        # ================== 双栏布局核心 (可拖拽分割) ==================
+        # [左栏: 相机(上) + 3D(下)] - [右栏: 固定控制面板]
+
+        # 1. 3D 视图
+        self.vis3d = Visualizer3D()
+        self.vis3d.setMinimumHeight(200) 
+        vis_container = QGroupBox("3D 针头姿态")
+        vis_layout = QVBoxLayout()
+        vis_layout.addWidget(self.vis3d)
+        vis_container.setLayout(vis_layout)
+
+        # 2. 左侧总布局 (垂直: 相机 + 3D)
+        # 必须包装成 Widget 才能放入 Splitter
+        left_widget = QWidget()
+        left_final_layout = QVBoxLayout()
+        
+        camera_widget = QWidget()
+        camera_widget.setLayout(left_layout)
+        
+        left_final_layout.addWidget(camera_widget, stretch=2) # 相机占 2/3
+        left_final_layout.addWidget(vis_container, stretch=1) # 3D 占 1/3
+        
+        left_widget.setLayout(left_final_layout)
+
+        # 3. 主布局 (使用 Splitter)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        
+        # 设置初始比例 (左侧自适应, 右侧 600px)
+        splitter.setSizes([1280-600, 600]) 
+        splitter.setCollapsible(0, False) 
+        
+        # 让左侧(0)自动拉伸，右侧(1)尽量保持宽度
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        
+        main_layout = QVBoxLayout()
+        main_layout.addWidget(splitter)
+        
+        # Fix for QWidget inheritance
         self.setLayout(main_layout)
+        
+        # 设定窗口初始大小
+        self.resize(1280, 800)
 
-        # ================== 信号连接 ==================
+        # 初始化一次坐标显示 & 针头偏移显示
+        self.update_xyz_display()
+        self.update_nozzle_offset_display()
+
+    # ================== Slider/SpinBox Synchronization ==================
         self.btn_start.clicked.connect(self.start_cam)
         self.btn_stop.clicked.connect(self.stop_cam)
         self.btn_save.clicked.connect(self.save_image)
@@ -1375,24 +1433,27 @@ class MainWindow(QWidget):
 
     def update_xyz_display(self, x=None, y=None, z=None):
         """
-        [修正版] 实事求是显示：
-        机器是多少，界面就显示多少。去掉之前的负号欺骗。
+        更新界面上的坐标显示，并同步更新 3D 视图。
         """
         if x is not None: self.pos_x = float(x)
         if y is not None: self.pos_y = float(y)
         if z is not None: self.pos_z = float(z)
 
-        # ====== 👇 修改这里：直接显示，不要加负号 ======
-        display_x = self.pos_x
-        display_y = self.pos_y
-        display_z = self.pos_z
+        # 界面显示
+        self.lbl_pos_x.setText(f"X: {self.pos_x:.2f}")
+        self.lbl_pos_y.setText(f"Y: {self.pos_y:.2f}")
+        self.lbl_pos_z.setText(f"Z: {self.pos_z:.2f}")
+        
+        # Z轴基准日志显示 (保留原有逻辑)
+        if hasattr(self, "lbl_z_ref"):
+             self.lbl_z_ref.setText(f"当前 Z 基准: {self.pos_z:.2f} mm")
 
-        self.lbl_pos_x.setText(f"X: {display_x:.2f}")
-        self.lbl_pos_y.setText(f"Y: {display_y:.2f}")
-        self.lbl_pos_z.setText(f"Z: {display_z:.2f}")
-        # ====== ✅ 新增：Z轴基准日志显示 ======
-        # if hasattr(self, "lbl_z_ref"):
-        #     self.lbl_z_ref.setText(f"当前 Z 基准: {self.pos_z:.2f} mm")
+        # 更新 3D 视图 (针头位置 = 机器坐标 + 针头偏移)
+        if hasattr(self, 'vis3d'):
+             real_x = self.pos_x + self.nozzle_offset_x
+             real_y = self.pos_y + self.nozzle_offset_y
+             real_z = self.pos_z + self.nozzle_offset_z
+             self.vis3d.update_position(real_x, real_y, real_z)
     def on_home_axis(self, axis: str):
         """
         单轴 / 全部归位：X / Y / Z / all

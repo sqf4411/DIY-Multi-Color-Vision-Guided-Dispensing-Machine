@@ -2450,7 +2450,7 @@ class MainWindow(QWidget):
 
             # 3. 利用矩阵的线性部分 (2x2) 计算【相对毫米偏移】
             # 矩阵 M = [[m00, m01, tx], [m10, m11, ty]]
-            # dx_mm = m00*dx_pix + m01*dy_pix
+            # dx_mm = m00*dx_pix + m01*dy_pix=
             # dy_mm = m10*dx_pix + m11*dy_pix
             m = self.cam2mach_matrix
             dx_mm = m[0, 0] * dx_pix + m[0, 1] * dy_pix
@@ -2458,7 +2458,20 @@ class MainWindow(QWidget):
 
             self.log(f"🎯 [验证] 像素偏差({dx_pix:.1f}, {dy_pix:.1f}) -> 机器需移动({dx_mm:.2f}, {dy_mm:.2f})")
 
-            # 4. 发送相对移动指令 (G91)
+            # 4. 安全检查：计算目标绝对坐标，防止超程
+            cur_x, cur_y, _ = self.machine.get_position()
+            target_x = cur_x + dx_mm
+            target_y = cur_y + dy_mm
+
+            # 假设软限位是 0 ~ 300 (根据实际机器调整)
+            LIMIT_MIN = 0.0
+            LIMIT_MAX = 300.0
+
+            if not (LIMIT_MIN <= target_x <= LIMIT_MAX and LIMIT_MIN <= target_y <= LIMIT_MAX):
+                self.log(f"⛔ 目标超程！({target_x:.2f}, {target_y:.2f}) 超出范围 [{LIMIT_MIN}, {LIMIT_MAX}]，已取消移动。")
+                return
+
+            # 5. 发送相对移动指令 (G91)
             # 速度稍慢一点方便观察，例如 3000
             speed = 3000
             script = f"G91\nG0 X{dx_mm:.3f} Y{dy_mm:.3f} F{speed}\nG90" # 动完切回绝对模式

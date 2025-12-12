@@ -11,8 +11,12 @@ class ConfigManager:
     2. 相机参数 (config/params.json) - 曝光、增益、Gamma。
     """
     
-    APP_SETTINGS_FILE = "config/app_settings.json"
-    CAM_PARAMS_FILE = "config/params.json"
+    # Calculate absolute paths
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) # project root (core/../)
+    CONFIG_DIR = os.path.join(BASE_DIR, "config")
+    
+    APP_SETTINGS_FILE = os.path.join(CONFIG_DIR, "app_settings.json")
+    CAM_PARAMS_FILE = os.path.join(CONFIG_DIR, "params.json")
     
     DEFAULTS = {
         "feedrate_xy": 3000.0,
@@ -33,7 +37,7 @@ class ConfigManager:
         self.load_all()
 
     def ensure_config_dir(self):
-        os.makedirs("config", exist_ok=True)
+        os.makedirs(self.CONFIG_DIR, exist_ok=True)
 
     def load_all(self):
         self.load_app_settings()

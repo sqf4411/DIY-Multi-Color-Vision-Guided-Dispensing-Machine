@@ -1,6 +1,6 @@
 {
-    "feedrate_xy": 2096.0,
-    "feedrate_z": 500.0,
+    "feedrate_xy": 2096,
+    "feedrate_z": 500,
     "accel": 316.0,
     "safe_z_cavity": 104.0,
     "safe_z_product": 0.0,
@@ -11,7 +11,7 @@
     "tool_setter_y": null,
     "nozzle_offset_x": 0.0,
     "nozzle_offset_y": 0.0,
-    "cam_safe_z_cavity": 212.0,
+    "cam_safe_z_cavity": 219.0,
     "cam_safe_z_product": 220.0,
     "cam_work_z": 211.0,
     "batch_start_x": 111.38,

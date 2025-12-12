@@ -84,8 +84,18 @@ def mouse_callback(event, x, y, flags, param):
                 break
 
 
+import os
+
 def run_golden_teach():
     global warped_img, slot_boxes, drawing, start_point, current_point
+
+    # Base Path Calculation
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_dir = os.path.join(base_dir, "config")
+    
+    mold_path = os.path.join(config_dir, "mold2.png")
+    slot_path = os.path.join(config_dir, "slot_templates.npy")
+    warp_path = os.path.join(config_dir, "warp_size.npy")
 
     # Reset State
     slot_boxes = []
@@ -93,10 +103,23 @@ def run_golden_teach():
     start_point = (0, 0)
     current_point = (0, 0)
 
-    img = cv2.imread("config/mold2.png", cv2.IMREAD_GRAYSCALE)
+    img = cv2.imread(mold_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
-        print("❌ 无法读取 mold2.png")
+        print(f"❌ 无法读取 {mold_path}")
         return False
+
+    # ... (omitted: finding big box logic - keep unchanged if not shown, 
+    # but wait, finding big box logic is inside the function? 
+    # No, it calls cv2.imread and then proceeds. 
+    # I need to be careful not to delete logic I can't see below.
+    # The view showed Lines 1-100 and 150-189. 
+    # Logic between 100-150 is MISSING from view.
+    # I should only replace the TOP part (loading) and BOTTOM part (saving).
+    # But replace_file_content replaces a CONTIGUOUS block.
+    # I should make TWO replacements.)
+    
+    # REPLACEMENT 1: HEAD (Lines 87-99)
+
 
     # 找大模具框
     _, big_box, _, _ = detect_mold_and_cells(img)
@@ -170,10 +193,13 @@ def run_golden_teach():
                 # (Optional, but print is visible in console)
                 continue
 
-            np.save("config/slot_templates.npy", np.array(slot_boxes))
-            np.save("config/warp_size.npy", np.array([W, H], dtype=np.int32))
+                continue
+            
+            # Use variables defined at top of function
+            np.save(slot_path, np.array(slot_boxes))
+            np.save(warp_path, np.array([W, H], dtype=np.int32))
 
-            print("✅ 已保存 slot_templates.npy 和 warp_size.npy")
+            print(f"✅ 已保存 slot_templates.npy 和 warp_size.npy 到 {config_dir}")
             cv2.destroyAllWindows()
             return True
         

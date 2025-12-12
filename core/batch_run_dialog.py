@@ -118,11 +118,15 @@ class BatchWorker(QThread):
 
                 img = self.mw.last_frame.copy()
                 img = cv2.flip(img, -1) # 保持和主界面一致的翻转
+                
+                if len(img.shape) == 3:
+                     gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                else:
+                     gray_img = img
 
                 self.log_signal.emit("👀 正在识别模具...")
-                # 使用新函数同时获取路径和图像，但只使用路径
-                # 图像显示交给主界面的 live_detect
-                paths_groups, _ = get_paths_and_image(img)
+                # 使用统一视觉接口 (支持 Halcon / OpenCV)
+                paths_groups, _ = self.mw.get_vision_result(gray_img)
                 
                 if not paths_groups:
                     self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})，跳过")
@@ -679,7 +683,10 @@ class BatchRunDialog(QDialog):
         """
         从 app_settings.json 加载批量配置
         """
-        settings_file = "config/app_settings.json"
+        # use absolute path
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        settings_file = os.path.join(base_dir, "config", "app_settings.json")
+
         if not os.path.exists(settings_file):
             return
 
@@ -732,7 +739,10 @@ class BatchRunDialog(QDialog):
         保存配置到 app_settings.json
         silent: 是否静默保存 (不弹窗)
         """
-        settings_file = "config/app_settings.json"
+        # use absolute path
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        settings_file = os.path.join(base_dir, "config", "app_settings.json")
+        
         settings = {}
         
         # 先读取旧配置，避免覆盖其他参数

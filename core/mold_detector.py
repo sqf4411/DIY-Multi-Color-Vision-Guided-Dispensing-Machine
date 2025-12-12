@@ -118,11 +118,21 @@ def _load_golden_and_paths():
     """
     global _TEMPLATES, _WARP_SIZE, _PATH_POLY, _PATH_DOTS, _CORE_TEMPLATE, _CORE_REF_TL
 
+    # Define absolute paths
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_dir = os.path.join(base_dir, "config")
+    
+    path_templates = os.path.join(config_dir, "slot_templates.npy")
+    path_warp = os.path.join(config_dir, "warp_size.npy")
+    path_poly = os.path.join(config_dir, "disp_poly_cell0.npy")
+    path_dots = os.path.join(config_dir, "disp_dots_cell0.npy")
+    path_mold2 = os.path.join(config_dir, "mold2.png")
+
     # --- 1. Load Basic Data ---
     if _TEMPLATES is None:
         try:
-            _TEMPLATES = np.load("config/slot_templates.npy")
-            _WARP_SIZE = np.load("config/warp_size.npy").astype(int)
+            _TEMPLATES = np.load(path_templates)
+            _WARP_SIZE = np.load(path_warp).astype(int)
             print(f"[mold_detector] Golden data loaded: {_TEMPLATES.shape}")
         except:
             print("[mold_detector] Missing config/slot_templates.npy")
@@ -130,10 +140,10 @@ def _load_golden_and_paths():
 
     # --- 2. Load Path Files ---
     # IMPORTANT: Use disp_poly_cell0.npy (Golden Coord) not cell_0_polylines.npy (Local Coord)
-    if _PATH_POLY is None and os.path.exists("config/disp_poly_cell0.npy"):
+    if _PATH_POLY is None and os.path.exists(path_poly):
         try:
             # Allow pickle to load object arrays
-            arr = np.load("config/disp_poly_cell0.npy", allow_pickle=True)
+            arr = np.load(path_poly, allow_pickle=True)
             
             if arr.dtype == object:
                 # New format: list of polylines
@@ -148,17 +158,17 @@ def _load_golden_and_paths():
         except:
             pass
 
-    if _PATH_DOTS is None and os.path.exists("config/disp_dots_cell0.npy"):
+    if _PATH_DOTS is None and os.path.exists(path_dots):
         try:
-            arr = np.load("config/disp_dots_cell0.npy").astype(np.float32)
+            arr = np.load(path_dots).astype(np.float32)
             _PATH_DOTS = arr if arr.size > 0 else None
         except:
             pass
 
     # --- 3. Key Logic: Extract Core Template ---
-    if _CORE_TEMPLATE is None and os.path.exists("config/mold2.png"):
+    if _CORE_TEMPLATE is None and os.path.exists(path_mold2):
         try:
-            gold_raw = cv2.imread("config/mold2.png", cv2.IMREAD_GRAYSCALE)
+            gold_raw = cv2.imread(path_mold2, cv2.IMREAD_GRAYSCALE)
             if gold_raw is None: return
 
             # 3.1 Find big frame on golden image and correct perspective

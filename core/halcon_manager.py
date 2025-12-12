@@ -26,6 +26,7 @@ class HalconManager:
         """
         初始化 HDevEngine。
         """
+        global ha
         if ha is None:
             print("[HalconManager] 错误: 未安装 halcon python 库。")
             return False
@@ -45,6 +46,7 @@ class HalconManager:
         加载 Halcon 脚本 (.hdev) 或 外部过程。
         目前假设是一个 .hdev 脚本，里面包含主要的检测逻辑。
         """
+        global ha
         if not self.is_initialized:
             if not self.init_engine():
                 return False
@@ -68,66 +70,142 @@ class HalconManager:
 
     def process_image(self, image_np: np.ndarray):
         """
-        处理 OpenCV 图像 (numpy array)。
-        
-        Args:
-            image_np: uint8 numpy 数组 (H, W) 或 (H, W, 3)
-            
-        Returns:
-            dict: 包含识别结果，格式需与 mold_detector 兼容或易于转换。
-                  例如: {'paths': [...], 'centers': [...]}
+        运行 'scripts/detect_mold.hdev' 进行检测。
         """
-        if not self.is_initialized or not self.script_path:
-            return None
-
+        global ha
+        if not self.is_initialized:
+            if not self.init_engine():
+                return None
+ 
         # 1. 转换图像: Numpy -> Halcon Image
         try:
             h_image = self._numpy_to_himage(image_np)
+            if h_image is None: return None
         except Exception as e:
             print(f"[HalconManager] 图像转换失败: {e}")
             return None
 
-        # 2. 执行过程
+        # 2. 加载并运行脚本
+        # 使用基于当前文件位置的绝对路径，避免 CWD 问题
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(current_dir)
+        script_file = os.path.join(project_root, "scripts", "detect_mold.hdev")
+        
+        if not os.path.exists(script_file):
+            print(f"[HalconManager] 脚本不存在: {script_file}")
+            return None
+
         try:
-            # self.procedure_call.set_input_iconic_param_object("Image", h_image)
-            # self.procedure_call.execute()
+            # 加载 HDev 程序
+            program = ha.HDevProgram(script_file)
             
-            # 3. 获取结果
-            # 这部分高度依赖具体的 Halcon 脚本输入输出参数定义
-            # 假设脚本输出一个 XLD 轮廓 'ResultContours' 和 坐标 'ResultRow', 'ResultColumn'
+            # 加载 Local Procedure 'detect_mold'
+            try:
+                proc = ha.HDevProcedure.load_local(program, "detect_mold")
+            except Exception as e:
+                print(f"[HalconManager] 无法在脚本中找到过程 'detect_mold': {e}")
+                return None
+
+            # 创建调用
+            proc_call = ha.HDevProcedureCall(proc)
             
-            # result_contours = self.procedure_call.get_output_iconic_param_object("ResultContours")
-            # row = self.procedure_call.get_output_control_param_tuple("ResultRow")
-            # col = self.procedure_call.get_output_control_param_tuple("ResultColumn")
+            # 设置输入
+            # API 修正: set_input_iconic_param_object -> set_input_iconic_param_by_name
+            proc_call.set_input_iconic_param_by_name("Image", h_image)
             
-            # 模拟返回数据
+            # 执行
+            proc_call.execute()
+            
+            # 获取输出
+            # Output: ResultRow, ResultColumn, ResultAngle, ResultScore
+            # API 修正: get_output_control_param_tuple -> get_output_control_param_by_name
+            res_row = proc_call.get_output_control_param_by_name("ResultRow")
+            res_col = proc_call.get_output_control_param_by_name("ResultColumn")
+            res_angle = proc_call.get_output_control_param_by_name("ResultAngle")
+            res_score = proc_call.get_output_control_param_by_name("ResultScore")
+            
+            # 转换 Tuple -> Python List
+            # Halcon Tuple 有时是单个值，有时是tuple
+            if hasattr(res_row, '__iter__') and not isinstance(res_row, str):
+                 rows = list(res_row)
+                 cols = list(res_col)
+                 angles = list(res_angle)
+                 scores = list(res_score)
+            else:
+                 # 单个值的情况（或空）
+                 # 实际上 get_output... 返回的通常是 tuple，即使是空的
+                 rows = list(res_row) if res_row else []
+                 cols = list(res_col) if res_col else []
+                 angles = list(res_angle) if res_angle else []
+                 scores = list(res_score) if res_score else []
+
+            # 组装结果
+            results = []
+            for r, c, a, s in zip(rows, cols, angles, scores):
+                results.append({
+                    "row": r,
+                    "col": c,
+                    "angle": a,
+                    "score": s
+                })
+            
+            print(f"[HalconManager] 识别成功，找到 {len(results)} 个目标。")
             return {
-                "success": True
-                # "contours": ...
+                "success": True,
+                "matches": results
             }
             
         except Exception as e:
-            print(f"[HalconManager] 执行失败: {e}")
+            print(f"[HalconManager] 执行 HDev 过程失败: {e}")
             return None
 
     def _numpy_to_himage(self, image_np):
         """
-        将 Numpy 数组转换为 Halcon 图像对象。
+        Numpy (BGR/Gray) -> HImage
         """
+        global ha
         if ha is None: return None
         
-        h, w = image_np.shape[:2]
-        
-        if len(image_np.shape) == 2:
-            # 灰度图
-            # GenImage1(Type, Width, Height, PixelPointer)
-            # 注意：Python 端传递指针需要小心，通常 mvtec-halcon 提供了转换工具
-            # 简单方式：
-            # return ha.HImage.from_numpy(image_np)
-            pass
-        elif len(image_np.shape) == 3:
-            # 彩色图
-            pass
+        try:
+            h, w = image_np.shape[:2]
             
-        # 这是一个占位符，实际需查看 mvtec-halcon 文档确认最佳转换方式
+            # 1. 灰度图 (H, W)
+            if image_np.ndim == 2:
+                # 必须确保内存连续
+                if not image_np.flags['C_CONTIGUOUS']:
+                    image_np = np.ascontiguousarray(image_np)
+                
+                ptr = image_np.ctypes.data
+                return ha.gen_image1('byte', w, h, ptr)
+
+            # 2. 彩色图 (H, W, 3) - OpenCV 默认是 BGR
+            elif image_np.ndim == 3 and image_np.shape[2] == 3:
+                # 同样确保连续
+                if not image_np.flags['C_CONTIGUOUS']:
+                    image_np = np.ascontiguousarray(image_np)
+                
+                ptr = image_np.ctypes.data
+                # gen_image_interleaved(PixelPointer, ColorSpace, Width, Height, Angle, BaseType, Width, Height, 0, 0, -1, 0)
+                # Halcon 参数定义: PixelPointer, ColorSpace, Width, Height, Angle, SimpleOrComplex, BaseType, ... ?
+                # 查阅: gen_image_interleaved (Image, PixelPointer, ColorSpace, Width, Height, Angle, BaseType, Width, Height, 0, 0, -1, 0) ?
+                # 其实 Python 绑定通常简化了参数。
+                # 由于缺少文档，我们先尝试 gen_image_interleaved(PixelPointer, 'bgr', w, h, 0, 'byte', w, h, 0, 0, -1, 0)
+                
+                # 更稳妥：拆分成 3 个通道，然后 compose3? 
+                # 不，gen_image_interleaved 是标准做法。
+                # 签名通常是: gen_image_interleaved('bgr', w, h, 0, 'byte', w, h, 0, 0, -1, 0, ptr) ?
+                
+                # 让我们先只支持灰度转换，因为 detect_mold 主要是灰度处理。
+                # 如果是彩色，先转灰度。这是最稳的。
+                import cv2
+                gray = cv2.cvtColor(image_np, cv2.COLOR_BGR2GRAY)
+                if not gray.flags['C_CONTIGUOUS']:
+                    gray = np.ascontiguousarray(gray)
+                ptr = gray.ctypes.data
+                return ha.gen_image1('byte', w, h, ptr)
+                
+        except Exception as e:
+             print(f"[HalconManager] 转换失败: {e}")
+             pass
+             
         return None

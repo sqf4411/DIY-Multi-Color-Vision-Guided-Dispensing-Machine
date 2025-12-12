@@ -17,18 +17,32 @@ def order_points(pts: np.ndarray) -> np.ndarray:
     return np.array([tl, tr, br, bl], dtype=np.float32)
 
 
+import os
+
 def run_path_teach(cell_index: int = 0,
                    img_path: str = "config/mold2.png") -> bool:
     """在黄金示教后的某一个小格子中编辑点胶路径。"""
 
+    # Get Base Dir (Project Root)
+    # This file is in core/, so project root is one level up
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_dir = os.path.join(base_dir, "config")
+    
+    # Resolve img_path relative to project root if it's relative
+    if not os.path.isabs(img_path):
+        img_path = os.path.join(base_dir, img_path)
+
     # ---------- 0. 读取黄金模板 ----------
     try:
-        templates = np.load("config/slot_templates.npy")          # (4,4,2) in 黄金
-        warp_size = np.load("config/warp_size.npy").astype(int)   # [W,H]
+        path_slot = os.path.join(config_dir, "slot_templates.npy")
+        path_warp = os.path.join(config_dir, "warp_size.npy")
+        
+        templates = np.load(path_slot)          # (4,4,2) in 黄金
+        warp_size = np.load(path_warp).astype(int)   # [W,H]
     except Exception as e:
-        print("❌ 需要先完成黄金示教，未找到 slot_templates.npy / warp_size.npy：", e)
+        print(f"❌ 需要先完成黄金示教，未找到 slot_templates.npy / warp_size.npy：{e}")
         return False
-
+        
     goldW, goldH = int(warp_size[0]), int(warp_size[1])
 
     if not (0 <= cell_index < templates.shape[0]):
@@ -118,8 +132,9 @@ def run_path_teach(cell_index: int = 0,
     disp_h = int(maxH * scale)
 
     # ---------- 4. 尝试加载小格坐标下的历史路径 ----------
-    poly_file = f"config/cell_{cell_index}_polylines.npy"
-    dots_file = f"config/cell_{cell_index}_dots.npy"
+    # ---------- 4. 尝试加载小格坐标下的历史路径 ----------
+    poly_file = os.path.join(config_dir, f"cell_{cell_index}_polylines.npy")
+    dots_file = os.path.join(config_dir, f"cell_{cell_index}_dots.npy")
 
     polylines = []  # list of (N,2)
     dots = []       # list of (2,)
@@ -286,7 +301,8 @@ def run_path_teach(cell_index: int = 0,
                         poly_disp_list.append(seg_gold)
                 
                 # 保存为对象数组 (允许不规则形状)
-                np.save(f"config/disp_poly_cell{cell_index}.npy", np.array(poly_disp_list, dtype=object))
+                disp_poly_path = os.path.join(config_dir, f"disp_poly_cell{cell_index}.npy")
+                np.save(disp_poly_path, np.array(poly_disp_list, dtype=object))
 
                 if dots:
                     dots_arr = np.array(dots, dtype=np.float32)

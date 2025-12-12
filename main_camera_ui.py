@@ -1201,6 +1201,7 @@ class MainWindow(QWidget):
 
 
         # XYZ 点动按钮
+        # XYZ 点动按钮
         self.btn_x_minus.clicked.connect(lambda: self.on_jog('x', -1))
         self.btn_x_plus.clicked.connect(lambda: self.on_jog('x', +1))
         self.btn_y_minus.clicked.connect(lambda: self.on_jog('y', -1))
@@ -1208,6 +1209,23 @@ class MainWindow(QWidget):
         self.btn_z_minus.clicked.connect(lambda: self.on_jog('z', -1))
         self.btn_z_plus.clicked.connect(lambda: self.on_jog('z', +1))
 
+        # --- Vision & Task Buttons ---
+        # 恢复用户之前的逻辑，不重复连接
+        # self.btn_golden.clicked.connect(self.on_golden_teach)
+        # self.btn_path.clicked.connect(self.on_edit_path)
+        # self.btn_detect.clicked.connect(self.detect_mold)
+        # self.btn_resume.clicked.connect(self.resume_preview)
+        
+        # self.btn_calibrate.clicked.connect(self.on_calibrate_coords)
+        # self.btn_verify.clicked.connect(self.on_toggle_verify_mode)
+        
+        # self.btn_virtual.clicked.connect(self.on_virtual_run)
+        # self.btn_dry_run.clicked.connect(self.on_dry_run)
+        # self.btn_real_run.clicked.connect(self.on_real_run)
+        # self.btn_batch_run.clicked.connect(self.on_batch_run)
+        # self.btn_test_valve.clicked.connect(self.on_test_valve)
+        # self.btn_save.clicked.connect(self.save_image)
+        
         # 归位按钮
         self.btn_home_all.clicked.connect(lambda: self.on_home_axis('all'))
         self.btn_home_x.clicked.connect(lambda: self.on_home_axis('x'))
@@ -1762,9 +1780,20 @@ class MainWindow(QWidget):
                 self.log(f"✅ 黄金模板 config/slot_templates.npy 加载成功，形状：{self.slot_templates.shape}")
             else:
                 self.log("⚠ 未找到 config/slot_templates.npy，暂时无法做黄金对位")
+                self.slot_templates = None
+                
+            # Load Golden Path for visualization
+            if os.path.exists("config/disp_poly_cell0.npy"):
+                # Path is usually (N, 2)
+                self.golden_path_cache = np.load("config/disp_poly_cell0.npy")
+                self.log(f"✅ 加载点胶路径缓存: {len(self.golden_path_cache)} 点")
+            else:
+                self.golden_path_cache = None
+                
         except Exception as e:
             self.log("加载黄金模板失败：", e)
             self.slot_templates = None
+            self.golden_path_cache = None
 
     def apply_saved_params(self):
         if not self.cam or not self.saved_params:
@@ -2132,7 +2161,19 @@ class MainWindow(QWidget):
     # ================== 黄金示教 ==========================
     def on_golden_teach(self):
         """点击‘黄金示教’，使用本地 mold2.png 文件进行示教"""
+        
+        # 1. Halcon 模式下不需要黄金示教
+        if self.chk_use_halcon.isChecked():
+            QMessageBox.information(self, "提示", "Halcon 模式不需要手动进行黄金示教。\n它会自动使用最新的保存图片作为基准。")
+            return
+
         self.freeze_display = True
+        
+        # Define absolute paths
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        config_dir = os.path.join(base_dir, "config")
+        mold2_path = os.path.join(config_dir, "mold2.png")
+        mold2_bak_path = os.path.join(config_dir, "mold2.bak")
 
         # ====== ✅ 3按钮选择逻辑 ======
         candidate_path = self.latest_capture_path
@@ -2160,8 +2201,8 @@ class MainWindow(QWidget):
             if msg_box.clickedButton() == btn_use_latest:
                 try:
                     # 1. 备份旧的
-                    if os.path.exists("config/mold2.png"):
-                        shutil.copy("config/mold2.png", "config/mold2.bak")
+                    if os.path.exists(mold2_path):
+                        shutil.copy(mold2_path, mold2_bak_path)
                         self.log("ℹ️ 已备份原 config/mold2.png 为 config/mold2.bak")
 
                     # 2. 读取最新图片并旋转 180 度
@@ -2169,7 +2210,7 @@ class MainWindow(QWidget):
                     if img_latest is not None:
                         # 旋转 180 度 (flip -1)
                         img_rotated = cv2.flip(img_latest, -1)
-                        cv2.imwrite("config/mold2.png", img_rotated)
+                        cv2.imwrite(mold2_path, img_rotated)
                         self.log(f"✅ 已旋转180度并更新 config/mold2.png 为: {filename}")
                     else:
                         self.log("❌ 读取最新图片失败")
@@ -2187,7 +2228,8 @@ class MainWindow(QWidget):
                 return
         # ============================
 
-        if not os.path.exists("config/mold2.png"):
+        # Use absolute path check
+        if not os.path.exists(mold2_path):
             self.log("❌ 未找到 config/mold2.png，请先准备好这张图片")
             self.freeze_display = False
             return
@@ -2287,6 +2329,11 @@ class MainWindow(QWidget):
             from core.mold_detector import reload_golden_templates
             reload_golden_templates()
             self.log("🔄 已刷新模具匹配模板")
+            
+            # Halcon Cache Invalidation
+            if hasattr(self, 'halcon_path_template'):
+                self.halcon_path_template = None
+                self.log("🔄 已清除 Halcon 路径缓存，下次识别将重新计算")
         else:
             self.log("⚠ 路径示教取消或未保存")
     # ================== 点胶任务按钮（占位） ==================
@@ -2754,11 +2801,16 @@ class MainWindow(QWidget):
 
         try:
             # --- A. 图像处理 & 识别 ---
-            from core.mold_detector import get_calculated_paths
+            # USE Unified Vision Interface
             img_dry = self.last_frame.copy()
             img_dry = cv2.flip(img_dry, -1)  # 翻转
+            
+            if len(img_dry.shape) == 3:
+                 gray_dry = cv2.cvtColor(img_dry, cv2.COLOR_BGR2GRAY)
+            else:
+                 gray_dry = img_dry
 
-            paths_px = get_calculated_paths(img_dry)
+            paths_px, _ = self.get_vision_result(gray_dry)
             if not paths_px:
                 QMessageBox.warning(self, "未识别", "未识别到模具路径！")
                 return
@@ -3104,15 +3156,213 @@ class MainWindow(QWidget):
         if self.chk_use_halcon.isChecked():
             # Use Halcon
             res = self.halcon_manager.process_image(gray_img)
-            if res and "paths" in res:
-                # Assuming res['paths'] is list of numpy arrays
-                return res['paths'], cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR) # We might not get debug img from Halcon yet
-            else:
-                 return [], cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
+            debug_img = cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
+            
+            found_paths = []
+            
+            # ROI Center from Halcon Script (Hardcoded based on user's ROI)
+            # ROI: 448.829, 936.949, 854.524, 1289.7
+            # Center Row = 651.6765, Col = 1113.3245
+            ref_row, ref_col = 651.6765, 1113.3245
+            
+            if res and "matches" in res:
+                for match in res["matches"]:
+                    # Halcon: Row=Y, Col=X
+                    cx, cy = match['col'], match['row']
+                    score = match['score']
+                    angle = match['angle'] # Radians
+                    
+                    # 1. Draw Match Center
+                    cx_i, cy_i = int(cx), int(cy)
+                    cv2.drawMarker(debug_img, (cx_i, cy_i), (0, 255, 0), cv2.MARKER_CROSS, 40, 3)
+
+                    # 2. Transform Golden Path
+                    if not hasattr(self, 'halcon_path_template') or self.halcon_path_template is None:
+                        self._compute_halcon_template()
+
+                    mold_segments = []
+                    
+                    if hasattr(self, 'halcon_path_template') and self.halcon_path_template is not None:
+                         try:
+                            path_segments = self.halcon_path_template
+                            
+                            # 3. Transform & Draw Each Segment
+                            for pts in path_segments:
+                                # pts is already Centered relative to Halcon ROI Center (Reference Point)
+                                
+                                # b. Rotate
+                                # Matrix: [[cos, -sin], [sin, cos]]
+                                sys_ang = angle
+                                cos_a = np.cos(sys_ang)
+                                sin_a = np.sin(sys_ang)
+                                
+                                x_new = pts[:, 0] * cos_a - pts[:, 1] * sin_a
+                                y_new = pts[:, 0] * sin_a + pts[:, 1] * cos_a
+                                
+                                pts_rotated = np.stack([x_new, y_new], axis=1)
+                                
+                                # c. Translate to machine center (Halcon Match)
+                                pts_transformed = pts_rotated + np.array([cx, cy])
+                                
+                                # d. Draw (Magenta)
+                                pts_draw = pts_transformed.astype(np.int32)
+                                is_closed = False # Dots might be tiny closed loops or just points
+                                # Heuristic: if len < 3, draw as point
+                                if len(pts_draw) == 1:
+                                     cv2.circle(debug_img, tuple(pts_draw[0]), 5, (255, 0, 255), -1)
+                                else:
+                                     cv2.polylines(debug_img, [pts_draw], is_closed, (255, 0, 255), 2, cv2.LINE_AA)
+                                
+                                mold_segments.append(pts_transformed)
+                                
+                         except Exception as e:
+                            print(f"[ERROR] Path draw failed: {e}")
+                            
+                    else:
+                         mold_segments.append(np.array([[cx, cy]]))
+                    
+                    if mold_segments:
+                        found_paths.append(mold_segments)
+                    
+                    # Draw Score
+                    text = f"S:{score:.2f}"
+                    cv2.putText(debug_img, text, (cx_i + 25, cy_i), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                    
+            return found_paths, debug_img
         else:
             # Use Legacy OpenCV
             from core.mold_detector import get_paths_and_image
             return get_paths_and_image(gray_img)
+
+    def _compute_halcon_template(self):
+        """
+        One-time computation:
+        1. Load Latest Capture or mold2.png
+        2. Find Big Box -> Get Minv (Warped -> Raw)
+        3. Load disp_poly & disp_dots (Warped Space)
+        4. Project them to Raw Space
+        5. Subtract Halcon ROI Center to get 'Relative Path' for Halcon
+        """
+        try:
+            print("[Halcon] Computing offline path template...")
+            import cv2
+            import numpy as np
+            from core.mold_detector import _find_big_mold
+            
+            # --- BASE DIR ---
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            config_dir = os.path.join(base_dir, "config")
+            
+            # A. Select Source Image
+            gray_gold = None
+            used_path = "mold2.png"
+            
+            # 1. Try latest capture first (User Request)
+            # latest_capture_path is likely absolute if from QFileDialog, but let's be safe
+            if hasattr(self, 'latest_capture_path') and self.latest_capture_path and os.path.exists(self.latest_capture_path):
+                 print(f"[Halcon] Using latest capture: {self.latest_capture_path}")
+                 img_raw = cv2.imread(self.latest_capture_path)
+                 if img_raw is not None:
+                      # ⚠️ CRITICAL: Camera is mounted upside down, so we normally rotate 180 for "Golden" usage
+                      # The paths are likely drawn on the ROTATED image.
+                      # So we must rotate this capture to match the path coordinate space.
+                      img_rotated = cv2.flip(img_raw, -1)
+                      gray_gold = cv2.cvtColor(img_rotated, cv2.COLOR_BGR2GRAY)
+                      used_path = self.latest_capture_path
+            
+            # 2. Fallback to mold2.png (Absolute Path)
+            mold2_path = os.path.join(config_dir, "mold2.png")
+            if gray_gold is None:
+                if os.path.exists(mold2_path):
+                    print(f"[Halcon] Using {mold2_path}")
+                    gray_gold = cv2.imread(mold2_path, cv2.IMREAD_GRAYSCALE)
+                    used_path = mold2_path
+                else:
+                    print(f"[Halcon] ERR: No source image found. Checked: {mold2_path}")
+                    # Also checked latest capture if available
+                    return
+
+            # B. Get Perspective Matrix (Warped -> Raw)
+            rect, big_box = _find_big_mold(gray_gold)
+            if big_box is None: 
+                print("[Halcon] ERR: Could not find big box in source image")
+                return
+            
+            # Recalculate Minv (Same logic as mold_detector)
+            warp_size_path = os.path.join(config_dir, "warp_size.npy")
+            if os.path.exists(warp_size_path):
+                warp_size = np.load(warp_size_path)
+                goldW, goldH = int(warp_size[0]), int(warp_size[1])
+            else:
+                 # Fallback if missing (should not happen if trained)
+                 goldW, goldH = 1000, 1000 # Guess or fail?
+            
+            pts = big_box.astype(np.float32)
+            s = pts.sum(axis=1)
+            tl, br = pts[np.argmin(s)], pts[np.argmax(s)]
+            diff = np.diff(pts, axis=1)
+            tr, bl = pts[np.argmin(diff)], pts[np.argmax(diff)]
+            rect_pts = np.array([tl, tr, br, bl], dtype=np.float32)
+            dst_pts = np.array([[0, 0], [goldW - 1, 0], [goldW - 1, goldH - 1], [0, goldH - 1]], dtype=np.float32)
+            
+            # Minv: Warped (dst) -> Raw (rect)
+            Minv = cv2.getPerspectiveTransform(dst_pts, rect_pts)
+            
+            # C. Load Paths (Warped Space)
+            segments = []
+            
+            # Poly
+            poly_path = os.path.join(config_dir, "disp_poly_cell0.npy")
+            if os.path.exists(poly_path):
+                raw = np.load(poly_path, allow_pickle=True)
+                if isinstance(raw, np.ndarray):
+                     if raw.dtype == object: 
+                         segments.extend([s.astype(np.float32) for s in raw if s is not None])
+                     elif raw.ndim == 2:
+                         segments.append(raw.astype(np.float32))
+                elif isinstance(raw, list):
+                    segments.extend([np.array(s, dtype=np.float32) for s in raw])
+            else:
+                 print(f"[Halcon] Poly file not found: {poly_path}")
+            
+            # Dots
+            dots_path = os.path.join(config_dir, "disp_dots_cell0.npy")
+            if os.path.exists(dots_path):
+                dots = np.load(dots_path, allow_pickle=True)
+                if dots.size > 0:
+                    # Treat each dot as a 1-point segment (1, 2)
+                     if dots.ndim == 2:
+                         for d in dots:
+                             segments.append(d.reshape(1, 2).astype(np.float32))
+
+            if not segments:
+                print("[Halcon] ERR: No paths loaded")
+                return
+
+            # D. Project and Offset
+            # Halcon ROI Center (Raw Coords)
+            # From: 448.8, 936.9, 854.5, 1289.7
+            ref_row, ref_col = 651.6765, 1113.3245
+            ref_center = np.array([ref_col, ref_row]) # (x, y)
+            
+            final_template = []
+            for seg in segments:
+                # 1. Project Warped -> Raw
+                pts_w = seg.reshape(-1, 1, 2)
+                pts_raw = cv2.perspectiveTransform(pts_w, Minv).reshape(-1, 2)
+                
+                # 2. Subtract ROI Center
+                pts_rel = pts_raw - ref_center
+                final_template.append(pts_rel)
+                
+            self.halcon_path_template = final_template
+            print(f"[Halcon] Template computed! {len(final_template)} segments.")
+            
+        except Exception as e:
+            print(f"[Halcon] Template compute error: {e}")
+            import traceback
+            traceback.print_exc()
+
 
 if __name__ == "__main__":
     print("🚀 App Starting...")

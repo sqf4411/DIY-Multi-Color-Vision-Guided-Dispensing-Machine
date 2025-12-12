@@ -1762,8 +1762,11 @@ class MainWindow(QWidget):
 
         # ====== ✅ 新增：加载坐标标定矩阵 (cam2mach_matrix.npy) ======
         try:
-            if os.path.exists("config/cam2mach_matrix.npy"):
-                self.cam2mach_matrix = np.load("config/cam2mach_matrix.npy")
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            matrix_path = os.path.join(base_dir, "config", "cam2mach_matrix.npy")
+            
+            if os.path.exists(matrix_path):
+                self.cam2mach_matrix = np.load(matrix_path)
                 self.log("✅ 已加载坐标标定矩阵 cam2mach_matrix.npy")
             else:
                 self.cam2mach_matrix = None
@@ -2582,7 +2585,12 @@ class MainWindow(QWidget):
             if M is None: raise Exception("点共线或数据异常")
 
             self.cam2mach_matrix = M
-            np.save("cam2mach_matrix.npy", M)
+        
+            # Consistent Absolute Path Saving
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            matrix_path = os.path.join(base_dir, "config", "cam2mach_matrix.npy")
+            np.save(matrix_path, M)
+        
             self.log("✅ 标定完成！矩阵已保存。")
             QMessageBox.information(self, "成功", "坐标系标定完成！")
         except Exception as e:

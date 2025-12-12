@@ -494,6 +494,7 @@ class MainWindow(QWidget):
 
         # ====== 坐标标定相关 ======
         self.calib_step = 0  # 0=闲置, 10=微调视觉点, 1-4=记录机器点
+        self.calib_step_size = 1.0  # ✅ 新增：标定微调步长
         self.verify_mode = False  # ✅ 新增：默认为关闭状态
         self.verify_click_pt = None  # ✅ 新增：用于记录验证模式下点击的坐标
 
@@ -851,35 +852,35 @@ class MainWindow(QWidget):
         param_group = QGroupBox("相机参数")
         param_layout = QGridLayout()
 
-        # 曝光 (Log Scale 0-100)
-        param_layout.addWidget(QLabel("曝光 (us):"), 0, 0)
+        # 曝光 (Linear Scale 0-10ms, Step 0.1)
+        param_layout.addWidget(QLabel("曝光 (ms):"), 0, 0)
         self.sld_exp = QSlider(Qt.Horizontal)
-        self.sld_exp.setRange(0, 100)
+        self.sld_exp.setRange(0, 100) # 0.0 - 10.0 ms
         self.sld_exp.valueChanged.connect(self.on_exp_slider_changed)
         param_layout.addWidget(self.sld_exp, 0, 1)
 
         self.spn_exp = QDoubleSpinBox()
-        self.spn_exp.setRange(10, 1000000)
-        self.spn_exp.setDecimals(0)
-        self.spn_exp.setSuffix(" us")
+        self.spn_exp.setRange(0.0, 10.0)
+        self.spn_exp.setDecimals(1)
+        self.spn_exp.setSuffix(" ms")
         self.spn_exp.valueChanged.connect(self.on_exp_spin_changed)
         param_layout.addWidget(self.spn_exp, 0, 2)
 
-        # 增益 (0-24 dB)
+        # 增益 (0-10 dB, Step 0.1)
         param_layout.addWidget(QLabel("增益 (dB):"), 1, 0)
         self.sld_gain = QSlider(Qt.Horizontal)
-        self.sld_gain.setRange(0, 240) # 0.0 - 24.0
+        self.sld_gain.setRange(0, 100) # 0.0 - 10.0 dB
         self.sld_gain.valueChanged.connect(self.on_gain_slider_changed)
         param_layout.addWidget(self.sld_gain, 1, 1)
 
         self.spn_gain = QDoubleSpinBox()
-        self.spn_gain.setRange(0, 24)
+        self.spn_gain.setRange(0.0, 10.0)
         self.spn_gain.setDecimals(1)
         self.spn_gain.setSuffix(" dB")
         self.spn_gain.valueChanged.connect(self.on_gain_spin_changed)
         param_layout.addWidget(self.spn_gain, 1, 2)
 
-        # Gamma (0.1-4.0)
+        # Gamma (0.1-4.0, Step 0.1) -- Reference Implementation
         param_layout.addWidget(QLabel("Gamma:"), 2, 0)
         self.sld_gamma = QSlider(Qt.Horizontal)
         self.sld_gamma.setRange(1, 40) # 0.1 - 4.0
@@ -1218,59 +1219,72 @@ class MainWindow(QWidget):
         self.update_nozzle_offset_display()
 
     # ================== Slider/SpinBox Synchronization ==================
+    # ================== Slider/SpinBox Synchronization (Simple Linear like Gamma) ==================
     def on_exp_slider_changed(self, val):
-        # Logarithmic mapping: Slider 0-100 -> Exp 10 - 100000
-        # log10(10) = 1, log10(100000) = 5. Range 4.
-        # val 0-100 -> power 1 + (val/100)*4
-        if self.sender().isSliderDown():
-            power = 1 + (val / 100.0) * 4
-            exp_val = 10 ** power
-            self.spn_exp.blockSignals(True)
-            self.spn_exp.setValue(exp_val)
-            self.spn_exp.blockSignals(False)
-            self.camera_manager.set_exposure(exp_val)
+        # Slider: 0 - 100 (0.1ms per step)
+        # Range: 0.0 - 10.0 ms
+        
+        float_val = val / 10.0 # Same as Gamma
+        
+        self.spn_exp.blockSignals(True)
+        self.spn_exp.setValue(float_val)
+        self.spn_exp.blockSignals(False)
+        
+        # Camera takes microseconds
+        self.camera_manager.set_exposure(float_val * 1000.0)
 
     def on_exp_spin_changed(self, val):
-        self.camera_manager.set_exposure(val)
-        # Update slider
-        if val < 10: val = 10
-        import math
-        try:
-            log_val = math.log10(val)
-            # 1->0, 5->100 => (log_val - 1) * 25
-            slider_val = int((log_val - 1) * 25)
-            self.sld_exp.blockSignals(True)
-            self.sld_exp.setValue(slider_val)
-            self.sld_exp.blockSignals(False)
-        except:
-            pass
+        # val is ms (0-10.0)
+        
+        self.camera_manager.set_exposure(val * 1000.0)
+        
+        # Slider: 0 - 100
+        slider_val = int(val * 10.0) # Same as Gamma
+        
+        self.sld_exp.blockSignals(True)
+        self.sld_exp.setValue(slider_val)
+        self.sld_exp.blockSignals(False)
 
     def on_gain_slider_changed(self, val):
-        # 0-240 -> 0.0-24.0
-        float_val = val / 10.0
+        # Slider: 0 - 100
+        # Range: 0.0 - 10.0 dB
+        
+        float_val = val / 10.0 # Same as Gamma
+        
         self.spn_gain.blockSignals(True)
         self.spn_gain.setValue(float_val)
         self.spn_gain.blockSignals(False)
+        
         self.camera_manager.set_gain(float_val)
 
     def on_gain_spin_changed(self, val):
         self.camera_manager.set_gain(val)
+        
+        slider_val = int(val * 10.0) # Same as Gamma
+        
         self.sld_gain.blockSignals(True)
-        self.sld_gain.setValue(int(val * 10))
+        self.sld_gain.setValue(slider_val)
         self.sld_gain.blockSignals(False)
 
     def on_gamma_slider_changed(self, val):
-        # 1-40 -> 0.1-4.0
-        float_val = val / 10.0
+        # Slider: 1 - 40 (0.1 per step)
+        # Range: 0.1 - 4.0
+        
+        gamma_val = val / 10.0
+        
         self.spn_gamma.blockSignals(True)
-        self.spn_gamma.setValue(float_val)
+        self.spn_gamma.setValue(gamma_val)
         self.spn_gamma.blockSignals(False)
-        self.camera_manager.set_gamma(float_val)
+        
+        self.camera_manager.set_gamma(gamma_val)
 
     def on_gamma_spin_changed(self, val):
         self.camera_manager.set_gamma(val)
+        
+        slider_val = int(val * 10.0)
+        
         self.sld_gamma.blockSignals(True)
-        self.sld_gamma.setValue(int(val * 10))
+        self.sld_gamma.setValue(slider_val)
         self.sld_gamma.blockSignals(False)
 
         self.update_xyz_display(self.pos_x, self.pos_y, self.pos_z)
@@ -1596,15 +1610,40 @@ class MainWindow(QWidget):
             self.log("❌ No camera found or failed to open")
             return
 
-        # Read ranges from manager
-        self.exp_min, self.exp_max = self.camera_manager.exp_range
-        self.gain_min, self.gain_max = self.camera_manager.gain_range
-        self.gamma_min, self.gamma_max = self.camera_manager.gamma_range
+        # Read ranges from manager but CLAMP them to reasonable UI limits
+        # 用户反馈范围太大，这里强制限制 UI 上的调节范围
+        cam_min_exp, cam_max_exp = self.camera_manager.exp_range
+        cam_min_gain, cam_max_gain = self.camera_manager.gain_range
+        # cam_min_gamma, cam_max_gamma = self.camera_manager.gamma_range
+
+        # 曝光: 限制最大 10 ms (UI Range 0-10.0)
+        self.exp_min = 0.1
+        self.exp_max = 10.0
         
-        # Update sliders range
-        self.spn_exp.setRange(self.exp_min, self.exp_max)
-        self.spn_gain.setRange(self.gain_min, self.gain_max)
-        self.spn_gamma.setRange(self.gamma_min, self.gamma_max)
+        # 增益: 限制最大 10dB (UI Range 0-10.0)
+        self.gain_min = cam_min_gain
+        self.gain_max = min(cam_max_gain, 10.0)
+        
+        # Gamma: 保持 0.1 - 4.0
+        self.gamma_min = 0.1
+        self.gamma_max = 4.0
+
+        # Update SpinBox ranges
+        # CRITICAL: Force SpinBox range to ensure it can accept the full slider range
+        self.spn_exp.blockSignals(True)
+        self.spn_exp.setRange(0.0, 10.0) # Matches Slider 0-100 / 10
+        self.spn_exp.blockSignals(False)
+        
+        self.spn_gain.blockSignals(True)
+        self.spn_gain.setRange(0.0, 10.0) # Matches Slider 0-100 / 10
+        self.spn_gain.blockSignals(False)
+        
+        # Ensure sliders are in sync with current parameter values
+        # Force initial sync from current params
+        if hasattr(self, 'sync_from_camera_to_ui'):
+             self.sync_from_camera_to_ui()
+
+        self.log(f"🔧 相机范围重置: Exp[0-10ms], Gain[0-10dB] (Linear)")
 
         # Update Info
         info = self.camera_manager.get_cam_info()
@@ -1655,8 +1694,10 @@ class MainWindow(QWidget):
         
         if "ExposureTime" in params:
             val = float(params["ExposureTime"])
+            # Load stored us, display as ms
+            ms_val = val / 1000.0
             if hasattr(self, 'spn_exp'):
-                self.spn_exp.setValue(val)
+                self.spn_exp.setValue(ms_val)
         
         if "Gain" in params:
             val = float(params["Gain"])
@@ -2013,6 +2054,15 @@ class MainWindow(QWidget):
 
             if self.label.size() != final_pix.size():
                 self.label.resize(final_pix.size())
+
+            # Overlay Calibration Info (using QPainter on QPixmap)
+            if self.calib_step == 10:
+                from PyQt5.QtGui import QPainter, QPen, QColor, QFont
+                painter = QPainter(final_pix)
+                painter.setPen(QPen(QColor(0, 255, 255), 2))
+                painter.setFont(QFont("Arial", 14, QFont.Bold))
+                painter.drawText(20, 40, f"Step: {self.calib_step_size} px (Press Q)")
+                painter.end()
 
             self.label.setPixmap(final_pix)
 
@@ -2415,13 +2465,25 @@ class MainWindow(QWidget):
             self.machine._post_gcode(script)
 
     def keyPressEvent(self, event):
-        """键盘事件：WASD 微调，1234 切换选中点"""
+        """键盘事件：WASD 微调，1234 切换选中点，Q 切换步长"""
         if self.calib_step == 10:
             key = event.key()
-            step = 1.0  # 微调步长 1px
+            step = self.calib_step_size  # Use dynamic step size
+
+            # 切换步长
+            if key == Qt.Key_Q:
+                # Cycle: 1.0 -> 5.0 -> 10.0 -> 0.1 -> 0.5 -> 1.0
+                if self.calib_step_size == 1.0: self.calib_step_size = 5.0
+                elif self.calib_step_size == 5.0: self.calib_step_size = 10.0
+                elif self.calib_step_size == 10.0: self.calib_step_size = 0.1
+                elif self.calib_step_size == 0.1: self.calib_step_size = 0.5
+                else: self.calib_step_size = 1.0
+                
+                self.log(f"🔧 标定微调步长: {self.calib_step_size} px")
+                self.render_current_frame()
 
             # 切换选中点
-            if key == Qt.Key_1:
+            elif key == Qt.Key_1:
                 self.calib_sel_idx = 0
             elif key == Qt.Key_2:
                 self.calib_sel_idx = 1
@@ -2441,7 +2503,10 @@ class MainWindow(QWidget):
                 self.calib_vision_pts[self.calib_sel_idx][0] += step
 
             # 触发重绘
-            self.render_current_frame()
+            if key in [Qt.Key_Q, Qt.Key_1, Qt.Key_2, Qt.Key_3, Qt.Key_4, 
+                       Qt.Key_W, Qt.Key_S, Qt.Key_A, Qt.Key_D]:
+                self.render_current_frame()
+            
             # 必须调用 accept，否则可能传给其他控件
             event.accept()
         else:
@@ -2781,125 +2846,60 @@ class MainWindow(QWidget):
 
     # ================== 相机参数联动 ==================
     def sync_from_camera_to_ui(self):
+        """
+        Standardized sync: Camera Value -> UI.
+        Exposure: us -> ms -> Slider(int)
+        Gain: dB -> Slider(int)
+        Gamma: float -> Slider(int)
+        """
         params = self.camera_manager.get_params()
 
         if 'ExposureTime' in params:
-            val = params['ExposureTime']
+            val = float(params['ExposureTime']) # us
+            ms_val = val / 1000.0
+            
+            # Update SpinBox
             self.spn_exp.blockSignals(True)
-            self.spn_exp.setValue(val)
+            self.spn_exp.setValue(ms_val)
             self.spn_exp.blockSignals(False)
             
-            pos = self.value_to_slider(val, self.exp_min, self.exp_max)
+            # Simple Linear: Val(ms) * 10 -> Slider
+            # Range 0-10ms -> 0-100
+            pos = int(ms_val * 10)
             self.sld_exp.blockSignals(True)
             self.sld_exp.setValue(pos)
             self.sld_exp.blockSignals(False)
 
         if 'Gain' in params:
-            val = params['Gain']
+            val = float(params['Gain'])
+            
             self.spn_gain.blockSignals(True)
             self.spn_gain.setValue(val)
             self.spn_gain.blockSignals(False)
 
-            pos = self.value_to_slider(val, self.gain_min, self.gain_max)
+            # Simple Linear: Val(dB) * 10 -> Slider
+            # Range 0-10dB -> 0-100
+            pos = int(val * 10)
             self.sld_gain.blockSignals(True)
             self.sld_gain.setValue(pos)
             self.sld_gain.blockSignals(False)
 
         if 'Gamma' in params:
-            val = params['Gamma']
+            val = float(params['Gamma'])
+            
             self.spn_gamma.blockSignals(True)
             self.spn_gamma.setValue(val)
             self.spn_gamma.blockSignals(False)
 
-            pos = self.value_to_slider(val, self.gamma_min, self.gamma_max)
+            # Simple Linear: Val * 10 -> Slider
+            # Range 0.1-4.0 -> 1-40
+            pos = int(val * 10)
             self.sld_gamma.blockSignals(True)
             self.sld_gamma.setValue(pos)
             self.sld_gamma.blockSignals(False)
 
 
-    @staticmethod
-    def slider_to_value(pos, vmin, vmax):
-        return vmin + (vmax - vmin) * (pos / 100.0)
 
-    @staticmethod
-    def value_to_slider(val, vmin, vmax):
-        if vmax <= vmin:
-            return 0
-        return int(100 * (val - vmin) / (vmax - vmin))
-
-    def on_exp_slider_changed(self, pos):
-        val = self.slider_to_value(pos, self.exp_min, self.exp_max)
-        self.set_exposure(val, update_slider=False)
-
-    def on_gain_slider_changed(self, pos):
-        val = self.slider_to_value(pos, self.gain_min, self.gain_max)
-        self.set_gain(val, update_slider=False)
-
-    def on_gamma_slider_changed(self, pos):
-        val = self.slider_to_value(pos, self.gamma_min, self.gamma_max)
-        self.set_gamma(val, update_slider=False)
-
-
-    def on_exp_spin_changed(self, val):
-        self.set_exposure(float(val), update_spin=False)
-
-    def on_gain_spin_changed(self, val):
-        self.set_gain(float(val), update_spin=False)
-
-    def on_gamma_spin_changed(self, val):
-        self.set_gamma(float(val), update_spin=False)
-
-    def set_exposure(self, val, update_slider=True, update_spin=True):
-        val = max(self.exp_min, min(self.exp_max, val))
-        self.camera_manager.set_exposure(float(val))
-
-        if update_spin:
-            self.spn_exp.blockSignals(True)
-            self.spn_exp.setValue(val)
-            self.spn_exp.blockSignals(False)
-
-        if update_slider:
-            pos = self.value_to_slider(val, self.exp_min, self.exp_max)
-            self.sld_exp.blockSignals(True)
-            self.sld_exp.setValue(pos)
-            self.sld_exp.blockSignals(False)
-
-        # Use ConfigManager to save params
-        self.save_params()
-
-    def set_gain(self, val, update_slider=True, update_spin=True):
-        val = max(self.gain_min, min(self.gain_max, val))
-        self.camera_manager.set_gain(float(val))
-
-        if update_spin:
-            self.spn_gain.blockSignals(True)
-            self.spn_gain.setValue(val)
-            self.spn_gain.blockSignals(False)
-
-        if update_slider:
-            pos = self.value_to_slider(val, self.gain_min, self.gain_max)
-            self.sld_gain.blockSignals(True)
-            self.sld_gain.setValue(pos)
-            self.sld_gain.blockSignals(False)
-
-        self.save_params()
-
-    def set_gamma(self, val, update_slider=True, update_spin=True):
-        val = max(self.gamma_min, min(self.gamma_max, val))
-        self.camera_manager.set_gamma(float(val))
-
-        if update_spin:
-            self.spn_gamma.blockSignals(True)
-            self.spn_gamma.setValue(val)
-            self.spn_gamma.blockSignals(False)
-
-        if update_slider:
-            pos = self.value_to_slider(val, self.gamma_min, self.gamma_max)
-            self.sld_gamma.blockSignals(True)
-            self.sld_gamma.setValue(pos)
-            self.sld_gamma.blockSignals(False)
-
-        self.save_params()
 
 
     # ================== 其它 ==================

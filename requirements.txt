@@ -2,3 +2,6 @@ numpy
 opencv-python
 PyQt5
 requests
+pyqtgraph
+PyOpenGL
+PyOpenGL_accelerate

@@ -84,6 +84,60 @@ class HomeWorker(QThread):
         # 为了方便，我们在 machine_client 里加了 _x, _y, _z 缓存，但最好还是读一下
         self.finished_signal.emit(self.machine._x, self.machine._y, self.machine._z)
 
+# ================== 线程：USB相机取流 (MJPEG/HTTP) ==================
+class USBCameraWorker(QThread):
+    frame_signal = pyqtSignal(QImage)
+    status_signal = pyqtSignal(bool) # True=Connected, False=Disconnected
+
+    def __init__(self, url):
+        super().__init__()
+        self.url = url
+        self.running = True
+        self.cap = None
+
+    def run(self):
+        print(f"[USBCamera] Connecting to {self.url}...")
+        self.cap = cv2.VideoCapture(self.url)
+        
+        if not self.cap.isOpened():
+            print(f"[USBCamera] Failed to open URL: {self.url}")
+            self.status_signal.emit(False)
+            return
+        
+        self.status_signal.emit(True)
+        print(f"[USBCamera] Connected.")
+
+        while self.running:
+            ret, frame = self.cap.read()
+            if not ret:
+                # Stream ended or error
+                print("[USBCamera] Stream disconnected.")
+                self.status_signal.emit(False)
+                time.sleep(1) # Retry delay
+                self.cap.release()
+                self.cap = cv2.VideoCapture(self.url) # Reconnect attempt
+                continue
+
+            # Process frame
+            if frame is not None:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                h, w, ch = rgb.shape
+                # Ensure memory safety by copying? QImage from data reference needs care.
+                # However, emit copies it usually.
+                qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
+                self.frame_signal.emit(qimg)
+            
+            # Limit FPS
+            time.sleep(0.01)
+
+        if self.cap:
+            self.cap.release()
+        print("[USBCamera] Stopped.")
+
+    def stop(self):
+        self.running = False
+        self.wait()
+
 # ================== 线程：异步移动 (解决 UI 卡顿) ==================
 class MovementWorker(QThread):
     """
@@ -629,6 +683,7 @@ class MainWindow(QWidget):
         """
         if args:
             msg = f"{msg} " + " ".join(str(a) for a in args)
+        print(f"[LOG] {msg}") # Enable console logging
         self.log_signal.emit(str(msg))
 
     # ================== Tool Set Group (New) ==================
@@ -1765,9 +1820,17 @@ class MainWindow(QWidget):
             base_dir = os.path.dirname(os.path.abspath(__file__))
             matrix_path = os.path.join(base_dir, "config", "cam2mach_matrix.npy")
             
+            self.log(f"DEBUG: Attempting to load matrix from: {matrix_path}")
+
             if os.path.exists(matrix_path):
+                mtime = os.path.getmtime(matrix_path)
+                time_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+                self.log(f"DEBUG: File found. Size={os.path.getsize(matrix_path)} bytes, Modified={time_str}")
+                
                 self.cam2mach_matrix = np.load(matrix_path)
                 self.log("✅ 已加载坐标标定矩阵 cam2mach_matrix.npy")
+                if self.cam2mach_matrix is not None:
+                     self.log(f"DEBUG: Matrix[0,0]={self.cam2mach_matrix[0,0]:.4f}, Tx={self.cam2mach_matrix[0,2]:.4f}")
             else:
                 self.cam2mach_matrix = None
                 self.log("ℹ️ 未找到坐标标定矩阵，请先执行【标定坐标系】")
@@ -1926,7 +1989,64 @@ class MainWindow(QWidget):
             cv2.putText(vis_img, "VERIFY MODE: Click any point to move center here", (20, h - 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
-        # ====== 🛠️ B. 标定阶段 1 (视觉微调模式) - 【找回丢失的代码！】 ======
+        # ====== 🛠️ B. 标定阶段 1 (手动8点标定模式) ======
+        elif self.calib_step in [100, 101]:
+            # 画出所有已选的点
+            for i, pt in enumerate(self.calib_vision_pts):
+                px, py = int(pt[0]), int(pt[1])
+                
+                # 最后一个点如果是正在微调中 (Step 101)，显示为红色
+                is_active = (self.calib_step == 101 and i == len(self.calib_vision_pts) - 1)
+                
+                if is_active:
+                    color = (0, 0, 255) # Red for active
+                    cv2.circle(vis_img, (px, py), 6, color, -1)
+                    cv2.circle(vis_img, (px, py), 20, (0, 255, 255), 2)
+                    cv2.line(vis_img, (px - 30, py), (px + 30, py), (0, 255, 255), 1)
+                    cv2.line(vis_img, (px, py - 30), (px, py + 30), (0, 255, 255), 1)
+                    cv2.putText(vis_img, f"#{i + 1} Adjusting", (px + 20, py - 20),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+                else:
+                    color = (0, 255, 0) # Green for confirmed
+                    cv2.circle(vis_img, (px, py), 6, color, -1)
+                    cv2.putText(vis_img, f"#{i + 1}", (px + 10, py - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+            if self.calib_step == 100:
+                msg = f"Click to select Point #{len(self.calib_vision_pts)+1} (Z to Undo)"
+                cv2.putText(vis_img, msg, (30, h - 100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+            else:
+                msg = "WASD to Move | Q for Step | SPACE to Confirm | Z to Undo"
+                cv2.putText(vis_img, msg, (30, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+
+        # ====== 🛠️ C. 标定阶段 2 (机器对位模式) - 视觉引导 ======
+        elif self.calib_step >= 200:
+             # 计算当前正在对第几个点
+            idx = self.calib_step - 200
+            if idx < len(self.calib_vision_pts):
+                target_pt = self.calib_vision_pts[idx]
+                tx, ty = int(target_pt[0]), int(target_pt[1])
+                
+                # 0. 必须显示中心十字 (红色)，作为对准基准
+                cv2.line(vis_img, (cx, 0), (cx, h), (0, 0, 255), 1)
+                cv2.line(vis_img, (0, cy), (w, cy), (0, 0, 255), 1)
+                cv2.circle(vis_img, (cx, cy), 15, (0, 0, 255), 2)
+                
+                # 1. 画目标点 (橙色)
+                cv2.circle(vis_img, (tx, ty), 8, (0, 165, 255), -1) 
+                cv2.putText(vis_img, f"TARGET #{idx + 1}", (tx + 15, ty - 15), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 165, 255), 3)
+
+                # 2. 画箭头：从【屏幕中心】指向【目标点】 (Center -> Target)
+                # 含义：请移动机器，去追这个点 / 或者仅仅指示这个点在哪
+                # 用户要求：箭头指向目标点
+                cv2.arrowedLine(vis_img, (cx, cy), (tx, ty), (0, 255, 255), 3, tipLength=0.1)
+                
+                dist_px = ((tx - cx)**2 + (ty - cy)**2)**0.5
+                cv2.putText(vis_img, f"Dist: {dist_px:.1f}px", (cx + 20, cy + 50), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+        # ====== 🛠️ D. 标定阶段 1 (视觉微调模式) - 【找回丢失的代码！】 ======
         elif self.calib_step == 10:
             if len(self.calib_vision_pts) == 4:
                 for i, pt in enumerate(self.calib_vision_pts):
@@ -2342,97 +2462,79 @@ class MainWindow(QWidget):
     # ================== 点胶任务按钮（占位） ==================
         # 替换原有的 on_calibrate_coords
     def on_calibrate_coords(self):
-        """标定流程主控：自动识别 -> 进入微调 -> 4步记录 -> 计算"""
+        """标定流程主控：手动 8 点视觉取点 -> 8 点机器对位 -> 计算"""
 
-        # --- 阶段 1: 启动 & 自动识别 ---
+        # --- 阶段 1: 启动 - 进入手动视觉取点模式 (8点) ---
         if self.calib_step == 0:
             if self.last_frame is None:
                 self.log("❌ 请先启动相机")
                 return
 
-            # ====== 🛠️ 关键修改：识别前先翻转图像 ======
-            # 必须与 render_current_frame 里的翻转逻辑完全一致！
-            # 之前我们用了 cv2.flip(img, -1)，这里也要用 -1
-            img_to_detect = self.last_frame.copy()
-            img_to_detect = cv2.flip(img_to_detect, -1)
-            # =========================================
+            self.calib_vision_pts = []  # 清空视觉点
+            self.calib_machine_pts = [] # 清空机器点
+            self.calib_step = 100       # 状态 100: 等待点击第 N 个视觉点
+            
+            self.btn_calibrate.setText("请点击画面选取第 1 个点")
+            self.btn_calibrate.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold;") 
+            self.btn_calibrate.setEnabled(False) 
 
-            # 1. 使用翻转后的图去识别
-            from core.mold_detector import detect_mold_and_cells
-            _, big_box, _, _ = detect_mold_and_cells(img_to_detect)
-
-            if big_box is not None:
-                self.calib_vision_pts = big_box.astype(np.float32)
-                # 排序: 左上, 右上, 右下, 左下
-                from core.mold_detector import _order_points
-                self.calib_vision_pts = _order_points(self.calib_vision_pts)
-                self.log("✅ 自动识别到大框，进入微调模式。")
-            elif os.path.exists("golden_corners.npy"):
-                # 如果没有识别到，加载旧数据。注意：旧数据如果是翻转前保存的，可能也会不对。
-                # 建议第一次都重新自动识别一遍。
-                self.calib_vision_pts = np.load("golden_corners.npy")
-                self.log("⚠ 自动识别失败，加载上次保存的角点。")
-            else:
-                QMessageBox.warning(self, "失败", "无法识别模具且无历史数据。\n请确保模具在画面中，或先进行示教。")
-                return
-
-            # ... (后续弹出微调对话框的代码保持不变) ...
-            # 进入微调状态 (状态码设为 10)
-            self.calib_step = 10
-            self.calib_sel_idx = 0
-            self.btn_calibrate.setText("确认视觉角点")
-            self.btn_calibrate.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold;")
-
-            reply = QMessageBox.information(
-                self,
-                "微调模式",
-                "【步骤 1/2：微调视觉角点】\n\n"
-                "1. 滚动滚轮放大画面。\n"
-                "2. 点击画面中的红圈选中角点，使用【WASD】键微调位置。\n"
-                "3. 确保 4 个角点都精准对齐后，再次点击按钮进入下一步。",
-                QMessageBox.Ok | QMessageBox.Cancel
+            msg = (
+                "【手动8点标定模式】\n\n"
+                "1. 请在左侧画面中点击模具的**8个特征点**（尽量覆盖各区域）。\n"
+                "2. 操作说明：\n"
+                "   - 点击画面 -> 放置红点\n"
+                "   - WASD 键 -> 微调位置 (Q键改步长)\n"
+                "   - 空格/回车 -> 确认该点\n"
+                "   - **Z 键 -> 撤销/删除上一个点**\n\n"
+                "👉 现在，请点击第 1 个点。"
             )
+            self.log(msg)
+            QMessageBox.information(self, "标定指南 (8点 + 撤销)", msg)
+            self.render_current_frame()
 
-            if reply == QMessageBox.Cancel:
-                self.calib_step = 0
-                self.btn_calibrate.setText("标定坐标系")
-                self.btn_calibrate.setStyleSheet("")
-                self.log("🚫 标定操作已取消")
-                self.render_current_frame()
-                return
-            # =========== 修改结束 ===========
+        # --- 阶段 1.5: 视觉点确认 (状态 101 -> 100) ---
+        elif self.calib_step == 101:
+            # 用户点击了“确认第 N 点”按钮
+            
+            n_confirmed = len(self.calib_vision_pts)
+            self.log(f"✅ 第 {n_confirmed} 个视觉点已确认。")
+            
+            if n_confirmed < 8:
+                self.calib_step = 100 # 回到等待点击状态
+                self.btn_calibrate.setText(f"请点击画面选取第 {n_confirmed + 1} 个点")
+                self.btn_calibrate.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold;")
+                self.btn_calibrate.setEnabled(False) 
+                self.log(f"👉 请继续点击第 {n_confirmed + 1} 个点。 (按 Z 可撤销)")
+            else:
+                # 8点选完，进入机器对位
+                self.calib_step = 200 # 机器对位状态起始
+                self.show_crosshair = True
+                
+                self.btn_calibrate.setText("记录第 1 点 (需移动机器对准)")
+                self.btn_calibrate.setStyleSheet("background-color: #F59E0B; color: black; font-weight: bold;") # 橙色
+                self.btn_calibrate.setEnabled(True)
+                
+                self.log("✅ 8个视觉点采集完毕！进入机器对位阶段。")
+                self.log("👉 请根据屏幕上的【箭头指示】，移动机器使相机中心对准【第 1 个视觉点】。")
 
-        # --- 阶段 2: 确认微调，进入机器对位 ---
-        elif self.calib_step == 10:
-            # 保存微调好的点，下次可以用
-            np.save("golden_corners.npy", self.calib_vision_pts)
-
-            # 切换到机器对位流程 (状态 1)
-            self.calib_step = 1
-            self.calib_machine_pts = []
-            self.show_crosshair = True
-
-            self.btn_calibrate.setText("记录第 1 点 (左上)")
-            self.btn_calibrate.setStyleSheet("background-color: #F59E0B; color: black; font-weight: bold;")  # 橙色
-
-            self.log("✅ 视觉角点已确认。进入机器对位流程。")
-            self.log("👉 请将相机中心（十字准星）对准模具【左上角】，然后点击按钮。")
-
-        # --- 阶段 3: 记录机器坐标 (1-4) ---
-        elif 1 <= self.calib_step <= 4:
+        # --- 阶段 2: 机器对位 (状态 200+) ---
+        elif self.calib_step >= 200:
+            # 记录当前机器坐标
             mx, my, mz = self.machine.get_position()
             self.calib_machine_pts.append([mx, my])
-            self.log(f"📍 记录机器点 {self.calib_step}: ({mx:.2f}, {my:.2f})")
-
-            self.calib_step += 1
-
-            if self.calib_step <= 4:
-                names = ["左上", "右上", "右下", "左下"]
-                next_name = names[self.calib_step - 1]
-                self.btn_calibrate.setText(f"记录第 {self.calib_step} 点 ({next_name})")
-                self.log(f"👉 下一步：对准【{next_name}】")
+            
+            # 200 -> idx 1
+            idx = self.calib_step - 200 + 1 
+            self.log(f"📍 记录机器点 {idx}: ({mx:.2f}, {my:.2f})")
+            
+            if len(self.calib_machine_pts) < 8:
+                self.calib_step += 1
+                idx_next = idx + 1
+                self.btn_calibrate.setText(f"记录第 {idx_next} 点 (需移动机器对准)")
+                self.log(f"👉 请根据箭头指示，移动机器对准第 {idx_next} 个点。")
             else:
                 self.finish_calibration()
+
 
     # 精确确认
     def on_toggle_verify_mode(self):
@@ -2472,7 +2574,29 @@ class MainWindow(QWidget):
         click_img_x = widget_x * (w_img / w_widget)
         click_img_y = widget_y * (h_img / h_widget)
 
-        # ====== 情况 A：标定微调 (保持不变) ======
+        # ====== 情况 A：手动6点标定模式 (新逻辑 100/101) ======
+        if self.calib_step == 100:
+            # 用户点击了屏幕，添加/更新当前点
+            self.calib_vision_pts.append([click_img_x, click_img_y])
+            self.calib_step = 101 # 进入微调确认阶段
+            
+            n = len(self.calib_vision_pts)
+            self.btn_calibrate.setText(f"确认第 {n} 个点")
+            self.btn_calibrate.setStyleSheet("background-color: #10B981; color: white; font-weight: bold;") # 绿色
+            self.btn_calibrate.setEnabled(True)
+            
+            self.log(f"📍 已选中第 {n} 个点。请使用 WASD 微调，然后点击按钮确认。")
+            self.render_current_frame()
+            return
+
+        elif self.calib_step == 101:
+            # 如果是 101 (微调中)，点击屏幕可以“瞬间移动”当前正在调的那个点
+            if self.calib_vision_pts:
+                self.calib_vision_pts[-1] = [click_img_x, click_img_y]
+                self.render_current_frame()
+            return
+
+        # ====== 情况 B：标定微调 (旧逻辑，保留兼容) ======
         if self.calib_step == 10:
             min_dist = float('inf')
             best_idx = -1
@@ -2529,6 +2653,64 @@ class MainWindow(QWidget):
 
     def keyPressEvent(self, event):
         """键盘事件：WASD 微调，1234 切换选中点，Q 切换步长"""
+        
+        # ====== 新增: 手动8点标定微调 (Step 100/101) ======
+        if self.calib_step == 100:
+            if event.key() == Qt.Key_Z:
+                if len(self.calib_vision_pts) > 0:
+                    self.calib_vision_pts.pop()
+                    n = len(self.calib_vision_pts)
+                    self.btn_calibrate.setText(f"请点击画面选取第 {n + 1} 个点")
+                    self.btn_calibrate.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold;")
+                    self.btn_calibrate.setEnabled(False)
+                    self.log(f"⏪ 已撤销上一个点。当前已选: {n} 个")
+                    self.render_current_frame()
+                else:
+                    self.log("⚠ 没有可以撤销的点")
+            return
+
+        if self.calib_step == 101:
+            key = event.key()
+            step = self.calib_step_size
+            
+            # Z: 撤销当前正在选的点 -> 回到 Step 100
+            if key == Qt.Key_Z:
+                if self.calib_vision_pts:
+                    self.calib_vision_pts.pop()
+                    n = len(self.calib_vision_pts)
+                    self.calib_step = 100
+                    self.btn_calibrate.setText(f"请点击画面选取第 {n + 1} 个点")
+                    self.btn_calibrate.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold;")
+                    self.btn_calibrate.setEnabled(False)
+                    self.log(f"⏪ 已取消当前点。请重新点击。")
+                    self.render_current_frame()
+                return
+
+            # Q: 切换步长
+            if key == Qt.Key_Q:
+                if self.calib_step_size == 1.0: self.calib_step_size = 5.0
+                elif self.calib_step_size == 5.0: self.calib_step_size = 10.0
+                elif self.calib_step_size == 10.0: self.calib_step_size = 0.1
+                elif self.calib_step_size == 0.1: self.calib_step_size = 0.5
+                else: self.calib_step_size = 1.0
+                self.log(f"🔧 微调步长: {self.calib_step_size} px")
+                
+            # WASD: 微调当前点 (列表最后一个)
+            elif key == Qt.Key_W: self.calib_vision_pts[-1][1] -= step
+            elif key == Qt.Key_S: self.calib_vision_pts[-1][1] += step
+            elif key == Qt.Key_A: self.calib_vision_pts[-1][0] -= step
+            elif key == Qt.Key_D: self.calib_vision_pts[-1][0] += step
+            
+            # Space/Enter: 确认当前点 (相当于点击按钮)
+            elif key == Qt.Key_Space or key == Qt.Key_Return:
+                self.on_calibrate_coords() # 触发下一步逻辑
+                return
+
+            if key in [Qt.Key_Q, Qt.Key_W, Qt.Key_S, Qt.Key_A, Qt.Key_D]:
+                self.render_current_frame()
+            event.accept()
+            return
+
         if self.calib_step == 10:
             key = event.key()
             step = self.calib_step_size  # Use dynamic step size
@@ -2589,9 +2771,11 @@ class MainWindow(QWidget):
             # Consistent Absolute Path Saving
             base_dir = os.path.dirname(os.path.abspath(__file__))
             matrix_path = os.path.join(base_dir, "config", "cam2mach_matrix.npy")
+            self.log(f"DEBUG: Saving matrix to: {matrix_path}")
             np.save(matrix_path, M)
         
             self.log("✅ 标定完成！矩阵已保存。")
+            self.log(f"DEBUG: Saved Matrix[0,0]={M[0,0]:.4f}, Tx={M[0,2]:.4f}")
             QMessageBox.information(self, "成功", "坐标系标定完成！")
         except Exception as e:
             self.log(f"❌ 计算失败: {e}")

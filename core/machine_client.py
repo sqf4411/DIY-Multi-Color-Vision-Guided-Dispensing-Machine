@@ -147,7 +147,7 @@ class MachineClient:
             return False
 
         url = f"{self.base_url}/printer/objects/query"
-        # ✅ 正确写法：/printer/objects/query?toolhead&gcode_move
+        # query timestamp for motion check
         params = {"toolhead": "", "gcode_move": ""}
 
         try:
@@ -160,30 +160,24 @@ class MachineClient:
 
             # --- 方案 A: 尝试读取 toolhead ---
             toolhead = all_status.get("toolhead")
-            # --- 方案 A: 尝试读取 toolhead ---
             if toolhead:
                 pos = toolhead.get("position", [0.0, 0.0, 0.0, 0.0])
                 self._x, self._y, self._z = map(float, pos[:3])
                 homed_axes = toolhead.get("homed_axes", "")
                 self.is_homed = bool(homed_axes)
-                # 不再打印“同步成功”日志，避免定时器轮询时刷屏
                 return True
 
-            # --- 方案 B: 尝试读取 gcode_move ---
+            # --- 方案 B: 尝试读取 gcode_move (备用) ---
             gcode_move = all_status.get("gcode_move")
             if gcode_move:
                 pos = gcode_move.get("gcode_position", [0.0, 0.0, 0.0, 0.0])
                 self._x, self._y, self._z = map(float, pos[:3])
-                # 同理这里也去掉频繁日志
                 return True
-
 
             # --- 两个都失败 ---
             self._log("[MachineClient] 读取状态失败：toolhead 和 gcode_move 均为空。status =", all_status)
             return False
 
-        except Exception as e:
-            self._log("[MachineClient] 读取状态请求异常:", e)
         except Exception as e:
             self._log("[MachineClient] 读取状态请求异常:", e)
             return False
@@ -255,39 +249,12 @@ class MachineClient:
         params = {"probe": ""}
         
         try:
-            # 注意：如果不先发送 QUERY_PROBE，这个值可能不会更新。
-            # 但频繁发送 QUERY_PROBE 会导致 Klipper 繁忙。
-            # 我们先尝试直接读。如果用户发现不更新，可能需要手动发指令。
-            # 或者，我们可以发送 QUERY_PROBE 命令，然后解析返回结果。
-            # 这里为了实时性，我们尝试直接读对象。
             r = self.session.get(url, params=params, headers=self._headers(), timeout=2)
             data = r.json()
             status = data.get("result", {}).get("status", {}).get("probe", {})
-            
-            # last_query: True (Triggered) / False (Open) ? 
-            # 或者 last_z_result?
-            # Klipper 文档：probe.last_query: The result of the last QUERY_PROBE command.
-            # 所以必须发 QUERY_PROBE 才能更新这个值。
-            # 这对实时显示灯不太友好。
-            
-            # 替代方案：查询 endstops? 如果探针接在 endstop 上。
-            # /printer/objects/query?query_endstops
-            # 这也需要 QUERY_ENDSTOPS 命令。
-            
-            # 既然用户要求“针触碰到了对刀仪并触发，灯灭”，说明他可能在手动测试。
-            # 我们可以每秒发一次 QUERY_PROBE 吗？
-            # 让我们尝试发送 QUERY_PROBE 并解析 response。
-            pass
+            # last_query: 1 (triggered) / 0 (open)
         except:
             pass
-            
-        # 方案 C: 发送 QUERY_PROBE 并解析 console output? 太麻烦。
-        # 方案 D: 假设用户配置了 [probe] 且 Klipper 会自动更新某些状态？
-        # 通常不会。
-        
-        # 让我们先实现一个简单的：发送 QUERY_PROBE，然后读 output。
-        # 或者，只在“手动对刀模式”下开启高频轮询。
-        
         return 'unknown'
 
     def send_and_get_probe_status(self) -> str:
@@ -295,30 +262,14 @@ class MachineClient:
         发送 QUERY_PROBE 并返回状态。
         """
         if not self.base_url: return 'unknown'
-        
-        # 这是一个 hack，因为我们没法直接拿到命令返回值（_post_gcode 不返回内容）
-        # 但我们可以通过 objects/query?probe 来读 last_query
-        # 前提是我们先发了 QUERY_PROBE
-        
         self._post_gcode("QUERY_PROBE")
         
-        # 稍等一下？或者直接读？
-        # Klipper 处理命令是异步的。
-        # 也许我们不需要实时显示灯？
-        # 用户说：“还要显示这个对刀灯在ui界面...灯灭，说明触发了”
-        # 这意味着必须实时。
-        
-        # 如果探针是接在 endstop 上的（例如 z_min），我们可以查询 query_endstops?
-        # 还是需要发命令。
-        
-        # 让我们尝试读 probe 对象，假设它能反映状态。
         url = f"{self.base_url}/printer/objects/query"
         params = {"probe": ""}
         try:
             r = self.session.get(url, params=params, headers=self._headers(), timeout=1)
             data = r.json()
             val = data.get("result", {}).get("status", {}).get("probe", {}).get("last_query")
-            # last_query: 1 (triggered) / 0 (open)
             if val is None: return 'unknown'
             return 'triggered' if val else 'open'
         except:
@@ -342,31 +293,25 @@ class MachineClient:
     def move_rel(self, dx: float, dy: float, dz: float,
                  feedrate_xy: float = 6000.0, feedrate_z: float = 600.0):
         """
-        相对运动（mm）：
-        - 使用 G91 / G90 切换到相对坐标再切回绝对
-        - 如果 Klipper 报“未回零”，会直接返回错误，不再在这里拦截
+        相对运动（mm）
         """
         if not self.connected:
             print("[MachineClient] 未连接，忽略 move_rel。")
             return
 
-        # 如果机器还没回零，让 Klipper 自己报错即可（你那边会看到 400 错误）
-        # 我们不再在这里做人为禁止，这样重启 UI 但 Klipper 没重启时可以直接移动。
         f_xy = float(feedrate_xy)
         f_z = float(feedrate_z)
 
-        cmd_list = ["G91"]  # 相对模式
-        # 分开 XY 和 Z 的速度
+        cmd_list = ["G91"]
         if dx != 0 or dy != 0:
             cmd_list.append(f"G0 X{dx:.3f} Y{dy:.3f} F{f_xy:.0f}")
         if dz != 0:
             cmd_list.append(f"G0 Z{dz:.3f} F{f_z:.0f}")
-        cmd_list.append("G90")  # 切回绝对
+        cmd_list.append("G90")
 
         script = "\n".join(cmd_list)
         ok = self._post_gcode(script)
         if ok:
-            # 不再从 Klipper 读状态，直接在本地累加软件坐标
             self._x += dx
             self._y += dy
             self._z += dz
@@ -405,16 +350,54 @@ class MachineClient:
             return
         self._post_gcode("M400")
 
-    def wait_until_idle(self):
+    def wait_until_idle(self, timeout: float = 30.0):
         """
-        等待机器空闲 (M400 + G4 P100)
+        阻塞等待机器空闲。
+        策略：发送 M400，然后监控坐标变化。
+        如果坐标在约 0.3 秒内（3次检查）变化极小，则认为已静止。
         """
         if not self.connected:
             return
-        # M400 等待移动结束
+
+        # 1. 发送 M400 确保指令入队
         self._post_gcode("M400")
-        # G4 P100 强制停留 100ms，确保状态同步
-        self._post_gcode("G4 P100")
+        
+        # 2. 坐标稳定性检查
+        start_t = time.time()
+        last_log_t = start_t
+        stable_count = 0
+        last_pos = (self._x, self._y, self._z)
+        
+        while time.time() - start_t < timeout:
+            # 同步最新坐标
+            if not self._sync_toolhead_status():
+                time.sleep(0.1)
+                continue
+                
+            curr_pos = (self._x, self._y, self._z)
+            
+            # 计算位移距离
+            dist = sum(abs(c - l) for c, l in zip(curr_pos, last_pos))
+            
+            if dist < 0.05: # 放宽阈值到 0.05mm (抗抖动)
+                stable_count += 1
+            else:
+                stable_count = 0 # 重置
+                last_pos = curr_pos
+            
+            # 连续 3 次 (0.3s) 稳定则退出
+            if stable_count >= 3:
+                return
+            
+            # 每 2 秒打印一次状态，防止用户以为死机
+            if time.time() - last_log_t > 2.0:
+                self._log(f"[MachineClient] 等待停稳... 偏差: {dist:.4f}mm")
+                last_log_t = time.time()
+            
+            time.sleep(0.1)
+        
+        self._log(f"[MachineClient] wait_until_idle 超时 ({timeout}s)")
+
 
     def home_all(self):
         if not self.connected:

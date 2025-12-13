@@ -452,7 +452,6 @@ class MainWindow(QWidget):
         self.halcon_manager = HalconManager()
         self.camera_manager.get_frame_signal().connect(self.update_image) if self.camera_manager.get_frame_signal() else None
         # Load Config
-        # self.config = ConfigManager() # This line is duplicated and should be removed or moved.
         # self.load_app_settings()  # Moved after UI init
 
         # 连接日志信号
@@ -546,8 +545,6 @@ class MainWindow(QWidget):
         self.live_detect = False     # 是否实时识别模具
         # 缩放相关
         self.zoom_scale = 1.0        # 在“自适应基准”上的倍数
-        # 新增：缩放比例
-        self.zoom_scale = 1.0
         
         self.detect_skip_count = 0        # 新增：跳帧计数器
 
@@ -792,7 +789,6 @@ class MainWindow(QWidget):
         info_form.addRow("像素格式：", self.lbl_cam_fmt)
         info_group.setLayout(info_form)
 
-        # ---- Klipper 连接 ----
         # ---- Klipper 连接 ----
         conn_group = QGroupBox("Klipper 连接")
         #改为垂直布局，容纳两行

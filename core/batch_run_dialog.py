@@ -106,6 +106,13 @@ class BatchWorker(QThread):
                 
                 # --- 2. 移动相机到位 ---
                 self.mw.machine.move_to(x=target_x, y=target_y, speed=self.mw.feedrate_xy)
+                
+                # [关键修复] 移动到【相机工作高度】进行识别
+                # 用户反馈：安全高度太高导致 Halcon 无法识别，必须去工作高度
+                cam_work_z = float(self.cfg.get('cam_work_z', 0.0))
+                self.log_signal.emit(f"📉 正在下降到相机工作高度 Z={cam_work_z:.2f} ...")
+                self.mw.machine.move_to(z=cam_work_z, speed=self.mw.feedrate_z)
+
                 self.mw.machine.wait_until_idle()
                 
                 # 等待相机稳定
@@ -114,6 +121,9 @@ class BatchWorker(QThread):
                 # --- 3. 拍照 & 识别 ---
                 if self.mw.last_frame is None:
                     self.log_signal.emit("❌ 无法获取图像，跳过")
+                    # 恢复安全高度防止撞车
+                    self._safe_lift_z()
+                    molds_finished += 1
                     continue
 
                 img = self.mw.last_frame.copy()
@@ -130,6 +140,7 @@ class BatchWorker(QThread):
                 
                 if not paths_groups:
                     self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})，跳过")
+                    self._safe_lift_z()
                     molds_finished += 1
                     continue
                 
@@ -141,6 +152,7 @@ class BatchWorker(QThread):
                     
                     if not gcode_lines:
                         self.log_signal.emit("⚠ 生成 G-code 失败，跳过")
+                        self._safe_lift_z()
                         molds_finished += 1
                         continue
 
@@ -183,20 +195,23 @@ class BatchWorker(QThread):
                     self.log_signal.emit("✅ 单个完成")
                     
                     # 关键修复：单个完成后，确保 Z 轴抬升到【移动安全高度】
-                    # 这样移动到下一个阵列点时（XY移动）就不会撞到模具壁
-                    # generate_dispense_gcode 最后一行是 safe_z_cavity，可能不够高
-                    if self.mode == 'camera_dry':
-                        safe_z_move = float(self.cfg['cam_safe_z_product'])
-                    else:
-                        safe_z_move = float(self.cfg['nozzle_safe_z_product'])
-                        
-                    self.mw.machine.move_to(z=safe_z_move, speed=self.mw.feedrate_z)
+                    self._safe_lift_z()
                     self.mw.machine.wait_until_idle()
 
                 except Exception as e:
                     self.log_signal.emit(f"❌ 执行出错: {e}")
+                    self._safe_lift_z()
                 
                 molds_finished += 1
+
+    def _safe_lift_z(self):
+        """辅助函数：抬升到移动安全高度"""
+        if self.mode == 'camera_dry':
+            safe_z_move = float(self.cfg['cam_safe_z_product'])
+        else:
+            safe_z_move = float(self.cfg['nozzle_safe_z_product'])
+        self.mw.machine.move_to(z=safe_z_move, speed=self.mw.feedrate_z)
+
 
         # 结束
         # 结束 - 返回起始点
@@ -270,9 +285,10 @@ class BatchWorker(QThread):
                     dx_mm = M[0, 0] * dx_pix + M[0, 1] * dy_pix
                     dy_mm = M[1, 0] * dx_pix + M[1, 1] * dy_pix
                     
-                    # 目标机器坐标 = 相机中心 + 视觉偏移 - 针头偏移
-                    target_mach_x = current_x + dx_mm - off_x
-                    target_mach_y = current_y + dy_mm - off_y
+                    # 目标机器坐标 = 相机中心 + 视觉偏移 + 针头偏移
+                    # (Calibration: offset = Nozzle - Camera => Nozzle = Camera + offset)
+                    target_mach_x = current_x + dx_mm + off_x
+                    target_mach_y = current_y + dy_mm + off_y
                     
                     if first_pt:
                         # 1. 移动到第一个点上方 (保持当前高度，可能是 Product Z 或 Cavity Z)

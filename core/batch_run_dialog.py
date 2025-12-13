@@ -204,18 +204,12 @@ class BatchWorker(QThread):
                 
                 molds_finished += 1
 
-    def _safe_lift_z(self):
-        """辅助函数：抬升到移动安全高度"""
-        if self.mode == 'camera_dry':
-            safe_z_move = float(self.cfg['cam_safe_z_product'])
-        else:
-            safe_z_move = float(self.cfg['nozzle_safe_z_product'])
-        self.mw.machine.move_to(z=safe_z_move, speed=self.mw.feedrate_z)
-
-
-        # 结束
         # 结束 - 返回起始点
         self.log_signal.emit("🔙 正在返回起始点...")
+        
+        # 更新进度条到 100%
+        self.progress_signal.emit(global_total_steps, global_total_steps)
+        
         # 1. 确保 Z 在最高安全位
         if self.mode == 'camera_dry':
             final_safe_z = float(self.cfg['cam_safe_z_product'])
@@ -233,6 +227,15 @@ class BatchWorker(QThread):
         self.mw.machine.wait_until_idle()
 
         self.finished_signal.emit(True, f"{title}完成")
+
+    def _safe_lift_z(self):
+        """辅助函数：抬升到移动安全高度"""
+        if self.mode == 'camera_dry':
+            safe_z_move = float(self.cfg['cam_safe_z_product'])
+        else:
+            safe_z_move = float(self.cfg['nozzle_safe_z_product'])
+        self.mw.machine.move_to(z=safe_z_move, speed=self.mw.feedrate_z)
+
 
     def generate_dispense_gcode(self, paths_groups, current_x, current_y):
         """
@@ -343,12 +346,12 @@ class BatchRunDialog(QDialog):
 
         # 起始点
         self.spn_start_x = QDoubleSpinBox()
-        self.spn_start_x.setRange(-500, 500)
+        self.spn_start_x.setRange(-2000, 2000)
         self.spn_start_y = QDoubleSpinBox()
-        self.spn_start_y.setRange(-500, 500)
+        self.spn_start_y.setRange(-2000, 2000)
         
         self.spn_start_z = QDoubleSpinBox() # 新增 Z
-        self.spn_start_z.setRange(-500, 500)
+        self.spn_start_z.setRange(-2000, 2000)
 
         btn_teach_start = QPushButton("示教当前位置")
         btn_teach_start.clicked.connect(self.on_teach_start)
@@ -534,6 +537,8 @@ class BatchRunDialog(QDialog):
         self.spn_start_y.setValue(y)
         self.spn_start_z.setValue(z) # 新增 Z
         self.log(f"已示教起始点: X{x:.2f}, Y{y:.2f}, Z{z:.2f}")
+        # 立即保存
+        self.save_settings(silent=True)
 
     def get_config(self):
         return {
@@ -697,110 +702,91 @@ class BatchRunDialog(QDialog):
 
     def load_settings(self):
         """
-        从 app_settings.json 加载批量配置
+        从 ConfigManager 加载批量配置，防止文件冲突
         """
-        # use absolute path
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        settings_file = os.path.join(base_dir, "config", "app_settings.json")
-
-        if not os.path.exists(settings_file):
-            return
-
         try:
-            with open(settings_file, 'r') as f:
-                settings = json.load(f)
-                # self.log(f"DEBUG: Loaded settings: {settings}") # 调试用
+            cfg = self.mw.config
+            
+            # Helper to get float/int
+            def get_float(key, default=0.0):
+                val = cfg.get(key, default)
+                try: return float(val)
+                except: return default
 
-                def safe_float(key, default=0.0):
-                    val = settings.get(key)
-                    if val is None:
-                        return default
-                    try:
-                        return float(val)
-                    except:
-                        return default
+            def get_int(key, default=0):
+                val = cfg.get(key, default)
+                try: return int(val)
+                except: return default
 
-                def safe_int(key, default=0):
-                    val = settings.get(key)
-                    if val is None:
-                        return default
-                    try:
-                        return int(val)
-                    except:
-                        return default
-                
-                # 加载阵列参数
-                if 'batch_start_x' in settings: self.spn_start_x.setValue(safe_float('batch_start_x'))
-                if 'batch_start_y' in settings: self.spn_start_y.setValue(safe_float('batch_start_y'))
-                if 'batch_start_z' in settings: self.spn_start_z.setValue(safe_float('batch_start_z'))
-                if 'batch_rows' in settings: self.spn_rows.setValue(safe_int('batch_rows', 1))
-                if 'batch_cols' in settings: self.spn_cols.setValue(safe_int('batch_cols', 1))
-                if 'batch_space_x' in settings: self.spn_space_x.setValue(safe_float('batch_space_x'))
-                if 'batch_space_y' in settings: self.spn_space_y.setValue(safe_float('batch_space_y'))
-                
-                # Z轴参数
-                if 'cam_safe_z_cavity' in settings: self.spn_cam_safe_cavity.setValue(safe_float('cam_safe_z_cavity'))
-                if 'cam_safe_z_product' in settings: self.spn_cam_safe_product.setValue(safe_float('cam_safe_z_product'))
-                if 'cam_work_z' in settings: self.spn_cam_work.setValue(safe_float('cam_work_z'))
-                
-                if 'safe_z_cavity' in settings: self.spn_nozzle_safe_cavity.setValue(safe_float('safe_z_cavity'))
-                if 'safe_z_product' in settings: self.spn_nozzle_safe_product.setValue(safe_float('safe_z_product'))
-                if 'work_z' in settings: self.spn_nozzle_work.setValue(safe_float('work_z'))
-                
+            # 加载阵列参数
+            self.spn_start_x.setValue(get_float('batch_start_x', 0.0))
+            self.spn_start_y.setValue(get_float('batch_start_y', 0.0))
+            self.spn_start_z.setValue(get_float('batch_start_z', 0.0))
+            self.spn_rows.setValue(get_int('batch_rows', 1))
+            self.spn_cols.setValue(get_int('batch_cols', 1))
+            self.spn_space_x.setValue(get_float('batch_space_x', 0.0))
+            self.spn_space_y.setValue(get_float('batch_space_y', 0.0))
+            
+            # Z轴参数 (从 Config 读取，若无则使用 MainWindow 变量)
+            self.spn_cam_safe_cavity.setValue(get_float('cam_safe_z_cavity', self.mw.cam_safe_z_cavity or 0.0))
+            self.spn_cam_safe_product.setValue(get_float('cam_safe_z_product', self.mw.cam_safe_z_product or 0.0))
+            self.spn_cam_work.setValue(get_float('cam_work_z', self.mw.cam_work_z or 0.0))
+            
+            self.spn_nozzle_safe_cavity.setValue(get_float('safe_z_cavity', self.mw.safe_z_cavity or 0.0))
+            self.spn_nozzle_safe_product.setValue(get_float('safe_z_product', self.mw.safe_z_product or 0.0))
+            self.spn_nozzle_work.setValue(get_float('work_z', self.mw.work_z or 0.0))
+            
         except Exception as e:
             self.log(f"❌ 加载配置失败: {e}")
 
     def save_settings(self, silent=False):
         """
-        保存配置到 app_settings.json
-        silent: 是否静默保存 (不弹窗)
+        保存配置到 ConfigManager，并持久化到文件
         """
-        # use absolute path
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        settings_file = os.path.join(base_dir, "config", "app_settings.json")
-        
-        settings = {}
-        
-        # 先读取旧配置，避免覆盖其他参数
-        if os.path.exists(settings_file):
-            try:
-                with open(settings_file, 'r') as f:
-                    settings = json.load(f)
-            except:
-                pass
-
-        # 1. 更新阵列参数
-        settings['batch_start_x'] = self.spn_start_x.value()
-        settings['batch_start_y'] = self.spn_start_y.value()
-        settings['batch_start_z'] = self.spn_start_z.value() # 新增 Z
-        settings['batch_rows'] = self.spn_rows.value()
-        settings['batch_cols'] = self.spn_cols.value()
-        settings['batch_space_x'] = self.spn_space_x.value()
-        settings['batch_space_y'] = self.spn_space_y.value()
-
-        # 2. 保存高度参数 (用户希望在批量界面修改后能保存)
-        settings['cam_safe_z_cavity'] = self.spn_cam_safe_cavity.value()
-        settings['cam_safe_z_product'] = self.spn_cam_safe_product.value()
-        settings['cam_work_z'] = self.spn_cam_work.value()
-        
-        settings['safe_z_cavity'] = self.spn_nozzle_safe_cavity.value()
-        settings['safe_z_product'] = self.spn_nozzle_safe_product.value()
-        settings['work_z'] = self.spn_nozzle_work.value()
-
-        # 同时更新主界面变量，以便下次打开时同步
-        self.mw.cam_safe_z_cavity = settings['cam_safe_z_cavity']
-        self.mw.cam_safe_z_product = settings['cam_safe_z_product']
-        self.mw.cam_work_z = settings['cam_work_z']
-        self.mw.safe_z_cavity = settings['safe_z_cavity']
-        self.mw.safe_z_product = settings['safe_z_product']
-        self.mw.work_z = settings['work_z']
-
         try:
-            with open(settings_file, 'w') as f:
-                json.dump(settings, f, indent=4)
+            cfg = self.mw.config
+            
+            # 1. 更新阵列参数
+            cfg.set('batch_start_x', self.spn_start_x.value())
+            cfg.set('batch_start_y', self.spn_start_y.value())
+            cfg.set('batch_start_z', self.spn_start_z.value())
+            cfg.set('batch_rows', self.spn_rows.value())
+            cfg.set('batch_cols', self.spn_cols.value())
+            cfg.set('batch_space_x', self.spn_space_x.value())
+            cfg.set('batch_space_y', self.spn_space_y.value())
+
+            # 2. 保存高度参数
+            val_csc = self.spn_cam_safe_cavity.value()
+            val_csp = self.spn_cam_safe_product.value()
+            val_cw = self.spn_cam_work.value()
+            
+            val_sc = self.spn_nozzle_safe_cavity.value()
+            val_sp = self.spn_nozzle_safe_product.value()
+            val_w = self.spn_nozzle_work.value()
+
+            cfg.set('cam_safe_z_cavity', val_csc)
+            cfg.set('cam_safe_z_product', val_csp)
+            cfg.set('cam_work_z', val_cw)
+            
+            cfg.set('safe_z_cavity', val_sc)
+            cfg.set('safe_z_product', val_sp)
+            cfg.set('work_z', val_w)
+
+            # 同时更新主界面变量
+            self.mw.cam_safe_z_cavity = val_csc
+            self.mw.cam_safe_z_product = val_csp
+            self.mw.cam_work_z = val_cw
+            self.mw.safe_z_cavity = val_sc
+            self.mw.safe_z_product = val_sp
+            self.mw.work_z = val_w # 这里虽然 self.mw.work_z 也在 ui 上，但最好保持一致
+
+            # 3. 持久化
+            cfg.save_app_settings()
+
             self.log("✅ 批量阵列配置已保存")
             if not silent:
                 QMessageBox.information(self, "保存成功", "批量阵列配置已保存！")
+                
         except Exception as e:
             self.log(f"❌ 保存失败: {e}")
             if not silent:

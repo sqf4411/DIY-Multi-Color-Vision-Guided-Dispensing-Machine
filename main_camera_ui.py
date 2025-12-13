@@ -104,6 +104,10 @@ class USBCameraWorker(QThread):
 
     def run(self):
         print(f"[USBCamera] Connecting to {self.url}...")
+        
+        # 屏蔽 OpenCV/FFmpeg 的 MJPEG 警告日志
+        cv2.setLogLevel(3)  # 0=Debug, 1=Info, 2=Warning, 3=Error, 4=Fatal
+        
         self.cap = cv2.VideoCapture(self.url)
         
         if not self.cap.isOpened():
@@ -1113,7 +1117,10 @@ class MainWindow(QWidget):
         self.lbl_spd_xy = QLabel(f"XY速度: {int(self.feedrate_xy)}")
         self.sld_spd_xy = QSlider(Qt.Horizontal)
         self.sld_spd_xy.setRange(100, 10000)  # 范围 100 ~ 10000
+        # Block signals to prevent overwriting config during init
+        self.sld_spd_xy.blockSignals(True)
         self.sld_spd_xy.setValue(int(self.feedrate_xy))
+        self.sld_spd_xy.blockSignals(False)
         self.sld_spd_xy.valueChanged.connect(self.on_speed_changed)
         row_sxy.addWidget(self.lbl_spd_xy)
         row_sxy.addWidget(self.sld_spd_xy)
@@ -1123,7 +1130,9 @@ class MainWindow(QWidget):
         self.lbl_spd_z = QLabel(f"Z 速度: {int(self.feedrate_z)}")
         self.sld_spd_z = QSlider(Qt.Horizontal)
         self.sld_spd_z.setRange(100, 2000)  # 范围 100 ~ 2000 (Z轴慢点)
+        self.sld_spd_z.blockSignals(True)
         self.sld_spd_z.setValue(int(self.feedrate_z))
+        self.sld_spd_z.blockSignals(False)
         self.sld_spd_z.valueChanged.connect(self.on_speed_changed)
         row_sz.addWidget(self.lbl_spd_z)
         row_sz.addWidget(self.sld_spd_z)
@@ -1549,28 +1558,7 @@ class MainWindow(QWidget):
         self.log(f"✅ 移动完成: X={x:.2f}, Y={y:.2f}, Z={z:.2f}")
 
     # ====== ✅ 新增：速度/加速度 响应函数 (请复制这一整块) ======
-    def on_speed_changed(self):
-        """更新 XY 和 Z 的速度变量"""
-        # 从滑块读取数值
-        self.feedrate_xy = float(self.sld_spd_xy.value())
-        self.feedrate_z = float(self.sld_spd_z.value())
 
-        # 更新标签显示的文字
-        self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
-        self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
-
-    def on_accel_changed(self):
-        """更新加速度，并直接发送 SET_VELOCITY_LIMIT 指令给 Klipper"""
-        val = self.sld_acc.value()
-        self.accel = float(val)
-        self.lbl_acc.setText(f"加速度: {val}")
-
-        # 发送 Klipper 指令 (只有连接后才发)
-        if self.machine.connected:
-            # 限制加速度和减速度
-            script = f"SET_VELOCITY_LIMIT ACCEL={val} ACCEL_TO_DECEL={val / 2}"
-            self.machine._post_gcode(script)
-            self.log(f"⚡ 加速度已调整为: {val}")
     # =========================================================
 
     def move_machine_rel(self, dx: float, dy: float, dz: float):
@@ -1995,13 +1983,19 @@ class MainWindow(QWidget):
         self.cam_work_z = self.config.get("cam_work_z", self.work_z)
 
         # Update UI
+        self.sld_spd_xy.blockSignals(True)
         self.sld_spd_xy.setValue(int(self.feedrate_xy))
+        self.sld_spd_xy.blockSignals(False)
         self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
 
+        self.sld_spd_z.blockSignals(True)
         self.sld_spd_z.setValue(int(self.feedrate_z))
+        self.sld_spd_z.blockSignals(False)
         self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
 
+        self.sld_acc.blockSignals(True)
         self.sld_acc.setValue(int(self.accel))
+        self.sld_acc.blockSignals(False)
         self.lbl_acc.setText(f"加速度: {int(self.accel)}")
 
         self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
@@ -2619,7 +2613,25 @@ class MainWindow(QWidget):
                 "👉 现在，请点击第 1 个点。"
             )
             self.log(msg)
-            QMessageBox.information(self, "标定指南 (8点 + 撤销)", msg)
+            
+            # 使用自定义按钮的消息框，添加“取消”逻辑
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("标定指南 (8点 + 撤销)")
+            msg_box.setText(msg)
+            btn_ok = msg_box.addButton("开始标定", QMessageBox.AcceptRole)
+            btn_cancel = msg_box.addButton("取消", QMessageBox.RejectRole)
+            msg_box.exec_()
+            
+            if msg_box.clickedButton() == btn_cancel:
+                self.calib_step = 0
+                self.calib_vision_pts = []
+                self.calib_machine_pts = []
+                self.btn_calibrate.setText("标定坐标系")
+                self.btn_calibrate.setStyleSheet("")
+                self.btn_calibrate.setEnabled(True)
+                self.log("🚫 已取消标定操作。")
+                return
+
             self.render_current_frame()
 
         # --- 阶段 1.5: 视觉点确认 (状态 101 -> 100) ---
@@ -2933,9 +2945,22 @@ class MainWindow(QWidget):
             self.cam_safe_z_cavity = dialog.safe_z_cavity
             self.cam_safe_z_product = dialog.safe_z_product
             self.cam_work_z = dialog.work_z
-            # 速度参数是共享的，也顺便更新一下
+            
+            # 速度参数是共享的，同步更新变量和 UI 滑块
             self.feedrate_xy = dialog.speed_xy
             self.feedrate_z = dialog.speed_z
+            
+            # Update Sliders & Labels (Block signals to avoid double-save)
+            self.sld_spd_xy.blockSignals(True)
+            self.sld_spd_xy.setValue(int(self.feedrate_xy))
+            self.sld_spd_xy.blockSignals(False)
+            self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+
+            self.sld_spd_z.blockSignals(True)
+            self.sld_spd_z.setValue(int(self.feedrate_z))
+            self.sld_spd_z.blockSignals(False)
+            self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+
             self.save_app_settings()
 
         self._prepare_dry_run(
@@ -2969,8 +2994,23 @@ class MainWindow(QWidget):
             self.spn_safe_z_cavity.setValue(dialog.safe_z_cavity)
             self.spn_safe_z_product.setValue(dialog.safe_z_product)
             self.spn_work_z.setValue(dialog.work_z)
+            self.spn_work_z.setValue(dialog.work_z)
+                        
+            # 速度参数是共享的，同步更新变量和 UI 滑块
             self.feedrate_xy = dialog.speed_xy
             self.feedrate_z = dialog.speed_z
+            
+            # Update Sliders & Labels (Block signals to avoid double-save)
+            self.sld_spd_xy.blockSignals(True)
+            self.sld_spd_xy.setValue(int(self.feedrate_xy))
+            self.sld_spd_xy.blockSignals(False)
+            self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+
+            self.sld_spd_z.blockSignals(True)
+            self.sld_spd_z.setValue(int(self.feedrate_z))
+            self.sld_spd_z.blockSignals(False)
+            self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+
             self.save_app_settings()
 
         self._prepare_dry_run(
@@ -3489,6 +3529,7 @@ class MainWindow(QWidget):
             
             if res and "matches" in res:
                 for match in res["matches"]:
+
                     # Halcon: Row=Y, Col=X
                     cx, cy = match['col'], match['row']
                     score = match['score']

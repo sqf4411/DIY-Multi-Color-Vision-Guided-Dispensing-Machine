@@ -9,6 +9,13 @@ import cv2
 import numpy as np
 from core.machine_client import MachineClient
 
+# ====== Attempt to silence OpenCV internal logs via API ======
+# try:
+#     cv2.utils.logging.setLogLevel(0) # 0 = Silent
+# except AttributeError:
+#     pass
+# =========================================================
+
 def add_mvs_dll_path():
     dll_dir = os.getenv("MVS_DLL_DIR")
     if dll_dir and os.path.isdir(dll_dir):
@@ -120,12 +127,20 @@ class USBCameraWorker(QThread):
 
             # Process frame
             if frame is not None:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                h, w, ch = rgb.shape
-                # Ensure memory safety by copying? QImage from data reference needs care.
-                # However, emit copies it usually.
-                qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
-                self.frame_signal.emit(qimg)
+                try:
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    h, w, ch = rgb.shape
+                    # QImage.Format_RGB888
+                    qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
+                    self.frame_signal.emit(qimg)
+                    
+                    # Debug: print dot every 10 frames to avoid spam but confirm liveness
+                    # self.frame_count = getattr(self, 'frame_count', 0) + 1
+                    # if self.frame_count % 10 == 0:
+                    #     sys.stdout.write('.')
+                    #     sys.stdout.flush()
+                except Exception as e:
+                     print(f"[USBCamera] Error processing frame: {e}")
             
             # Limit FPS
             time.sleep(0.01)
@@ -657,6 +672,9 @@ class MainWindow(QWidget):
         self.poll_worker.pos_signal.connect(self.update_xyz_display)
         self.poll_worker.probe_signal.connect(self.update_probe_status)
 
+        # USB Camera Worker
+        self.usb_cam_worker = None
+
         # ==========================================
         # 在所有 UI 元素初始化完成后，调用加载设置
         self.init_ui()
@@ -775,9 +793,14 @@ class MainWindow(QWidget):
         info_group.setLayout(info_form)
 
         # ---- Klipper 连接 ----
+        # ---- Klipper 连接 ----
         conn_group = QGroupBox("Klipper 连接")
-        conn_layout = QHBoxLayout() # 单行布局
+        #改为垂直布局，容纳两行
+        conn_final_layout = QVBoxLayout() 
 
+        # === 第一行：IP, Port, Buttons ===
+        row1_layout = QHBoxLayout()
+        
         # 1. IP
         lbl_ip = QLabel("IP:")
         self.edit_ip = QLineEdit("192.168.60.26")
@@ -834,27 +857,36 @@ class MainWindow(QWidget):
             btn.setMinimumHeight(28)
             btn.setFixedWidth(80)
 
-        # ====== 布局排列 ======
-        # 左侧: IP + Port
-        conn_layout.addWidget(lbl_ip)
-        conn_layout.addWidget(self.edit_ip)
-        conn_layout.addSpacing(10)
-        conn_layout.addWidget(lbl_port)
-        conn_layout.addWidget(self.edit_port)
+        # ====== Row 1 排列 ======
+        row1_layout.addWidget(lbl_ip)
+        row1_layout.addWidget(self.edit_ip)
+        row1_layout.addSpacing(10)
+        row1_layout.addWidget(lbl_port)
+        row1_layout.addWidget(self.edit_port)
+        row1_layout.addStretch() 
         
-        # 中间: 弹簧 (把按钮顶到右边)
-        conn_layout.addStretch() 
-        
-        # 右侧: 按钮 [启动] [停止] [连接] [STOP]
-        conn_layout.addWidget(self.btn_start)
-        conn_layout.addSpacing(5)
-        conn_layout.addWidget(self.btn_stop)
-        conn_layout.addSpacing(10)
-        conn_layout.addWidget(self.btn_connect_klipper)
-        conn_layout.addSpacing(5)
-        conn_layout.addWidget(self.btn_estop)
+        row1_layout.addWidget(self.btn_start)
+        row1_layout.addSpacing(5)
+        row1_layout.addWidget(self.btn_stop)
+        row1_layout.addSpacing(10)
+        row1_layout.addWidget(self.btn_connect_klipper)
+        row1_layout.addSpacing(5)
+        row1_layout.addWidget(self.btn_estop)
 
-        conn_group.setLayout(conn_layout)
+        # === 第二行：USB URL ===
+        row2_layout = QHBoxLayout()
+        lbl_usb = QLabel("USB Stream:")
+        self.edit_usb_url = QLineEdit("http://192.168.60.26/webcam/?action=stream") 
+        self.edit_usb_url.setPlaceholderText("http://<ip>:8080/stream or /webcam/?action=stream")
+        # self.edit_usb_url.setFixedWidth(250) # 让它自适应宽度
+
+        row2_layout.addWidget(lbl_usb)
+        row2_layout.addWidget(self.edit_usb_url)
+        
+        conn_final_layout.addLayout(row1_layout)
+        conn_final_layout.addLayout(row2_layout)
+
+        conn_group.setLayout(conn_final_layout)
 
 
 
@@ -1177,15 +1209,60 @@ class MainWindow(QWidget):
         # ================== 双栏布局核心 (可拖拽分割) ==================
         # [左栏: 相机(上) + 3D(下)] - [右栏: 固定控制面板]
 
-        # 1. 3D 视图
+        # 1. 3D 视图 (缩放版 - 左下)
         self.vis3d = Visualizer3D()
         self.vis3d.setMinimumHeight(200) 
-        vis_container = QGroupBox("3D 针头姿态")
+        vis_group = QGroupBox("3D 针头姿态")
         vis_layout = QVBoxLayout()
         vis_layout.addWidget(self.vis3d)
-        vis_container.setLayout(vis_layout)
+        vis_group.setLayout(vis_layout)
 
-        # 2. 左侧总布局 (垂直: 相机 + 3D)
+        # 2. USB 相机视图 (新增 - 右下)
+        usb_group = QGroupBox("USB 针头实景")
+        usb_layout = QVBoxLayout()
+        
+        # Controls (Flip)
+        usb_ctrl_layout = QHBoxLayout()
+        usb_ctrl_layout.addStretch()
+        self.chk_usb_flip_h = QCheckBox("水平翻转")
+        self.chk_usb_flip_h.setStyleSheet("color: #9CA3AF; font-size: 12px;")
+        self.chk_usb_flip_h.setChecked(True) # 默认开启
+        
+        self.chk_usb_flip = QCheckBox("垂直翻转")
+        self.chk_usb_flip.setStyleSheet("color: #9CA3AF; font-size: 12px;")
+        self.chk_usb_flip.setChecked(True) # 默认开启
+        
+        usb_ctrl_layout.addWidget(self.chk_usb_flip_h)
+        usb_ctrl_layout.addWidget(self.chk_usb_flip)
+        
+        self.label_usb_cam = ImageLabel("Waiting for Stream...")
+        self.label_usb_cam.setMinimumSize(320, 240)
+        self.label_usb_cam.setStyleSheet("""
+            background-color: #000000;
+            color: #6B7280;
+            border-radius: 4px;
+        """)
+        self.label_usb_cam.setAlignment(Qt.AlignCenter)
+        
+        usb_layout.addLayout(usb_ctrl_layout)
+        usb_layout.addWidget(self.label_usb_cam)
+        usb_group.setLayout(usb_layout)
+
+        # 3. 底部水平分割器
+        bottom_splitter = QSplitter(Qt.Horizontal)
+        bottom_splitter.addWidget(vis_group)
+        bottom_splitter.addWidget(usb_group)
+        
+        # 强制 50:50 (假设宽度足够，各给 600px 期望值)
+        bottom_splitter.setSizes([400, 400]) 
+        bottom_splitter.setCollapsible(0, False)
+        bottom_splitter.setCollapsible(1, False)
+
+        # setStretchFactor 只是辅助，setSizes 更直接
+        bottom_splitter.setStretchFactor(0, 1)
+        bottom_splitter.setStretchFactor(1, 1)
+
+        # 2. 左侧总布局 (垂直: 相机 + (3D|USB))
         # 必须包装成 Widget 才能放入 Splitter
         left_widget = QWidget()
         left_final_layout = QVBoxLayout()
@@ -1194,7 +1271,7 @@ class MainWindow(QWidget):
         camera_widget.setLayout(left_layout)
         
         left_final_layout.addWidget(camera_widget, stretch=2) # 相机占 2/3
-        left_final_layout.addWidget(vis_container, stretch=1) # 3D 占 1/3
+        left_final_layout.addWidget(bottom_splitter, stretch=1) # 底部占 1/3
         
         left_widget.setLayout(left_final_layout)
 
@@ -1745,6 +1822,16 @@ class MainWindow(QWidget):
         self.btn_stop.setEnabled(True)
         self.btn_save.setEnabled(True)
 
+        # Start USB Camera as well if URL is present (Added)
+        # Check if widget exists (init_ui happens later?) No, init_ui is done.
+        if hasattr(self, 'edit_usb_url'):
+            usb_url = self.edit_usb_url.text().strip()
+            if usb_url and (not self.usb_cam_worker or not self.usb_cam_worker.isRunning()):
+                 self.usb_cam_worker = USBCameraWorker(usb_url)
+                 self.usb_cam_worker.frame_signal.connect(self.update_usb_image)
+                 self.usb_cam_worker.status_signal.connect(self.on_usb_status)
+                 self.usb_cam_worker.start()
+
 
     def stop_cam(self):
         self.camera_manager.close_camera()
@@ -1757,6 +1844,13 @@ class MainWindow(QWidget):
         self.lbl_cam_res.setText("-")
         self.lbl_cam_fps.setText("-")
         self.lbl_cam_fmt.setText("-")
+        
+        # Stop USB Camera
+        if self.usb_cam_worker:
+            self.usb_cam_worker.stop()
+            self.usb_cam_worker = None
+            if hasattr(self, 'label_usb_cam'):
+                self.label_usb_cam.setText("Stopped")
 
 
     # read_param_ranges and read_cam_info removed (logic moved to CameraManager)
@@ -1944,6 +2038,10 @@ class MainWindow(QWidget):
         self.config.set("cam_safe_z_product", self.cam_safe_z_product)
         self.config.set("cam_work_z", self.cam_work_z)
         
+        # Save USB URL
+        if hasattr(self, 'edit_usb_url'):
+            self.config.set("usb_cam_url", self.edit_usb_url.text().strip())
+        
         self.config.save_app_settings()
 
 
@@ -1953,6 +2051,42 @@ class MainWindow(QWidget):
         if self.freeze_display:
             return
         self.render_current_frame()
+
+    def render_current_frame(self):
+        """硬编码翻转版 + 验证显示增强 + 修复标定点不显示BUG"""
+        if self.last_frame is None:
+            return
+
+        # 1. 拷贝 & 翻转 (保持 -1)
+        img = self.last_frame.copy()
+
+    # ====== USB Camera Slots ======
+    def update_usb_image(self, qimg):
+        if hasattr(self, 'label_usb_cam'):
+             # Check Flip
+             h_flip = False
+             v_flip = False
+             
+             if hasattr(self, 'chk_usb_flip_h') and self.chk_usb_flip_h.isChecked():
+                 h_flip = True
+             if hasattr(self, 'chk_usb_flip') and self.chk_usb_flip.isChecked():
+                 v_flip = True
+                 
+             if h_flip or v_flip:
+                 qimg = qimg.mirrored(h_flip, v_flip)
+
+             # 简单的缩放以适应 label
+             # scaled_img = qimg.scaled(self.label_usb_cam.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+             self.label_usb_cam.setPixmap(QPixmap.fromImage(qimg))
+    
+    def on_usb_status(self, connected):
+        if not connected:
+            if hasattr(self, 'label_usb_cam'):
+                self.label_usb_cam.setText("Disconnected / Retry...")
+                self.label_usb_cam.setStyleSheet("color: red; background-color: black;")
+        else:
+             if hasattr(self, 'label_usb_cam'):
+                self.label_usb_cam.setStyleSheet("color: white; background-color: black;")
 
     def render_current_frame(self):
         """硬编码翻转版 + 验证显示增强 + 修复标定点不显示BUG"""

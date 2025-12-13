@@ -20,5 +20,6 @@
     "batch_cols": 4,
     "batch_space_x": 70.0,
     "batch_space_y": 72.0,
-    "batch_start_z": 220.0
+    "batch_start_z": 220.0,
+    "usb_cam_url": "http://192.168.60.26/webcam/?action=stream"
 }

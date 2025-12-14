@@ -182,7 +182,86 @@ class HalconManager:
             print(f"[HalconManager] 执行 HDev 过程失败: {e}")
             return None
 
+    def train_model(self, image_path, output_model_path):
+        """
+        训练形状模板并保存 (.shm)
+        :param image_path: 训练图片路径 (PNG/JPG)
+        :param output_model_path: 保存路径 (.shm)
+        """
+        global ha
+        if ha is None:
+            return False, "Halcon library not loaded"
+
+        try:
+            print(f"[HalconManager] 开始训练模型: {image_path}")
+            
+            # 1. Read Image
+            image = ha.read_image(image_path)
+            
+            # 2. Create Shape Model (Auto params)
+            # create_shape_model(Image : : NumLevels, AngleStart, AngleExtent, AngleStep, Optimization, Metric, Contrast, MinContrast : ModelID)
+            # Python API order usually matches.
+            # Using 'auto' for generic usage.
+            # Angle: 0 to 360 (0 to 6.28 rad)
+            model_id = ha.create_shape_model(
+                image, 
+                'auto',             # NumLevels
+                0.0,                # AngleStart
+                6.29,               # AngleExtent (2*Pi approx, covers 360)
+                'auto',             # AngleStep
+                'auto',             # Optimization
+                'use_polarity',     # Metric
+                'auto',             # Contrast
+                'auto'              # MinContrast
+            )
+            
+            # 3. Get Model Origin (The reference point for matches)
+            # get_shape_model_origin(ModelID : : : Row, Column)
+            origin_row, origin_col = ha.get_shape_model_origin(model_id)
+            
+            # The origin returned is relative to the "center of gravity" usually?
+            # Actually, create_shape_model by default sets the origin to the center of gravity of the ROI.
+            # But we need to know where that is in the ORIGINAL image to align our paths.
+            # Wait, Halcon matching returns result (Row, Col) which corresponds to where this Origin is found.
+            # So if we have a path defined relative to the Image Center, we need to shift it.
+            
+            # Actually, we need the coordinates of the Origin in the Training Image.
+            # If we trained on the WHOLE image, the origin is usually its center of gravity.
+            # But Halcon documentation says:
+            # "The point of reference is the center of gravity of the region of the image."
+            # So we need to calculate the center of gravity of the Image domain.
+            
+            # For simplicity, if we assume the user provides a cropped image or full image,
+            # we need to return this "Reference Point" so we can subtract it from our Path Points.
+            
+            # However, `get_shape_model_origin` returns the offset from the region center?
+            # Let's simplify: We need the (Row, Col) in the Image that corresponds to (0,0) in the Model.
+            # By default, Model (0,0) = Center of Gravity of ROI.
+            # So we need the Center of Gravity of the ROI in image coordinates.
+            
+            area, row_g, col_g = ha.area_center(image)
+            # Model Origin (relative to center of gravity)
+            # Actually, create_shape_model sets the origin at (RowG, ColG).
+            # So the match result (Row, Col) will be the position of (RowG, ColG) in the new image.
+            
+            # We return (row_g, col_g) as the "Reference Point" for this model.
+            
+            # 4. Write Model
+            ha.write_shape_model(model_id, output_model_path)
+            
+            # 5. Cleanup
+            ha.clear_shape_model(model_id)
+            
+            print(f"[HalconManager] 模型已保存: {output_model_path}, Origin: ({row_g}, {col_g})")
+            return True, {"msg": "Success", "origin_row": row_g, "origin_col": col_g}
+            
+        except Exception as e:
+            msg = f"Training failed: {e}"
+            print(f"[HalconManager] {msg}")
+            return False, msg
+
     def _numpy_to_himage(self, image_np):
+
         """
         Numpy (BGR/Gray) -> HImage
         """

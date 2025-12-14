@@ -1081,43 +1081,54 @@ class MainWindow(QWidget):
         self.btn_save = QPushButton("保存图片")
         self.btn_detect = QPushButton("识别模具")
         self.btn_golden = QPushButton("黄金示教")
-        self.btn_resume = QPushButton("恢复预览")
+        # btn_resume已删除 - 无效按钮
         self.btn_path = QPushButton("编辑点胶路径")
 
         # 点胶任务相关按钮
         self.btn_calibrate = QPushButton("标定坐标系")
-        self.btn_calibrate.setFixedWidth(120) # 固定宽度防止文字变化导致界面抖动
         # ====== ✅ 新增：验证精度按钮 ======
         self.btn_verify = QPushButton("验证精度")
         self.btn_verify.setToolTip("点击开启/关闭【点击定位】功能")
         # ================================
         self.btn_virtual = QPushButton("相机空跑")
         self.btn_dry_run = QPushButton("针头空跑")
-        self.btn_real_run = QPushButton("开始点胶")
+        # btn_real_run已删除 - 无效按钮
         self.btn_batch_run = QPushButton("批量运行")
         self.btn_test_valve = QPushButton("测试出胶")
 
-
+        # ===== 不设置固定宽度，让按钮自动扩展填充空间 =====
         self.btn_save.setEnabled(False)
 
-        # 第一排：相机 & 示教
+        # ================== 多功能区 (包含所有操作按钮) ==================
+        action_group = QGroupBox("多功能区")
+        action_group_layout = QVBoxLayout()
+        
+        # 第一排：5个按钮 (均匀铺满)
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(5)  # 按钮间距
 
         btn_layout.addWidget(self.btn_save)
         btn_layout.addWidget(self.btn_detect)
         btn_layout.addWidget(self.btn_golden)
-        btn_layout.addWidget(self.btn_resume)
         btn_layout.addWidget(self.btn_path)
+        btn_layout.addWidget(self.btn_test_valve)
+        # 不添加stretch，让按钮自动扩展
 
-        # 第二排：点胶任务
+        # 第二排：5个按钮 (均匀铺满)
         task_layout = QHBoxLayout()
+        task_layout.setSpacing(5)  # 按钮间距
+        
         task_layout.addWidget(self.btn_calibrate)
-        task_layout.addWidget(self.btn_verify)  # ✅ 验证精度按钮
+        task_layout.addWidget(self.btn_verify)
         task_layout.addWidget(self.btn_virtual)
         task_layout.addWidget(self.btn_dry_run)
-        task_layout.addWidget(self.btn_real_run)
         task_layout.addWidget(self.btn_batch_run)
-        task_layout.addWidget(self.btn_test_valve)
+        # 不添加stretch，让按钮自动扩展
+        
+        # 将两排按钮添加到多功能区
+        action_group_layout.addLayout(btn_layout)
+        action_group_layout.addLayout(task_layout)
+        action_group.setLayout(action_group_layout)
 
         # ================== 2. 相机参数组 ==================
         param_group = QGroupBox("相机参数")
@@ -1446,8 +1457,7 @@ class MainWindow(QWidget):
         tools_layout.addWidget(self.tool_set_group, stretch=1)
         tools_layout.addWidget(self.offset_group, stretch=1)
         right_layout.addLayout(tools_layout)
-        right_layout.addLayout(btn_layout)   # 相机/示教按钮
-        right_layout.addLayout(task_layout)  # 点胶任务按钮
+        right_layout.addWidget(action_group)   # 多功能区（包含所有按钮）
         # param_group 已移到第一行，这里不再添加
         right_layout.addWidget(self.vision_group)
         
@@ -1564,7 +1574,7 @@ class MainWindow(QWidget):
 
         self.btn_detect.clicked.connect(self.detect_mold)
         self.btn_golden.clicked.connect(self.on_golden_teach)
-        self.btn_resume.clicked.connect(self.resume_preview)
+        # btn_resume已删除，不需要连接
         self.btn_path.clicked.connect(self.on_edit_path)
 
         # 标定精度确认
@@ -1577,7 +1587,7 @@ class MainWindow(QWidget):
         self.btn_calibrate.clicked.connect(self.on_calibrate_coords)
         self.btn_virtual.clicked.connect(self.on_virtual_run)
         self.btn_dry_run.clicked.connect(self.on_dry_run)
-        self.btn_real_run.clicked.connect(self.on_real_run)
+        # btn_real_run已删除，不需要连接
         self.btn_batch_run.clicked.connect(self.on_batch_run)
         self.btn_test_valve.clicked.connect(self.on_test_valve)
 

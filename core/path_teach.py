@@ -139,6 +139,7 @@ def run_path_teach(cell_index: int = 0,
     polylines = []  # list of (N,2)
     dots = []       # list of (2,)
     current_line = []
+    entity_history = []  # ['dot', 'line', 'dot', ...]
 
     try:
         arr = np.load(poly_file, allow_pickle=True)
@@ -156,6 +157,12 @@ def run_path_teach(cell_index: int = 0,
         print(f"✅ 载入已有点集 {dots_file}, 点数 = {len(dots)}")
     except Exception:
         print("ℹ 未找到历史点文件，重新开始绘制")
+
+    # Initialize history from loaded files (approximate order)
+    if polylines:
+        entity_history.extend(['line'] * len(polylines))
+    if dots:
+        entity_history.extend(['dot'] * len(dots))
 
     # ---------- 4.5 工具：小格坐标 -> 黄金坐标 ----------
     def local_to_golden(points: np.ndarray) -> np.ndarray:
@@ -177,15 +184,35 @@ def run_path_teach(cell_index: int = 0,
         for seg in polylines:
             if len(seg) < 2:
                 continue
-            pts = (seg * scale).astype(int)
+            
+            pts_f = seg * scale
+            pts = pts_f.astype(int)
+            
             for i in range(len(pts) - 1):
-                cv2.line(base_color, tuple(pts[i]), tuple(pts[i + 1]),
-                         (0, 0, 255), 1, cv2.LINE_AA)
-                cv2.circle(base_color, tuple(pts[i]), 3, (0, 0, 255), -1)
+                p1 = tuple(pts[i])
+                p2 = tuple(pts[i + 1])
+                
+                # Dynamic tip length for consistent visual size (~8px)
+                seg_len = np.linalg.norm(pts_f[i+1] - pts_f[i])
+                if seg_len > 0:
+                    tip = 8.0 / seg_len
+                    # Clamp to avoid extreme values
+                    tip = max(0.05, min(0.5, tip))
+                else:
+                    tip = 0.1
+
+                # Draw Arrow
+                cv2.arrowedLine(base_color, p1, p2, (0, 0, 255), 1, cv2.LINE_AA, tipLength=tip)
+                
+                # Draw Node
+                cv2.circle(base_color, p1, 3, (0, 0, 255), -1)
+                
                 cv2.putText(base_color, str(idx),
-                            (pts[i][0] + 3, pts[i][1] - 3),
+                            (p1[0] + 3, p1[1] - 3),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
                 idx += 1
+            
+            # Last point
             cv2.circle(base_color, tuple(pts[-1]), 3, (0, 0, 255), -1)
             cv2.putText(base_color, str(idx),
                         (pts[-1][0] + 3, pts[-1][1] - 3),
@@ -237,10 +264,12 @@ def run_path_teach(cell_index: int = 0,
                 current_line.append((wx, wy))
             elif mode == "dot":
                 dots.append((wx, wy))
+                entity_history.append('dot')
         
         elif event == cv2.EVENT_RBUTTONDOWN:
             # Right click: Always add a dot
             dots.append((wx, wy))
+            entity_history.append('dot')
 
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW_NAME, disp_w, disp_h + 30)
@@ -260,19 +289,22 @@ def run_path_teach(cell_index: int = 0,
         elif key in (ord('n'), ord('N')):
             if len(current_line) >= 2:
                 polylines.append(np.array(current_line, dtype=np.float32))
+                entity_history.append('line')
             current_line = []
         elif key in (ord('c'), ord('C')):
             polylines.clear()
             current_line = []
             dots.clear()
+            entity_history.clear()
         elif key in (ord('z'), ord('Z')):
-            if mode == "line":
-                if current_line:
-                    current_line.pop()
-                elif polylines:
+            if current_line:
+                current_line.pop()
+            # Unified Undo
+            elif entity_history:
+                last_type = entity_history.pop()
+                if last_type == 'line' and polylines:
                     polylines.pop()
-            elif mode == "dot":
-                if dots:
+                elif last_type == 'dot' and dots:
                     dots.pop()
         elif key in (ord('q'), ord('Q')):
             print("⚠ 用户取消，不保存点胶路径")
@@ -310,7 +342,8 @@ def run_path_teach(cell_index: int = 0,
                 else:
                     dots_disp = np.zeros((0, 2), dtype=np.float32)
 
-                np.save(f"config/disp_dots_cell{cell_index}.npy", dots_disp)
+                dots_path = os.path.join(config_dir, f"disp_dots_cell{cell_index}.npy")
+                np.save(dots_path, dots_disp)
                 print(f"✅ 已保存显示路径 disp_poly_cell{cell_index}.npy / disp_dots_cell{cell_index}.npy")
             except Exception as e:
                 print("⚠ 生成显示路径失败：", e)

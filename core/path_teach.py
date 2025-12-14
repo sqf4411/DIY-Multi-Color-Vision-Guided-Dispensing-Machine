@@ -2,7 +2,15 @@
 import cv2
 import numpy as np
 
-WINDOW_NAME = "点胶路径示教窗口"
+WINDOW_NAME = "Edit Path" # Avoid Chinese encoding issues on Windows for now, or use English
+# If user really insists on Chinese and it breaks, we might need a specific fix like .encode('gbk').decode('latin1') trick or similar.
+# But for stability, English is preferred. 
+# User asked: "中文 is '编辑点胶路径', modify it".
+# Okay, I will try to satisfy them, but if it garbles, it's the environment.
+# Let's try to set it to what they asked, but maybe the previous string was too long or something?
+# original: "点胶路径示教窗口"
+# requested: "编辑点胶路径"
+WINDOW_NAME = "编辑点胶路径"
 
 
 def order_points(pts: np.ndarray) -> np.ndarray:
@@ -278,6 +286,11 @@ def run_path_teach(cell_index: int = 0,
     print(f"🧵 打开点胶路径示教窗口 (cell_index={cell_index})")
 
     while True:
+        # Check if window was closed via 'X' button
+        if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
+            print("⚠ 用户点击关闭窗口，不保存点胶路径")
+            return False
+
         canvas = draw_canvas()
         cv2.imshow(WINDOW_NAME, canvas)
         key = cv2.waitKey(20) & 0xFF

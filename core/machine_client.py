@@ -465,3 +465,110 @@ class MachineClient:
         if not self.connected: return
         self._post_gcode("VALVE_OFF")
         print("[MachineClient] VALVE_OFF")
+
+    # ------------------------------------------------------------------ #
+    # 温度控制 (新增)
+    # ------------------------------------------------------------------ #
+    def get_temp_status(self):
+        """
+        获取温度信息
+        返回 dict: {
+            'syringe': {'current': 0.0, 'target': 0.0, 'power': 0.0},
+            'mcu': 0.0,   # Fly-Super8
+            'host': 0.0   # FLY-pi
+        }
+        """
+        if not self.base_url or not self.connected:
+            return None
+
+        # Klipper 对象名 (根据用户截图和配置推断)
+        # 注意：如果有空格，requests 会自动 URL 编码
+        params = {
+            "heater_generic syringe_heater": "",
+            "temperature_sensor Fly-Super8": "",
+            "temperature_sensor FLY-pi": ""
+        }
+        
+        url = f"{self.base_url}/printer/objects/query"
+        try:
+            r = self.session.get(url, params=params, headers=self._headers(), timeout=2)
+            data = r.json()
+            status = data.get("result", {}).get("status", {})
+            
+            res = {}
+            
+            # 1. Syringe Heater
+            sh = status.get("heater_generic syringe_heater", {})
+            # 如果没读到数据，默认为 0
+            if sh:
+                res['syringe'] = {
+                    'current': sh.get('temperature', 0.0),
+                    'target': sh.get('target', 0.0),
+                    'power': sh.get('power', 0.0)
+                }
+            else:
+                 res['syringe'] = {'current': 0.0, 'target': 0.0, 'power': 0.0}
+
+            # 2. MCU Temp (Fly-Super8)
+            # 注意：如果名字不对，这里 get 出来是 None，再 .get 会报错，所以要小心
+            sensor_mcu = status.get("temperature_sensor Fly-Super8", {})
+            res['mcu'] = sensor_mcu.get("temperature", 0.0) if sensor_mcu else 0.0
+            
+            # 3. Host Temp (FLY-pi)
+            # 常见名称: 'temperature_sensor FLY-pi', 'temperature_sensor raspberry_pi', 'temperature_host'
+            # 如果找不到，打印一下所有 status keys 方便调试
+            host_keys = [k for k in status.keys() if 'temperature_sensor' in k or 'temperature_host' in k]
+            
+            sensor_host = status.get("temperature_sensor FLY-pi", {})
+            if not sensor_host:
+                 # Backup try
+                 if "temperature_host" in status:
+                     sensor_host = status["temperature_host"]
+                 elif "temperature_sensor raspberry_pi" in status:
+                     sensor_host = status["temperature_sensor raspberry_pi"]
+            
+            # Debug Log (Only once or occasionally)
+            # print(f">>> DEBUG CHECK HOST KEYS: {host_keys}", flush=True)
+            # raw_val = status.get("temperature_sensor FLY-pi")
+            
+            res['host'] = 0.0
+            
+            # Helper logic to extract temperature from diverse return types
+            def extract_temp(val):
+                if isinstance(val, dict):
+                    return val.get("temperature", 0.0)
+                elif hasattr(val, 'temperature'):
+                    return val.temperature
+                return 0.0
+
+            sensor_host_val = extract_temp(sensor_host)
+            
+            if sensor_host_val > 0:
+                res['host'] = sensor_host_val
+            else:
+                # Fallback: Try Moonraker /machine/proc_stats
+                # This is more reliable for Host CPU temp
+                try:
+                    url_stats = f"{self.base_url}/machine/proc_stats"
+                    r_stats = self.session.get(url_stats, headers=self._headers(), timeout=1)
+                    if r_stats.ok:
+                        s_data = r_stats.json().get("result", {})
+                        # usually in 'cpu_temp'
+                        res['host'] = s_data.get("cpu_temp", 0.0)
+                        # print(f"[DEBUG] Fallback to proc_stats: {res['host']}")
+                except:
+                    pass
+            
+            return res
+            
+        except Exception as e:
+            # 避免刷屏，只打印一次或调试打印
+            # self._log(f"[MachineClient] get_temp_status error: {e}") 
+            return None
+
+    def set_heater_temp(self, temp: float):
+        """设置针筒加热温度"""
+        if not self.connected: return
+        # SET_HEATER_TEMPERATURE HEATER=syringe_heater TARGET=xxx
+        self._post_gcode(f"SET_HEATER_TEMPERATURE HEATER=syringe_heater TARGET={temp:.1f}")
+

@@ -161,6 +161,11 @@ def run_golden_teach():
         # 1. Copy base image
         display_img = warped_img.copy()
 
+        # Check Close Button
+        if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
+            print("⚠ 用户点击关闭窗口 (Golden Teach)")
+            return False
+
         # 2. Draw existing boxes
         for i, box in enumerate(slot_boxes):
             cv2.drawContours(display_img, [box.astype(np.int32)], 0, (0, 255, 0), 2)

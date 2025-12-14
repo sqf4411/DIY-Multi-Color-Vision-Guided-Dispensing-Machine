@@ -1,238 +1,86 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <hdevelop file_version="1.2" halcon_version="20.11">
-  <procedure name="main">
-    <interface/>
-    <body>
-      <c>* 主入口（不会被 UI 调用）</c>
-      <l>exit ()</l>
-    </body>
-    <docu id="main">
-      <parameters/>
-    </docu>
-  </procedure>
-
-  <procedure name="detect_mold">
-    <interface>
-      <io>
-        <par name="Image" base_type="iconic" dimension="0"/>
-      </io>
-      <oc>
-        <par name="ResultRow" base_type="ctrl" dimension="0"/>
-        <par name="ResultColumn" base_type="ctrl" dimension="0"/>
-        <par name="ResultAngle" base_type="ctrl" dimension="0"/>
-        <par name="ResultScore" base_type="ctrl" dimension="0"/>
-      </oc>
-    </interface>
-
-    <body>
-      <c>* ======================================================</c>
-      <c>* ① 初始化输出（必须：否则上层解析会读到旧数据）</c>
-      <c>* ======================================================</c>
-      <l>ResultRow := []</l>
-      <l>ResultColumn := []</l>
-      <l>ResultAngle := []</l>
-      <l>ResultScore := []</l>
-
-      <c>* ======================================================</c>
-      <c>* ② 模型文件路径（你的工程绝对路径，保持不动即可）</c>
-      <c>*    注意：只要 shm 存在，就不会重新训练（会直接读取）。</c>
-      <c>*    想强制重训：删除 config/mold_model.shm</c>
-      <c>* ======================================================</c>
-      <l>ModelFile := 'H:/CodeForGithub/DIY-Multi-Color-Vision-Guided-Dispensing-Machine/config/mold_model.shm'</l>
-      <l>file_exists (ModelFile, FileExists)</l>
-
-      <c>* ======================================================</c>
-      <c>* ③ 训练阶段（只有当 shm 不存在时才会触发）</c>
-      <c>*    训练核心：ignore_local_polarity（抗反光/局部极性变化）</c>
-      <c>* ======================================================</c>
-      <l>if (FileExists == 0)</l>
-      <l>  GoldenImagePath := 'H:/CodeForGithub/DIY-Multi-Color-Vision-Guided-Dispensing-Machine/config/mold2.png'</l>
-      <l>  file_exists (GoldenImagePath, ImgExists)</l>
-      <l>  if (ImgExists == 0)</l>
-      <l>    return ()</l>
-      <l>  endif</l>
-
-      <c>* 读取训练图并做“压爆白”预处理（scale_image_max）</c>
-      <l>  read_image (TrainImageRaw, GoldenImagePath)</l>
-      <l>  scale_image_max (TrainImageRaw, TrainImage)</l>
-
-      <c>* 训练 ROI：只取你手工框的那块“字符/图案区域”，避免把腔壁也学进去</c>
-      <l>  gen_rectangle1 (ModelRegion, 448.829, 936.949, 854.524, 1289.7)</l>
-      <l>  reduce_domain (TrainImage, ModelRegion, TemplateImage)</l>
-
-      <c>* 训练 Shape Model：</c>
-      <c>* - ignore_local_polarity：对反光、局部黑白翻转更稳</c>
-      <c>* - Contrast=20 / MinContrast=5：对低对比腔体更宽容</c>
-      <l>  create_shape_model (TemplateImage, 'auto', rad(0), rad(360), 'auto', 'auto', 'ignore_local_polarity', 20, 5, ModelID_Train)</l>
-      <l>  write_shape_model (ModelID_Train, ModelFile)</l>
-      <l>  clear_shape_model (ModelID_Train)</l>
-      <l>endif</l>
-
-      <c>* ======================================================</c>
-      <c>* ④ 加载模型（每次过程都会读一次：这是“卡顿”的一个来源）</c>
-      <c>*    后续要极致提速：需要 Python 端缓存 HDevProgram/ProcedureCall（我可再给）。</c>
-      <c>* ======================================================</c>
-      <l>read_shape_model (ModelFile, ModelID)</l>
-
-      <c>* ======================================================</c>
-      <c>* ⑤ 匹配阶段：先做预处理 + 限定搜索区域（加速）</c>
-      <c>* ======================================================</c>
-      <l>count_obj (Image, NumObj)</l>
-      <l>if (NumObj == 0)</l>
-      <l>  clear_shape_model (ModelID)</l>
-      <l>  return ()</l>
-      <l>endif</l>
-
-      <c>* 压爆白，提升反光腔体边缘可见性（你右下角提分的关键之一）</c>
-      <l>scale_image_max (Image, ImageScaled)</l>
-
-      <c>* 【加速】动态 ROI：只搜左侧 72% 区域（避免右侧模具/背景干扰 + 提速）</c>
-      <c>* 如果你以后要同时识别右侧模具，把 0.72 调大到 0.85 或 1.0</c>
-      <l>get_image_size (ImageScaled, W, H)</l>
-      <l>WSearch := round(W * 0.72)</l>
-      <l>if (WSearch &lt; 1)</l>
-      <l>  WSearch := W</l>
-      <l>endif</l>
-      <l>gen_rectangle1 (SearchRegion, 0, 0, H-1, WSearch-1)</l>
-      <l>reduce_domain (ImageScaled, SearchRegion, ImageSearch)</l>
-
-      <c>* ======================================================</c>
-      <c>* ⑥ 关键：限制角度范围，解决“中心点/角度抖动 → 路径晃动”</c>
-      <c>*    你的模具实际不会 360° 乱转，所以把搜索角度限制到 -10°~+10°</c>
-      <c>*    这会显著减少局部最优切换，路径稳定性提升非常明显。</c>
-      <c>* ======================================================</c>
-      <c>* 参数建议：</c>
-      <c>* - MinScore=0.40：你现在最低分也在 0.56 左右，0.4 很安全</c>
-      <c>* - NumMatches=12：候选池够用，不会像 50 那样卡</c>
-      <c>* - Greediness=0.8：别太贪，减少乱抓</c>
-      <l>find_shape_model (ImageSearch, ModelID, rad(-10), rad(20), 0.40, 12, 0.5, 'least_squares', 0, 0.6, RowAll, ColAll, AngAll, ScoreAll)</l>
-
-      <l>if (|ScoreAll| == 0)</l>
-      <l>  clear_shape_model (ModelID)</l>
-      <l>  return ()</l>
-      <l>endif</l>
-
-      <c>* ======================================================</c>
-      <c>* ⑦ 候选排序 + 空间去重（NMS）→ 最终只保留 4 个</c>
-      <c>* ======================================================</c>
-      <l>tuple_sort_index (ScoreAll, IdxAsc)</l>
-      <l>tuple_inverse (IdxAsc, IdxDesc)</l>
-      <l>RowSorted := RowAll[IdxDesc]</l>
-      <l>ColSorted := ColAll[IdxDesc]</l>
-      <l>AngSorted := AngAll[IdxDesc]</l>
-      <l>ScoreSorted := ScoreAll[IdxDesc]</l>
-
-      <c>* MinDist：同一个腔体内的“相近假匹配”会被过滤掉</c>
-      <c>* 你这类 2x2 腔体，180 通常合适；如果只剩 2-3 个，把它降到 150。</c>
-      <l>MinDist := 180.0</l>
-
-      <l>KeepRows := []</l>
-      <l>KeepCols := []</l>
-      <l>KeepAngs := []</l>
-      <l>KeepScores := []</l>
-
-      <l>for i := 0 to |ScoreSorted|-1 by 1</l>
-      <l>  r := RowSorted[i]</l>
-      <l>  c := ColSorted[i]</l>
-      <l>  a := AngSorted[i]</l>
-      <l>  s := ScoreSorted[i]</l>
-
-      <l>  if (s &lt; 0.40)</l>
-      <l>    continue</l>
-      <l>  endif</l>
-
-      <l>  ok := 1</l>
-      <l>  for j := 0 to |KeepRows|-1 by 1</l>
-      <l>    dr := r - KeepRows[j]</l>
-      <l>    dc := c - KeepCols[j]</l>
-      <l>    d := sqrt(dr*dr + dc*dc)</l>
-      <l>    if (d &lt; MinDist)</l>
-      <l>      ok := 0</l>
-      <l>      break</l>
-      <l>    endif</l>
-      <l>  endfor</l>
-
-      <l>  if (ok)</l>
-      <l>    KeepRows := [KeepRows, r]</l>
-      <l>    KeepCols := [KeepCols, c]</l>
-      <l>    KeepAngs := [KeepAngs, a]</l>
-      <l>    KeepScores := [KeepScores, s]</l>
-      <l>  endif</l>
-
-      <l>  if (|KeepScores| &gt;= 4)</l>
-      <l>    break</l>
-      <l>  endif</l>
-      <l>endfor</l>
-
-      <c>* ======================================================</c>
-      <c>* ⑧ 固定输出顺序：左上、右上、左下、右下（解决“路径换身份”的晃动）</c>
-      <c>*    逻辑：</c>
-      <c>*      - 先按 Row 排序</c>
-      <c>*      - 前两个是“上排”，后两个是“下排”</c>
-      <c>*      - 上排按 Col 排：左→右</c>
-      <c>*      - 下排按 Col 排：左→右</c>
-      <c>* ======================================================</c>
-      <l>if (|KeepScores| &gt;= 2)</l>
-      <l>  tuple_sort_index (KeepRows, IdxRowAsc)</l>
-      <l>  R2 := KeepRows[IdxRowAsc]</l>
-      <l>  C2 := KeepCols[IdxRowAsc]</l>
-      <l>  A2 := KeepAngs[IdxRowAsc]</l>
-      <l>  S2 := KeepScores[IdxRowAsc]</l>
-
-      <l>  if (|S2| &gt;= 4)</l>
-      <l>    RTop := [R2[0], R2[1]]</l>
-      <l>    CTop := [C2[0], C2[1]]</l>
-      <l>    ATop := [A2[0], A2[1]]</l>
-      <l>    STop := [S2[0], S2[1]]</l>
-
-      <l>    RBot := [R2[2], R2[3]]</l>
-      <l>    CBot := [C2[2], C2[3]]</l>
-      <l>    ABot := [A2[2], A2[3]]</l>
-      <l>    SBot := [S2[2], S2[3]]</l>
-
-      <l>    tuple_sort_index (CTop, IdxCTopAsc)</l>
-      <l>    RTop2 := RTop[IdxCTopAsc]</l>
-      <l>    CTop2 := CTop[IdxCTopAsc]</l>
-      <l>    ATop2 := ATop[IdxCTopAsc]</l>
-      <l>    STop2 := STop[IdxCTopAsc]</l>
-
-      <l>    tuple_sort_index (CBot, IdxCBotAsc)</l>
-      <l>    RBot2 := RBot[IdxCBotAsc]</l>
-      <l>    CBot2 := CBot[IdxCBotAsc]</l>
-      <l>    ABot2 := ABot[IdxCBotAsc]</l>
-      <l>    SBot2 := SBot[IdxCBotAsc]</l>
-
-      <l>    ResultRow := [RTop2[0], RTop2[1], RBot2[0], RBot2[1]]</l>
-      <l>    ResultColumn := [CTop2[0], CTop2[1], CBot2[0], CBot2[1]]</l>
-      <l>    ResultAngle := [ATop2[0], ATop2[1], ABot2[0], ABot2[1]]</l>
-      <l>    ResultScore := [STop2[0], STop2[1], SBot2[0], SBot2[1]]</l>
-      <l>  else</l>
-      <c>* 如果少于4个（比如现场遮挡），就直接输出已有的（不强行排序）</c>
-      <l>    ResultRow := KeepRows</l>
-      <l>    ResultColumn := KeepCols</l>
-      <l>    ResultAngle := KeepAngs</l>
-      <l>    ResultScore := KeepScores</l>
-      <l>  endif</l>
-      <l>else</l>
-      <l>  ResultRow := KeepRows</l>
-      <l>  ResultColumn := KeepCols</l>
-      <l>  ResultAngle := KeepAngs</l>
-      <l>  ResultScore := KeepScores</l>
-      <l>endif</l>
-
-      <c>* 清理模型句柄（如果你后续做 Python 端缓存，这里可以不 clear）</c>
-      <l>clear_shape_model (ModelID)</l>
-      <l>return ()</l>
-    </body>
-
-    <docu id="detect_mold">
-      <parameters>
-        <parameter id="Image"/>
-        <parameter id="ResultAngle"/>
-        <parameter id="ResultColumn"/>
-        <parameter id="ResultRow"/>
-        <parameter id="ResultScore"/>
-      </parameters>
-    </docu>
-  </procedure>
+<procedure name="main">
+<interface/>
+<body>
+<c>* Main Procedure (Entry Point)</c>
+<l>exit ()</l>
+</body>
+<docu id="main">
+<parameters/>
+</docu>
+</procedure>
+<procedure name="detect_mold">
+<interface>
+  <io>
+    <par name="Image" base_type="iconic" dimension="0"/>
+  </io>
+  <oc>
+    <par name="ResultRow" base_type="ctrl" dimension="0"/>
+    <par name="ResultColumn" base_type="ctrl" dimension="0"/>
+    <par name="ResultAngle" base_type="ctrl" dimension="0"/>
+    <par name="ResultScore" base_type="ctrl" dimension="0"/>
+  </oc>
+</interface>
+<body>
+<c>* Initialization</c>
+<l>ResultRow := []</l>
+<l>ResultColumn := []</l>
+<l>ResultAngle := []</l>
+<l>ResultScore := []</l>
+<c></c>
+<c>* Define Model File Path (Absolute)</c>
+<l>ModelFile := 'H:/CodeForGithub/DIY-Multi-Color-Vision-Guided-Dispensing-Machine/config/mold_model.shm'</l>
+<c></c>
+<c>* Check if model exists</c>
+<l>file_exists (ModelFile, FileExists)</l>
+<c></c>
+<l>if (FileExists == 0)</l>
+<c>    * --- TRAINING PHASE ---</c>
+<l>    GoldenImagePath := 'H:/CodeForGithub/DIY-Multi-Color-Vision-Guided-Dispensing-Machine/config/mold2.png'</l>
+<l>    file_exists (GoldenImagePath, ImgExists)</l>
+<l>    if (ImgExists)</l>
+<l>        read_image (TrainImage, GoldenImagePath)</l>
+<c>        </c>
+<c>        * ROI definition</c>
+        <c>        * ROI definition (Updated identifiers from user)</c>
+        <l>        gen_rectangle1 (ModelRegion, 448.829, 936.949, 854.524, 1289.7)</l>
+<l>        reduce_domain (TrainImage, ModelRegion, TemplateImage)</l>
+<c>        </c>
+<c>        * Use Standard Shape Model (Robust)</c>
+<c>        * auto, rad(-90), rad(180), auto, auto, auto, auto, 'use_polarity', auto, auto</c>
+<l>        create_shape_model (TemplateImage, 'auto', rad(0), rad(360), 'auto', 'auto', 'use_polarity', 'auto', 'auto', ModelID)</l>
+<l>        write_shape_model (ModelID, ModelFile)</l>
+<l>    else</l>
+<l>        return ()</l>
+<l>    endif</l>
+<l>else</l>
+<l>    read_shape_model (ModelFile, ModelID)</l>
+<l>endif</l>
+<c></c>
+<c>* --- MATCHING PHASE ---</c>
+<l>count_obj (Image, NumObj)</l>
+<l>if (NumObj == 0)</l>
+<l>    return ()</l>
+<l>endif</l>
+<c></c>
+<c>* Find Standard Shape Model</c>
+<c>* MinScore=0.2, NumMatches=0 (All), MaxOverlap=0.5</c>
+<l>find_shape_model (Image, ModelID, rad(0), rad(360), 0.2, 0, 0.5, 'least_squares', 0, 0.9, ResultRow, ResultColumn, ResultAngle, ResultScore)</l>
+<c></c>
+<c>* Cleanup (Halcon handles memory usually, strictly we should clear)</c>
+<l>clear_shape_model (ModelID)</l>
+<c></c>
+<l>return ()</l>
+</body>
+<docu id="detect_mold">
+<parameters>
+<parameter id="Image"/>
+<parameter id="ResultAngle"/>
+<parameter id="ResultColumn"/>
+<parameter id="ResultRow"/>
+<parameter id="ResultScore"/>
+</parameters>
+</docu>
+</procedure>
 </hdevelop>

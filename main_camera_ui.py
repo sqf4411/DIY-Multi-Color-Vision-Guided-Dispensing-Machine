@@ -715,6 +715,10 @@ class MainWindow(QWidget):
         # USB Camera Worker
         self.usb_cam_worker = None
 
+        # [NEW] Vision Offsets for Halcon (Pixels)
+        self.vision_offset_x = 0.0
+        self.vision_offset_y = 0.0
+
         # ==========================================
         # 在所有 UI 元素初始化完成后，调用加载设置
         self.init_ui()

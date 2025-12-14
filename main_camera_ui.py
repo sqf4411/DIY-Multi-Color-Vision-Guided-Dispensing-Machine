@@ -3559,8 +3559,8 @@ class MainWindow(QWidget):
                                 cos_a = np.cos(sys_ang)
                                 sin_a = np.sin(sys_ang)
                                 
-                                x_new = pts[:, 0] * cos_a - pts[:, 1] * sin_a
-                                y_new = pts[:, 0] * sin_a + pts[:, 1] * cos_a
+                                x_new = pts[:, 0] * cos_a + pts[:, 1] * sin_a
+                                y_new = -pts[:, 0] * sin_a + pts[:, 1] * cos_a
                                 
                                 pts_rotated = np.stack([x_new, y_new], axis=1)
                                 
@@ -3703,10 +3703,43 @@ class MainWindow(QWidget):
                 return
 
             # D. Project and Offset
-            # Halcon ROI Center (Raw Coords)
-            # From: 448.8, 936.9, 854.5, 1289.7
-            ref_row, ref_col = 651.6765, 1113.3245
-            ref_center = np.array([ref_col, ref_row]) # (x, y)
+            # D. Project and Offset
+            # Strategy: Parse 'scripts/detect_mold.hdev' to find the EXACT ROI used for training.
+            script_path = os.path.join("scripts", "detect_mold.hdev")
+            roi_center = None
+            
+            if os.path.exists(script_path):
+                try:
+                    with open(script_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        
+                    # Regex to find: gen_rectangle1 (ModelRegion, Row1, Col1, Row2, Col2)
+                    import re
+                    # Robust Regex
+                    match = re.search(r"gen_rectangle1\s*\(\s*\w+\s*,\s*([-+]?\d*\.?\d+)\s*,\s*([-+]?\d*\.?\d+)\s*,\s*([-+]?\d*\.?\d+)\s*,\s*([-+]?\d*\.?\d+)", content)
+                    
+                    if match:
+                        r1 = float(match.group(1))
+                        c1 = float(match.group(2))
+                        r2 = float(match.group(3))
+                        c2 = float(match.group(4))
+                        
+                        center_row = (r1 + r2) / 2.0
+                        center_col = (c1 + c2) / 2.0
+                        roi_center = np.array([center_col, center_row])
+                        print(f"[Halcon] Parsed ROI from .hdev: R[{r1}-{r2}], C[{c1}-{c2}] -> Center({center_col:.2f}, {center_row:.2f})")
+                    else:
+                        print(f"[Halcon] WARN: 'gen_rectangle1' regex failed on content: {content[:200]}...")
+                except Exception as e:
+                    print(f"[Halcon] Error parsing .hdev: {e}")
+
+            if roi_center is not None:
+                self.halcon_ref_center = roi_center
+            else:
+                print("[Halcon] WARN: Using fallback HARDCODED center (1113, 651).")
+                self.halcon_ref_center = np.array([1113.3245, 651.6765]) 
+            
+            ref_center = self.halcon_ref_center
             
             final_template = []
             for seg in segments:

@@ -454,17 +454,24 @@ class MachineClient:
     # ------------------------------------------------------------------ #
     # 阀门控制 (新增)
     # ------------------------------------------------------------------ #
-    def valve_on(self):
-        """打开点胶阀 (发送 VALVE_ON 宏)"""
+    def test_valve_macro(self, pin_name: str, duration: float = 0.5):
+        """
+        调用 Klipper 宏 TEST_VALVE PIN=... T=...
+        """
         if not self.connected: return
-        self._post_gcode("VALVE_ON")
-        print("[MachineClient] VALVE_ON")
+        cmd = f"TEST_VALVE PIN={pin_name} T={duration:.2f}"
+        self._post_gcode(cmd)
+        print(f"[MachineClient] {cmd}")
 
-    def valve_off(self):
-        """关闭点胶阀 (发送 VALVE_OFF 宏)"""
+    def all_valves_off(self):
+        """调用 HAL 宏 ALL_VALVES_OFF"""
         if not self.connected: return
-        self._post_gcode("VALVE_OFF")
-        print("[MachineClient] VALVE_OFF")
+        self._post_gcode("ALL_VALVES_OFF")
+        print("[MachineClient] ALL_VALVES_OFF")
+
+    # Keep compatibility if needed, or deprecate old valve_on/off
+    # But user specifically asked for "Test Valve" dialog capability.
+
 
     # ------------------------------------------------------------------ #
     # 温度控制 (新增)

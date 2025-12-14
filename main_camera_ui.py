@@ -49,6 +49,7 @@ from PyQt5.QtGui import QImage, QPixmap
 from core.mold_detector import detect_mold_and_cells, reload_golden_templates
 from core.dry_run_dialog import DryRunDialog, DryRunControlDialog
 from core.batch_run_dialog import BatchRunDialog
+from core.valve_control_dialog import ValveControlDialog
 
 from core.machine_client import MachineClient
 from core.config_manager import ConfigManager
@@ -1036,6 +1037,17 @@ class MainWindow(QWidget):
         vision_layout.addWidget(self.btn_load_halcon)
         
         # ====== ✅ 新增：视觉偏移调节 (Offset X/Y) ======
+        # Halcon Model Selection
+        lay_halcon_model = QHBoxLayout()
+        self.btn_select_model = QPushButton("选择产品模型")
+        self.btn_select_model.clicked.connect(self.on_select_halcon_model)
+        self.lbl_halcon_model = QLabel("未加载模型")
+        self.lbl_halcon_model.setStyleSheet("color: red")
+        
+        lay_halcon_model.addWidget(self.btn_select_model)
+        lay_halcon_model.addWidget(self.lbl_halcon_model)
+        vision_layout.addLayout(lay_halcon_model)
+
         lay_offset = QHBoxLayout()
         
         # X Offset
@@ -2917,6 +2929,24 @@ class MainWindow(QWidget):
 
 
     # 精确确认
+
+    # ================== Halcon Model Selection ==================
+    def on_select_halcon_model(self):
+        """选择 Halcon 产品模型 (.shm, .ncc)"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 Halcon 模型文件", "", 
+            "Halcon Models (*.shm *.ncc *.dev);;All Files (*.*)"
+        )
+        if path:
+            ok = self.halcon_manager.set_model_path(path)
+            if ok:
+                name = os.path.basename(path)
+                self.lbl_halcon_model.setText(f"模型: {name}")
+                self.lbl_halcon_model.setStyleSheet("color: green")
+                self.log(f"✅ 已加载 Halcon 模型: {name}")
+            else:
+                self.log(f"❌ 加载模型失败: {path}")
+
     def on_toggle_verify_mode(self):
         """切换验证模式的开关"""
         if self.cam2mach_matrix is None:
@@ -3498,16 +3528,15 @@ class MainWindow(QWidget):
 
     def on_test_valve(self):
         """
-        按钮：测试出胶 (点动测试)
-        打开阀门 0.5秒 后关闭
+        按钮：测试出胶 (独立阀门控制)
+        打开 ValveControlDialog
         """
-        self.log("🔧 测试出胶：打开阀门 0.5s ...")
-        self.machine.valve_on()
-        # 注意：这里会阻塞 UI 0.5s，简单测试没问题，复杂逻辑建议用 Worker
-        import time
-        time.sleep(0.5)
-        self.machine.valve_off()
-        self.log("🔧 测试出胶：关闭阀门。")
+        if not self.machine.connected:
+             QMessageBox.warning(self, "未连接", "请先连接 Klipper！")
+             return
+
+        dlg = ValveControlDialog(self, self.machine)
+        dlg.exec_()
 
     # ================== 相机参数联动 ==================
     def sync_from_camera_to_ui(self):

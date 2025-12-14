@@ -20,6 +20,7 @@ class HalconManager:
         self.procedure = None
         self.procedure_call = None
         self.script_path = None
+        self.current_model_path = None # 当前加载的产品模型路径 (.shm)
         self.is_initialized = False
 
     def init_engine(self):
@@ -68,6 +69,16 @@ class HalconManager:
             print(f"[HalconManager] 加载脚本失败: {e}")
             return False
 
+    def set_model_path(self, path):
+        """设置当前使用的产品模型路径"""
+        if path and os.path.exists(path):
+            self.current_model_path = path
+            print(f"[HalconManager] 已设置模型路径: {path}")
+            return True
+        else:
+            print(f"[HalconManager] 模型文件不存在: {path}")
+            return False
+
     def process_image(self, image_np: np.ndarray):
         """
         运行 'scripts/detect_mold.hdev' 进行检测。
@@ -110,8 +121,20 @@ class HalconManager:
             proc_call = ha.HDevProcedureCall(proc)
             
             # 设置输入
-            # API 修正: set_input_iconic_param_object -> set_input_iconic_param_by_name
+            # 1. 图像
             proc_call.set_input_iconic_param_by_name("Image", h_image)
+            
+            # 2. 模型路径 (支持多产品)
+            # 假设 HDev 脚本里定义了一个输入控制参数 "ModelPath"
+            # 如果脚本里还没这个参数，Halcon 可能会报错，所以我们加个 try-catch 或者检查
+            if self.current_model_path and os.path.exists(self.current_model_path):
+                # 传入绝对路径
+                abs_model_path = os.path.abspath(self.current_model_path)
+                try:
+                    proc_call.set_input_control_param_by_name("ModelPath", abs_model_path)
+                except Exception:
+                    # 脚本可能没定义这个参数，忽略警告（兼容旧脚本）
+                    pass
             
             # 执行
             proc_call.execute()

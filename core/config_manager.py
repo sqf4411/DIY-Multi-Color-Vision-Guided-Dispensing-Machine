@@ -26,7 +26,18 @@ class ConfigManager:
         "safe_z_product": 20.0,
         "work_z": 0.0,
         "jog_step": 1.0,
-        "z_base": 0.0
+        "z_base": 0.0,
+        # Nozzle offset parameters
+        "nozzle_offset_x": 0.0,
+        "nozzle_offset_y": 0.0,
+        "nozzle_offset_z": 0.0,
+        # Vision/Camera offset parameters
+        "vision_offset_x": 0.0,
+        "vision_offset_y": 0.0,
+        # Camera-specific Z heights
+        "cam_safe_z_cavity": 5.0,
+        "cam_safe_z_product": 20.0,
+        "cam_work_z": 0.0
     }
 
     def __init__(self):

@@ -466,7 +466,121 @@ import os   # 确保 os 库已经导入
 # 这个文件将用于保存速度、加速度等应用参数
 SETTINGS_FILE = "config/app_settings.json"
 # ==========================================
+
+# ====== 可折叠分组框类 ======
+class CollapsibleBox(QWidget):
+    """
+    可折叠的分组框，用于优化UI布局
+    
+    使用方法:
+        box = CollapsibleBox("标题", collapsed=True, color="#3B82F6")
+        box.add_widget(some_widget)
+        box.add_layout(some_layout)
+    """
+    def __init__(self, title="", collapsed=True, color="#3B82F6"):
+        super().__init__()
+        
+        # 创建可点击的标题按钮
+        self.toggle_button = QPushButton(title)
+        self.toggle_button.setCheckable(True)
+        self.toggle_button.setChecked(not collapsed)
+        
+        # 设置按钮样式（带颜色区分）
+        self.color = color
+        self.toggle_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {color};
+                color: white;
+                border: none;
+                text-align: left;
+                padding: 10px 15px;
+                font-weight: bold;
+                font-size: 13px;
+                border-radius: 5px;
+            }}
+            QPushButton:hover {{
+                background-color: {self._adjust_brightness(color, 1.1)};
+            }}
+            QPushButton:checked {{
+                background-color: {self._adjust_brightness(color, 0.85)};
+            }}
+        """)
+        
+        # 连接点击事件
+        self.toggle_button.clicked.connect(self.on_toggle)
+        
+        # 创建内容区域
+        self.content_area = QWidget()
+        self.content_layout = QVBoxLayout()
+        self.content_layout.setContentsMargins(5, 5, 5, 5)
+        self.content_layout.setSpacing(5)
+        self.content_area.setLayout(self.content_layout)
+        self.content_area.setVisible(not collapsed)
+        
+        # 主布局
+        layout = QVBoxLayout()
+        layout.setSpacing(2)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.toggle_button)
+        layout.addWidget(self.content_area)
+        
+        self.setLayout(layout)
+        
+        # 初始化按钮文本（带箭头）
+        self.update_button_text()
+    
+    def on_toggle(self):
+        """切换展开/收起状态"""
+        is_expanded = self.toggle_button.isChecked()
+        self.content_area.setVisible(is_expanded)
+        self.update_button_text()
+    
+    def update_button_text(self):
+        """更新按钮文本，添加展开/收起箭头"""
+        current_text = self.toggle_button.text()
+        # 移除已有的箭头
+        if current_text.startswith("▼ ") or current_text.startswith("▶ "):
+            current_text = current_text[2:]
+        
+        # 添加新箭头
+        if self.toggle_button.isChecked():
+            self.toggle_button.setText(f"▼ {current_text}")
+        else:
+            self.toggle_button.setText(f"▶ {current_text}")
+    
+    def add_widget(self, widget):
+        """添加单个控件到内容区域"""
+        self.content_layout.addWidget(widget)
+    
+    def add_layout(self, layout):
+        """添加布局到内容区域"""
+        self.content_layout.addLayout(layout)
+    
+    def set_expanded(self, expanded):
+        """程序化设置展开状态"""
+        self.toggle_button.setChecked(expanded)
+        self.content_area.setVisible(expanded)
+        self.update_button_text()
+    
+    @staticmethod
+    def _adjust_brightness(hex_color, factor):
+        """
+        调整颜色亮度
+        factor > 1: 变亮
+        factor < 1: 变暗
+        """
+        hex_color = hex_color.lstrip('#')
+        r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        
+        r = int(min(255, r * factor))
+        g = int(min(255, g * factor))
+        b = int(min(255, b * factor))
+        
+        return f"#{r:02x}{g:02x}{b:02x}"
+# ====== End of Collapsible Box Class ======
+
 # ================== 主窗口 ==================
+
 class MainWindow(QWidget):
     # 定义信号，用于跨线程更新 UI
     log_signal = pyqtSignal(str)
@@ -760,7 +874,7 @@ class MainWindow(QWidget):
 
     # ================== Tool Set Group (New) ==================
     def init_tool_set_group(self):
-        # ===== Z 高度 / 对刀 (独立组) =====
+        # ===== Z 高度 / 对刀 =====
         zbase_group = QGroupBox("Z 高度 / 对刀")
         zbase_layout = QVBoxLayout()
         
@@ -866,8 +980,9 @@ class MainWindow(QWidget):
         self.edit_port.setFixedWidth(50)
         self.edit_port.setAlignment(Qt.AlignCenter)
         
-        # 3. 按钮定义
+        # 3. 按钮定义 - 改为toggle按钮
         self.btn_connect_klipper = QPushButton("连接")
+        self.btn_connect_klipper.setCheckable(True)  # 设为可切换
         self.btn_connect_klipper.setCursor(Qt.PointingHandCursor)
         self.btn_connect_klipper.setMinimumHeight(28)
         self.btn_connect_klipper.setFixedWidth(80)  
@@ -880,6 +995,9 @@ class MainWindow(QWidget):
                     }
                     QPushButton:hover {
                         background-color: #4B5563;
+                    }
+                    QPushButton:checked {
+                        background-color: #10B981;  /* 绿色表示已连接 */
                     }
                 """)
 
@@ -903,12 +1021,25 @@ class MainWindow(QWidget):
                     }
                 """)
         
-        self.btn_start = QPushButton("启动相机")
-        self.btn_stop = QPushButton("停止相机")
-        self.btn_stop.setEnabled(False)
-        for btn in [self.btn_start, self.btn_stop]:
-            btn.setMinimumHeight(28)
-            btn.setFixedWidth(80)
+        # 相机按钮改为单个toggle按钮
+        self.btn_camera = QPushButton("启动相机")
+        self.btn_camera.setCheckable(True)  # 设为可切换
+        self.btn_camera.setMinimumHeight(28)
+        self.btn_camera.setFixedWidth(80)
+        self.btn_camera.setStyleSheet("""
+            QPushButton {
+                background-color: #3B82F6;
+                color: white;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2563EB;
+            }
+            QPushButton:checked {
+                background-color: #EF4444;  /* 红色表示停止 */
+            }
+        """)
 
         # ====== Row 1 排列 ======
         row1_layout.addWidget(lbl_ip)
@@ -918,10 +1049,10 @@ class MainWindow(QWidget):
         row1_layout.addWidget(self.edit_port)
         row1_layout.addStretch() 
         
-        row1_layout.addWidget(self.btn_start)
-        row1_layout.addSpacing(5)
-        row1_layout.addWidget(self.btn_stop)
+        # 单个相机toggle按钮
+        row1_layout.addWidget(self.btn_camera)
         row1_layout.addSpacing(10)
+        # 单个Klipper toggle按钮
         row1_layout.addWidget(self.btn_connect_klipper)
         row1_layout.addSpacing(5)
         row1_layout.addWidget(self.btn_estop)
@@ -988,7 +1119,7 @@ class MainWindow(QWidget):
         task_layout.addWidget(self.btn_batch_run)
         task_layout.addWidget(self.btn_test_valve)
 
-        # ================== 2. 相机参数组 (重构) ==================
+        # ================== 2. 相机参数组 ==================
         param_group = QGroupBox("相机参数")
         param_layout = QGridLayout()
 
@@ -1020,7 +1151,7 @@ class MainWindow(QWidget):
         self.spn_gain.valueChanged.connect(self.on_gain_spin_changed)
         param_layout.addWidget(self.spn_gain, 1, 2)
 
-        # Gamma (0.1-4.0, Step 0.1) -- Reference Implementation
+        # Gamma (0.1-4.0, Step 0.1)
         param_layout.addWidget(QLabel("Gamma:"), 2, 0)
         self.sld_gamma = QSlider(Qt.Horizontal)
         self.sld_gamma.setRange(1, 40) # 0.1 - 4.0
@@ -1293,12 +1424,21 @@ class MainWindow(QWidget):
         # ================== 右侧：单栏垂直布局 (宽版) ==================
         
         right_layout = QVBoxLayout()
-        right_layout.addWidget(info_group)
+        
+        # ================== 第一段：Klipper 连接 ==================
         right_layout.addWidget(conn_group)
-
+        
+        # ================== 第二段：系统状态 & 温控 ==================
         # [NEW] System Status / Temp
         self.sys_status_group = self.init_sys_status_group()
         right_layout.addWidget(self.sys_status_group)
+        
+        # ================== 第三段：相机信息 + 相机参数 (横向布局) ==================
+        top_row_layout = QHBoxLayout()
+        top_row_layout.addWidget(info_group, stretch=1)      # 相机信息占小比例
+        top_row_layout.addWidget(self.param_group, stretch=2) # 相机参数占大比例
+        
+        right_layout.addLayout(top_row_layout)
 
         right_layout.addWidget(self.motion_group)
         # [MODIFIED] Put Tool Set and Offset groups side-by-side
@@ -1308,7 +1448,7 @@ class MainWindow(QWidget):
         right_layout.addLayout(tools_layout)
         right_layout.addLayout(btn_layout)   # 相机/示教按钮
         right_layout.addLayout(task_layout)  # 点胶任务按钮
-        right_layout.addWidget(self.param_group)
+        # param_group 已移到第一行，这里不再添加
         right_layout.addWidget(self.vision_group)
         
         # 日志窗口
@@ -1418,10 +1558,9 @@ class MainWindow(QWidget):
         self.update_nozzle_offset_display()
 
         # ================== Slider/SpinBox Synchronization ==================
-        self.btn_start.clicked.connect(self.start_cam)
-        self.btn_stop.clicked.connect(self.stop_cam)
+        self.btn_camera.clicked.connect(self.on_toggle_camera)
         self.btn_save.clicked.connect(self.save_image)
-        self.btn_connect_klipper.clicked.connect(self.on_connect_klipper)
+        self.btn_connect_klipper.clicked.connect(self.on_toggle_klipper_connection)
 
         self.btn_detect.clicked.connect(self.detect_mold)
         self.btn_golden.clicked.connect(self.on_golden_teach)
@@ -1466,14 +1605,12 @@ class MainWindow(QWidget):
         group = QGroupBox("系统状态 & 温控")
         layout = QGridLayout()
         
-        # 1. 标题头
+        # 1. 标题头（3列）
         layout.addWidget(QLabel("设备"), 0, 0)
         layout.addWidget(QLabel("当前"), 0, 1)
-        layout.addWidget(QLabel("状态"), 0, 2)
-        layout.addWidget(QLabel("设定值"), 0, 3)
-        layout.addWidget(QLabel(""), 0, 4) # Button
+        layout.addWidget(QLabel("状态/设定"), 0, 2)
         
-        # 2. Syringe Heater
+        # 2. Syringe Heater - 只显示状态
         self.lbl_syringe_name = QLabel("针筒加热:")
         
         # 当前温度
@@ -1484,7 +1621,17 @@ class MainWindow(QWidget):
         self.lbl_syringe_target_status = QLabel("Off")
         self.lbl_syringe_target_status.setStyleSheet("color: #9CA3AF;")
         
-        # 设定值输入框 (用户偏好)
+        # 布局 Syringe
+        layout.addWidget(self.lbl_syringe_name, 1, 0)
+        layout.addWidget(self.lbl_syringe_temp, 1, 1)
+        layout.addWidget(self.lbl_syringe_target_status, 1, 2)
+
+        # 3. Fly-Super8 (MCU) - 显示温度 + 设定值输入框
+        layout.addWidget(QLabel("Fly-Super8:"), 2, 0)
+        self.lbl_mcu_temp = QLabel("0.0°C")
+        layout.addWidget(self.lbl_mcu_temp, 2, 1)
+        
+        # 设定值输入框（放在Fly-Super8行）
         self.spn_syringe_target = QDoubleSpinBox()
         self.spn_syringe_target.setRange(0, 80) 
         self.spn_syringe_target.setSuffix("°C")
@@ -1493,28 +1640,19 @@ class MainWindow(QWidget):
         # 加载上次保存的设定值 (如果存在)
         if hasattr(self, 'saved_params') and 'last_syringe_target' in self.saved_params:
              self.spn_syringe_target.setValue(float(self.saved_params['last_syringe_target']))
+        layout.addWidget(self.spn_syringe_target, 2, 2)
         
-        self.btn_set_syringe_temp = QPushButton("执行")
-        self.btn_set_syringe_temp.setFixedWidth(50)
-        self.btn_set_syringe_temp.setStyleSheet("background-color: #3B82F6; color: white;")
-        self.btn_set_syringe_temp.clicked.connect(self.on_set_syringe_temp)
-        
-        # 布局 Syringe
-        layout.addWidget(self.lbl_syringe_name, 1, 0)
-        layout.addWidget(self.lbl_syringe_temp, 1, 1)
-        layout.addWidget(self.lbl_syringe_target_status, 1, 2)
-        layout.addWidget(self.spn_syringe_target, 1, 3)
-        layout.addWidget(self.btn_set_syringe_temp, 1, 4)
-
-        # 3. Fly-Super8 (MCU)
-        layout.addWidget(QLabel("Fly-Super8:"), 2, 0)
-        self.lbl_mcu_temp = QLabel("0.0°C")
-        layout.addWidget(self.lbl_mcu_temp, 2, 1)
-        
-        # 4. FLY-pi (Host)
+        # 4. FLY-pi (Host) - 显示温度 + 执行按钮
         layout.addWidget(QLabel("FLY-pi:"), 3, 0)
         self.lbl_host_temp = QLabel("0.0°C")
         layout.addWidget(self.lbl_host_temp, 3, 1)
+        
+        # 执行按钮（放在FLY-pi行）
+        self.btn_set_syringe_temp = QPushButton("执行")
+        self.btn_set_syringe_temp.setFixedWidth(70)
+        self.btn_set_syringe_temp.setStyleSheet("background-color: #3B82F6; color: white;")
+        self.btn_set_syringe_temp.clicked.connect(self.on_set_syringe_temp)
+        layout.addWidget(self.btn_set_syringe_temp, 3, 2)
         
         group.setLayout(layout)
         return group
@@ -1700,6 +1838,23 @@ class MainWindow(QWidget):
             """)
             self.log(f"⚠ 连接 Klipper 失败: {full_url}")
             QMessageBox.critical(self, "连接失败", f"无法连接到 {full_url}\n请检查网络或 IP 设置")
+    
+    def on_toggle_klipper_connection(self):
+        """Toggle按钮处理：连接/断开Klipper"""
+        if self.btn_connect_klipper.isChecked():
+            # 连接
+            self.on_connect_klipper()
+            if self.machine.connected:
+                self.btn_connect_klipper.setText("断开")
+        else:
+            # 断开
+            self.machine.disconnect()
+            self.btn_connect_klipper.setText("连接")
+            self.log("🔌 已断开 Klipper 连接")
+            # 停止温度监控线程
+            if hasattr(self, 'temp_worker') and self.temp_worker:
+                self.temp_worker.stop()
+                self.temp_worker = None
 
     def update_probe_status(self, status):
         """更新探针状态显示 (由 PollingWorker 触发)"""
@@ -1783,10 +1938,15 @@ class MainWindow(QWidget):
         if y is not None: self.pos_y = float(y)
         if z is not None: self.pos_z = float(z)
 
-        # 界面显示
+        # 界面显示 - 橙色醒目显示
         self.lbl_pos_x.setText(f"X: {self.pos_x:.2f}")
+        self.lbl_pos_x.setStyleSheet("color: #F59E0B; font-weight: bold;")  # 橙色
+        
         self.lbl_pos_y.setText(f"Y: {self.pos_y:.2f}")
+        self.lbl_pos_y.setStyleSheet("color: #F59E0B; font-weight: bold;")  # 橙色
+        
         self.lbl_pos_z.setText(f"Z: {self.pos_z:.2f}")
+        self.lbl_pos_z.setStyleSheet("color: #F59E0B; font-weight: bold;")  # 橙色
         
         # Z轴基准日志显示 (保留原有逻辑)
         if hasattr(self, "lbl_z_ref"):
@@ -2017,8 +2177,7 @@ class MainWindow(QWidget):
         self.camera_manager.close_camera()
 
         self.label.setText("已停止")
-        self.btn_start.setEnabled(True)
-        self.btn_stop.setEnabled(False)
+        # btn_start和btn_stop不再存在，已改为btn_camera
         self.btn_save.setEnabled(False)
 
         self.lbl_cam_res.setText("-")
@@ -2031,6 +2190,17 @@ class MainWindow(QWidget):
             self.usb_cam_worker = None
             if hasattr(self, 'label_usb_cam'):
                 self.label_usb_cam.setText("Stopped")
+    
+    def on_toggle_camera(self):
+        """Toggle按钮处理：启动/停止相机"""
+        if self.btn_camera.isChecked():
+            # 启动相机
+            self.start_cam()
+            self.btn_camera.setText("停止相机")
+        else:
+            # 停止相机
+            self.stop_cam()
+            self.btn_camera.setText("启动相机")
 
 
     # read_param_ranges and read_cam_info removed (logic moved to CameraManager)
@@ -2121,17 +2291,20 @@ class MainWindow(QWidget):
             else:
                 self.log("⚠ 未找到 config/slot_templates.npy，暂时无法做黄金对位")
                 self.slot_templates = None
-                
-            # Load Golden Path for visualization
+            
+            # Load Golden Path for visualization (CRITICAL: use allow_pickle=True for object arrays)
             if os.path.exists("config/disp_poly_cell0.npy"):
-                # Path is usually (N, 2)
-                self.golden_path_cache = np.load("config/disp_poly_cell0.npy")
-                self.log(f"✅ 加载点胶路径缓存: {len(self.golden_path_cache)} 点")
+                # Path templates are object arrays containing variable-length segments
+                self.golden_path_cache = np.load("config/disp_poly_cell0.npy", allow_pickle=True)
+                self.log(f"✅ 加载点胶路径缓存: {len(self.golden_path_cache)} 个路径段")
             else:
                 self.golden_path_cache = None
-                
+                self.log("ℹ️ 未找到点胶路径缓存文件")
+    
         except Exception as e:
-            self.log("加载黄金模板失败：", e)
+            self.log("❌ 加载黄金模板失败：", e)
+            import traceback
+            traceback.print_exc()
             self.slot_templates = None
             self.golden_path_cache = None
 
@@ -2166,150 +2339,121 @@ class MainWindow(QWidget):
         self.save_app_settings()
 
     def load_app_settings(self):
-        if not os.path.exists(self.config_path):
-            return
-            
+        """Load application settings from ConfigManager (unified config system)"""
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                self.saved_params = json.load(f)
-                
-            # Default
-            self.safe_z_cavity = 10.0
-            self.safe_z_product = 30.0
-            self.work_z = 0.0
-            self.jog_step_mm = 1.0 # default
-            self.feedrate_xy = 3000.0
-            self.feedrate_z = 500.0
-            self.accel = 500.0
+            # Load all parameters from ConfigManager (app_settings.json)
+            self.safe_z_cavity = self.config.get('safe_z_cavity', 10.0)
+            self.safe_z_product = self.config.get('safe_z_product', 30.0)
+            self.work_z = self.config.get('work_z', 0.0)
+            self.jog_step_mm = self.config.get('jog_step', 1.0)
+            self.feedrate_xy = self.config.get('feedrate_xy', 3000.0)
+            self.feedrate_z = self.config.get('feedrate_z', 500.0)
+            self.accel = self.config.get('accel', 500.0)
 
-            if 'safe_z_cavity' in self.saved_params:
-                self.safe_z_cavity = float(self.saved_params['safe_z_cavity'])
-            if 'safe_z_product' in self.saved_params:
-                self.safe_z_product = float(self.saved_params['safe_z_product'])
-            if 'work_z' in self.saved_params:
-                self.work_z = float(self.saved_params['work_z'])
-
-            if 'jog_step_mm' in self.saved_params:
-                self.jog_step_mm = float(self.saved_params['jog_step_mm'])
-                
-            if 'feedrate_xy' in self.saved_params:
-                self.feedrate_xy = float(self.saved_params['feedrate_xy'])
-            if 'feedrate_z' in self.saved_params:
-                self.feedrate_z = float(self.saved_params['feedrate_z'])
-            
-            if 'accel' in self.saved_params:
-                 self.accel = float(self.saved_params['accel'])
-
-            # Load Calib Data
-            if 'calib_vision_pts' in self.saved_params:
-                 self.calib_vision_pts = self.saved_params['calib_vision_pts']
-            if 'calib_machine_pts' in self.saved_params:
-                 self.calib_machine_pts = self.saved_params['calib_machine_pts']
-                 
+            # Load Calibration Data
+            self.calib_vision_pts = self.config.get('calib_vision_pts', [])
+            self.calib_machine_pts = self.config.get('calib_machine_pts', [])
+             
             # Load Nozzle Offset
-            if 'nozzle_offset_x' in self.saved_params:
-                self.nozzle_offset_x = float(self.saved_params['nozzle_offset_x'])
-            if 'nozzle_offset_y' in self.saved_params:
-                self.nozzle_offset_y = float(self.saved_params['nozzle_offset_y'])
-            
-            # Load Z Base
-            if 'z_base' in self.saved_params:
-                 self.z_base = float(self.saved_params['z_base'])
+            self.nozzle_offset_x = self.config.get('nozzle_offset_x', 0.0)
+            self.nozzle_offset_y = self.config.get('nozzle_offset_y', 0.0)
+            self.nozzle_offset_z = self.config.get('nozzle_offset_z', 0.0)
+        
+            # Load Z Base (tool setting reference)
+            self.z_base = self.config.get('z_base', 0.0)
 
             # Load Camera Dry Run Params
-            if 'cam_safe_z_cavity' in self.saved_params:
-                self.cam_safe_z_cavity = float(self.saved_params['cam_safe_z_cavity'])
-            else:
-                self.cam_safe_z_cavity = self.safe_z_cavity or 10.0 # Fallback
-
-            if 'cam_safe_z_product' in self.saved_params:
-                self.cam_safe_z_product = float(self.saved_params['cam_safe_z_product'])
-            else:
-                self.cam_safe_z_product = self.safe_z_product or 30.0
-
-            if 'cam_work_z' in self.saved_params:
-                self.cam_work_z = float(self.saved_params['cam_work_z'])
-            else:
-                self.cam_work_z = self.work_z or 0.0
+            self.cam_safe_z_cavity = self.config.get('cam_safe_z_cavity', self.safe_z_cavity)
+            self.cam_safe_z_product = self.config.get('cam_safe_z_product', self.safe_z_product)
+            self.cam_work_z = self.config.get('cam_work_z', self.work_z)
 
             # Load Halcon Vision Offset
-            if 'vision_offset_x' in self.saved_params:
-                self.vision_offset_x = float(self.saved_params['vision_offset_x'])
-            if 'vision_offset_y' in self.saved_params:
-                self.vision_offset_y = float(self.saved_params['vision_offset_y'])
+            self.vision_offset_x = self.config.get('vision_offset_x', 0.0)
+            self.vision_offset_y = self.config.get('vision_offset_y', 0.0)
 
-            # Update UI
-            self.sld_spd_xy.blockSignals(True)
-            self.sld_spd_xy.setValue(int(self.feedrate_xy))
-            self.sld_spd_xy.blockSignals(False)
-            self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+            # Update UI elements (if they exist)
+            if hasattr(self, 'sld_spd_xy'):
+                self.sld_spd_xy.blockSignals(True)
+                self.sld_spd_xy.setValue(int(self.feedrate_xy))
+                self.sld_spd_xy.blockSignals(False)
+                self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
 
-            self.sld_spd_z.blockSignals(True)
-            self.sld_spd_z.setValue(int(self.feedrate_z))
-            self.sld_spd_z.blockSignals(False)
-            self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+            if hasattr(self, 'sld_spd_z'):
+                self.sld_spd_z.blockSignals(True)
+                self.sld_spd_z.setValue(int(self.feedrate_z))
+                self.sld_spd_z.blockSignals(False)
+                self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
 
-            self.sld_acc.blockSignals(True)
-            self.sld_acc.setValue(int(self.accel))
-            self.sld_acc.blockSignals(False)
-            self.lbl_acc.setText(f"加速度: {int(self.accel)}")
+            if hasattr(self, 'sld_acc'):
+                self.sld_acc.blockSignals(True)
+                self.sld_acc.setValue(int(self.accel))
+                self.sld_acc.blockSignals(False)
+                self.lbl_acc.setText(f"加速度: {int(self.accel)}")
 
-            self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
-            self.spn_safe_z_product.setValue(self.safe_z_product)
-            self.spn_work_z.setValue(self.work_z)
-            
+            if hasattr(self, 'spn_safe_z_cavity'):
+                self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
+            if hasattr(self, 'spn_safe_z_product'):
+                self.spn_safe_z_product.setValue(self.safe_z_product)
+            if hasattr(self, 'spn_work_z'):
+                self.spn_work_z.setValue(self.work_z)
+        
             if hasattr(self, 'lbl_z_base'):
-                 self.lbl_z_base.setText(f"当前 Z 基准: {self.z_base:.2f} mm")
+                self.lbl_z_base.setText(f"当前 Z 基准: {self.z_base:.2f} mm")
 
             # Apply Vision Offset to UI
-            self.spn_vision_offset_x.blockSignals(True)
-            self.spn_vision_offset_x.setValue(self.vision_offset_x)
-            self.spn_vision_offset_x.blockSignals(False)
+            if hasattr(self, 'spn_vision_offset_x'):
+                self.spn_vision_offset_x.blockSignals(True)
+                self.spn_vision_offset_x.setValue(self.vision_offset_x)
+                self.spn_vision_offset_x.blockSignals(False)
 
-            self.spn_vision_offset_y.blockSignals(True)
-            self.spn_vision_offset_y.setValue(self.vision_offset_y)
-            self.spn_vision_offset_y.blockSignals(False)
+            if hasattr(self, 'spn_vision_offset_y'):
+                self.spn_vision_offset_y.blockSignals(True)
+                self.spn_vision_offset_y.setValue(self.vision_offset_y)
+                self.spn_vision_offset_y.blockSignals(False)
+            
+            self.log(f"✅ 已加载应用参数 (速度XY={int(self.feedrate_xy)}, 偏移X={self.nozzle_offset_x:.2f}, Y={self.nozzle_offset_y:.2f})")
             
         except Exception as e:
-            print(f"Error loading params: {e}")
+            self.log(f"❌ 加载应用参数失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     def save_app_settings(self):
-        # Update vars from UI where needed (others are updated by signal)
-        
-        data = {
-            'safe_z_cavity': self.safe_z_cavity,
-            'safe_z_product': self.safe_z_product,
-            'work_z': self.work_z,
-            'jog_step_mm': self.jog_step_mm,
-            'feedrate_xy': self.feedrate_xy,
-            'feedrate_z': self.feedrate_z,
-            'accel': self.accel,
-            'calib_vision_pts': self.calib_vision_pts,
-            'calib_machine_pts': self.calib_machine_pts,
-            'nozzle_offset_x': self.nozzle_offset_x,
-            'nozzle_offset_y': self.nozzle_offset_y,
-            'z_base': self.z_base,
+        """Save all application settings to ConfigManager (unified config system)"""
+        try:
+            # Update ConfigManager with all current values
+            self.config.set('safe_z_cavity', self.safe_z_cavity)
+            self.config.set('safe_z_product', self.safe_z_product)
+            self.config.set('work_z', self.work_z)
+            self.config.set('jog_step', self.jog_step_mm)
+            self.config.set('feedrate_xy', self.feedrate_xy)
+            self.config.set('feedrate_z', self.feedrate_z)
+            self.config.set('accel', self.accel)
+            
+            self.config.set('calib_vision_pts', self.calib_vision_pts)
+            self.config.set('calib_machine_pts', self.calib_machine_pts)
+            
+            self.config.set('nozzle_offset_x', self.nozzle_offset_x)
+            self.config.set('nozzle_offset_y', self.nozzle_offset_y)
+            self.config.set('nozzle_offset_z', self.nozzle_offset_z)
+            
+            self.config.set('z_base', self.z_base)
             
             # Camera Dry Run Params
-            'cam_safe_z_cavity': self.cam_safe_z_cavity,
-            'cam_safe_z_product': self.cam_safe_z_product,
-            'cam_work_z': self.cam_work_z,
-
-            'vision_offset_x': self.vision_offset_x,
-            'vision_offset_y': self.vision_offset_y
-        }
-        
-        try:
-            config_dir = os.path.dirname(self.config_path)
-            if config_dir and not os.path.exists(config_dir):
-                os.makedirs(config_dir)
-                
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=4)
-            # self.log("配置已保存") # Too verbose
-            print("[ConfigManager] 应用设置已保存。")
+            self.config.set('cam_safe_z_cavity', self.cam_safe_z_cavity)
+            self.config.set('cam_safe_z_product', self.cam_safe_z_product)
+            self.config.set('cam_work_z', self.cam_work_z)
+            
+            self.config.set('vision_offset_x', self.vision_offset_x)
+            self.config.set('vision_offset_y', self.vision_offset_y)
+            
+            # Trigger ConfigManager to write to file
+            self.config.save_app_settings()
+            
         except Exception as e:
-            print(f"Error saving params: {e}")
+            self.log(f"❌ 保存应用设置失败: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 
@@ -3062,14 +3206,41 @@ class MainWindow(QWidget):
             if success:
                 self.log(f"✅ 训练成功! 模型保存至: {model_path}")
                 
-                # 3.5 Create Initial Config (Current Params)
+                # 3.5 Create Initial Config (⭐ Complete Current Params)
                 initial_config = {
+                    # === 视觉参数 ===
                     'vision_offset_x': self.vision_offset_x,
                     'vision_offset_y': self.vision_offset_y,
-                    'exposure': self.spn_exp.value(),
-                    'gain': self.spn_gain.value(),
+                    'exposure': self.spn_exp.value() if hasattr(self, 'spn_exp') else 200.0,
+                    'gain': self.spn_gain.value() if hasattr(self, 'spn_gain') else 10.0,
+                    'gamma': self.spn_gamma.value() if hasattr(self, 'spn_gamma') else 1.0,
+                    
+                    # === ⭐ 运动参数 ===
+                    'feedrate_xy': self.feedrate_xy,
+                    'feedrate_z': self.feedrate_z,
+                    'accel': self.accel,
+                    'jog_step_mm': self.jog_step_mm,
+                    
+                    # === ⭐ Z高度参数 ===
+                    'safe_z_cavity': self.safe_z_cavity,
+                    'safe_z_product': self.safe_z_product,
+                    'work_z': self.work_z,
+                    'cam_safe_z_cavity': self.cam_safe_z_cavity,
+                    'cam_safe_z_product': self.cam_safe_z_product,
+                    'cam_work_z': self.cam_work_z,
+                    
+                    # === ⭐ 针头偏移 ===
+                    'nozzle_offset_x': self.nozzle_offset_x,
+                    'nozzle_offset_y': self.nozzle_offset_y,
+                    'nozzle_offset_z': self.nozzle_offset_z,
+                    
+                    # === ⭐ 对刀基准 ===
+                    'z_base': self.z_base,
+                    
+                    # === Halcon 模型信息 ===
                     'model_row': origin_row,
-                    'model_col': origin_col
+                    'model_col': origin_col,
+                    'use_halcon': self.chk_use_halcon.isChecked() if hasattr(self, 'chk_use_halcon') else False,
                 }
                 # Use current path if available, or empty
                 current_path = getattr(self, 'dots', [])
@@ -3103,13 +3274,39 @@ class MainWindow(QWidget):
         else:
              name = current_recipe
 
-        # Collect Data
+        # Collect Data - ⭐ COMPLETE PARAMETER SET
         config_data = {
+            # === 视觉参数 ===
             'vision_offset_x': self.vision_offset_x,
             'vision_offset_y': self.vision_offset_y,
-            'exposure': self.spn_exp.value(),
-            'gain': self.spn_gain.value(),
-             # Add more params as needed
+            'exposure': self.spn_exp.value() if hasattr(self, 'spn_exp') else 200.0,
+            'gain': self.spn_gain.value() if hasattr(self, 'spn_gain') else 10.0,
+            'gamma': self.spn_gamma.value() if hasattr(self, 'spn_gamma') else 1.0,
+            
+            # === ⭐ 运动参数（关键！）===
+            'feedrate_xy': self.feedrate_xy,
+            'feedrate_z': self.feedrate_z,
+            'accel': self.accel,
+            'jog_step_mm': self.jog_step_mm,
+            
+            # === ⭐ Z高度参数 ===
+            'safe_z_cavity': self.safe_z_cavity,
+            'safe_z_product': self.safe_z_product,
+            'work_z': self.work_z,
+            'cam_safe_z_cavity': self.cam_safe_z_cavity,
+            'cam_safe_z_product': self.cam_safe_z_product,
+            'cam_work_z': self.cam_work_z,
+            
+            # === ⭐ 针头偏移 ===
+            'nozzle_offset_x': self.nozzle_offset_x,
+            'nozzle_offset_y': self.nozzle_offset_y,
+            'nozzle_offset_z': self.nozzle_offset_z,
+            
+            # === ⭐ 对刀基准 ===
+            'z_base': self.z_base,
+            
+            # === Halcon 模式 ===
+            'use_halcon': self.chk_use_halcon.isChecked() if hasattr(self, 'chk_use_halcon') else False,
         }
         
         # Path Data
@@ -3153,18 +3350,113 @@ class MainWindow(QWidget):
              QMessageBox.information(self, "保存成功", info_txt)
 
     def on_load_recipe(self):
-        """Open generic dialog to load recipe"""
+        """Open recipe selection dialog with delete capability"""
         recipes = self.recipe_manager.list_recipes()
         if not recipes:
             QMessageBox.information(self, "无配方", "还没有保存任何配方。")
             return
 
-        name, ok = QInputDialog.getItem(self, "加载配方", "选择产品:", recipes, 0, False)
-        if ok and name:
-            self.on_load_recipe_by_name(name)
+        # 创建自定义对话框
+        dialog = QDialog(self)
+        dialog.setWindowTitle("配方管理")
+        dialog.setMinimumWidth(400)
+        
+        layout = QVBoxLayout()
+        
+        # 说明标签
+        lbl_hint = QLabel("选择要加载的配方，或删除不需要的配方:")
+        layout.addWidget(lbl_hint)
+        
+        # 配方列表
+        from PyQt5.QtWidgets import QListWidget
+        list_widget = QListWidget()
+        list_widget.addItems(recipes)
+        list_widget.setCurrentRow(0)
+        layout.addWidget(list_widget)
+        
+        # 按钮布局
+        btn_layout = QHBoxLayout()
+        
+        btn_load = QPushButton("📂 加载")
+        btn_load.setStyleSheet("background-color: #10B981; color: white; font-weight: bold;")
+        btn_load.clicked.connect(dialog.accept)
+        
+        btn_delete = QPushButton("🗑️ 删除")
+        btn_delete.setStyleSheet("background-color: #EF4444; color: white; font-weight: bold;")
+        
+        btn_cancel = QPushButton("❌ 取消")
+        btn_cancel.clicked.connect(dialog.reject)
+        
+        def on_delete():
+            current_item = list_widget.currentItem()
+            if not current_item:
+                QMessageBox.warning(dialog, "未选择", "请先选择要删除的配方")
+                return
+            
+            name = current_item.text()
+            
+            # 确认删除
+            reply = QMessageBox.question(
+                dialog, "确认删除", 
+                f"确定要删除配方 [{name}] 吗？\n\n此操作不可恢复！",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            
+            if reply == QMessageBox.Yes:
+                recipe_dir = self.recipe_manager.get_recipe_path(name)
+                try:
+                    shutil.rmtree(recipe_dir)
+                    self.log(f"✅ 已删除配方: {name}")
+                    
+                    # 从列表中移除
+                    list_widget.takeItem(list_widget.currentRow())
+                    
+                    # 如果删除的是当前加载的配方，清除状态
+                    if self.lbl_recipe_name.text() == name:
+                        self.lbl_recipe_name.setText("未加载")
+                        self.lbl_recipe_name.setStyleSheet("color: red; font-weight: bold;")
+                    
+                    # 如果列表为空，关闭对话框
+                    if list_widget.count() == 0:
+                        QMessageBox.information(dialog, "已清空", "所有配方已删除")
+                        dialog.reject()
+                        
+                except Exception as e:
+                    QMessageBox.critical(dialog, "删除失败", f"无法删除配方:\n{e}")
+                    self.log(f"❌ 删除失败: {e}")
+        
+        btn_delete.clicked.connect(on_delete)
+        
+        btn_layout.addWidget(btn_load)
+        btn_layout.addWidget(btn_delete)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+        
+        dialog.setLayout(layout)
+        
+        # 双击加载
+        list_widget.itemDoubleClicked.connect(dialog.accept)
+        
+        # 显示对话框
+        if dialog.exec_() == QDialog.Accepted:
+            current_item = list_widget.currentItem()
+            if current_item:
+                name = current_item.text()
+                self.on_load_recipe_by_name(name)
 
     def on_load_recipe_by_name(self, name):
         """Actual logic to load recipe"""
+        
+        # ⭐ 清除旧配方缓存（避免混淆）
+        self.log("🧹 清除旧配方缓存...")
+        self.golden_path_cache = None
+        self.slot_templates = None
+        self.dots = []
+        self.polys = []
+        if hasattr(self, 'halcon_path_template'):
+            self.halcon_path_template = None
+        
+        # 加载新配方
         config, path_data, poly_data, msg = self.recipe_manager.load_recipe(name)
         if config is None:
             self.log(f"❌ {msg}")
@@ -3172,19 +3464,111 @@ class MainWindow(QWidget):
             
         self.log(f"📂 加载配方: {name}")
         
-        # 1. Apply Config
+        # 1. Apply Config - ⭐ COMPLETE PARAMETER RESTORATION
+        # === 视觉参数 ===
         if 'vision_offset_x' in config:
-            self.spn_vision_offset_x.setValue(config['vision_offset_x'])
+            self.vision_offset_x = config['vision_offset_x']
+            if hasattr(self, 'spn_vision_offset_x'):
+                self.spn_vision_offset_x.blockSignals(True)
+                self.spn_vision_offset_x.setValue(config['vision_offset_x'])
+                self.spn_vision_offset_x.blockSignals(False)
+        
         if 'vision_offset_y' in config:
-            self.spn_vision_offset_y.setValue(config['vision_offset_y'])
+            self.vision_offset_y = config['vision_offset_y']
+            if hasattr(self, 'spn_vision_offset_y'):
+                self.spn_vision_offset_y.blockSignals(True)
+                self.spn_vision_offset_y.setValue(config['vision_offset_y'])
+                self.spn_vision_offset_y.blockSignals(False)
+        
         if 'exposure' in config:
             self.cam_exp_time = config['exposure'] 
-            self.spn_exp.setValue(config['exposure'])
+            if hasattr(self, 'spn_exp'):
+                self.spn_exp.setValue(config['exposure'])
+        
+        if 'gain' in config and hasattr(self, 'spn_gain'):
+            self.spn_gain.setValue(config['gain'])
+        
+        if 'gamma' in config and hasattr(self, 'spn_gamma'):
+            self.spn_gamma.setValue(config['gamma'])
+        
+        # === ⭐ 运动参数 ===
+        if 'feedrate_xy' in config:
+            self.feedrate_xy = config['feedrate_xy']
+            if hasattr(self, 'sld_spd_xy'):
+                self.sld_spd_xy.blockSignals(True)
+                self.sld_spd_xy.setValue(int(self.feedrate_xy))
+                self.sld_spd_xy.blockSignals(False)
+                self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+        
+        if 'feedrate_z' in config:
+            self.feedrate_z = config['feedrate_z']
+            if hasattr(self, 'sld_spd_z'):
+                self.sld_spd_z.blockSignals(True)
+                self.sld_spd_z.setValue(int(self.feedrate_z))
+                self.sld_spd_z.blockSignals(False)
+                self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+        
+        if 'accel' in config:
+            self.accel = config['accel']
+            if hasattr(self, 'sld_acc'):
+                self.sld_acc.blockSignals(True)
+                self.sld_acc.setValue(int(self.accel))
+                self.sld_acc.blockSignals(False)
+                self.lbl_acc.setText(f"加速度: {int(self.accel)}")
+        
+        if 'jog_step_mm' in config:
+            self.jog_step_mm = config['jog_step_mm']
+        
+        # === ⭐ Z高度参数 ===
+        if 'safe_z_cavity' in config:
+            self.safe_z_cavity = config['safe_z_cavity']
+            if hasattr(self, 'spn_safe_z_cavity'):
+                self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
+        
+        if 'safe_z_product' in config:
+            self.safe_z_product = config['safe_z_product']
+            if hasattr(self, 'spn_safe_z_product'):
+                self.spn_safe_z_product.setValue(self.safe_z_product)
+        
+        if 'work_z' in config:
+            self.work_z = config['work_z']
+            if hasattr(self, 'spn_work_z'):
+                self.spn_work_z.setValue(self.work_z)
+        
+        if 'cam_safe_z_cavity' in config:
+            self.cam_safe_z_cavity = config['cam_safe_z_cavity']
+        
+        if 'cam_safe_z_product' in config:
+            self.cam_safe_z_product = config['cam_safe_z_product']
+        
+        if 'cam_work_z' in config:
+            self.cam_work_z = config['cam_work_z']
+        
+        # === ⭐ 针头偏移 ===
+        if 'nozzle_offset_x' in config:
+            self.nozzle_offset_x = config['nozzle_offset_x']
+        
+        if 'nozzle_offset_y' in config:
+            self.nozzle_offset_y = config['nozzle_offset_y']
+        
+        if 'nozzle_offset_z' in config:
+            self.nozzle_offset_z = config['nozzle_offset_z']
+        
+        # === ⭐ 对刀基准 ===
+        if 'z_base' in config:
+            self.z_base = config['z_base']
+            if hasattr(self, 'lbl_z_base'):
+                self.lbl_z_base.setText(f"当前 Z 基准: {self.z_base:.2f} mm")
+        
+        # === Halcon 模式 ===
+        if 'use_halcon' in config and hasattr(self, 'chk_use_halcon'):
+            self.chk_use_halcon.setChecked(config['use_halcon'])
             
         # [NEW] Load Halcon Model Reference
         self.model_ref_row = config.get('model_row', 651.6765) # Default fallback
         self.model_ref_col = config.get('model_col', 1113.3245)
-        self.log(f"ℹ 模型基准点: ({self.model_ref_row}, {self.model_ref_col})")
+        
+        self.log(f"✅ 已恢复所有参数: 速度XY={int(self.feedrate_xy)}, 偏移X={self.nozzle_offset_x:.2f}, Y={self.nozzle_offset_y:.2f}, Z基准={self.z_base:.2f}")
             
         # 2. Load Model
         # Assuming model.shm in recipe dir

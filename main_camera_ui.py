@@ -3017,49 +3017,60 @@ class MainWindow(QWidget):
         # Since HalconManager.run_training_script logic is not fully exposed here, 
         # I will assume a Mock or Basic Implementation:
         try:
-             # Try to copy the image to recipe dir
-            dest_img_path = os.path.join(recipe_dir, "image.png")
-            shutil.copy2(img_path, dest_img_path)
+            # Try to copy the image to recipe dir
+            # [FIX] Ensure the saved image is FLIPPED (Upright) to match path_teach and live view
+            # shutil.copy2(img_path, dest_img_path) 
+            raw_img = cv2.imread(img_path)
+            if raw_img is not None:
+                # Assume input from capture is Inverted (Raw). We Flip it Upright.
+                # If it's already upright (external file), this might invert it back, 
+                # but we prioritize consistency with the Camera/Capture workflow.
+                upright_img = cv2.flip(raw_img, -1)
+                cv2.imwrite(dest_img_path, upright_img)
+                self.log(f"✅ 保存并翻转配方图像: {dest_img_path}")
+            else:
+                self.log(f"⚠ 无法读取源图像: {img_path}")
+                shutil.copy2(img_path, dest_img_path) # Fallback
             
             # 🚀 CORE: Call Halcon to train!
-        if hasattr(self.halcon_manager, 'train_model'):
-            # result is now a dict or bool
-            res = self.halcon_manager.train_model(dest_img_path, model_path)
-            
-            # Helper to parse result
-            if isinstance(res, dict):
-                success = True
-                msg = res.get("msg", "Success")
-                origin_row = res.get("origin_row", 0)
-                origin_col = res.get("origin_col", 0)
-            elif isinstance(res, tuple): # For compatibility if old code returns (bool, msg)
-                success, msg = res
-                origin_row, origin_col = 0, 0
+            if hasattr(self.halcon_manager, 'train_model'):
+                # result is now a dict or bool
+                res = self.halcon_manager.train_model(dest_img_path, model_path)
+                
+                # Helper to parse result
+                if isinstance(res, dict):
+                    success = True
+                    msg = res.get("msg", "Success")
+                    origin_row = res.get("origin_row", 0)
+                    origin_col = res.get("origin_col", 0)
+                elif isinstance(res, tuple): # For compatibility if old code returns (bool, msg)
+                    success, msg = res
+                    origin_row, origin_col = 0, 0
+                else:
+                     success = res
+                     msg = "Success" if success else "Failed"
+                     origin_row, origin_col = 0, 0
+
             else:
-                 success = res
-                 msg = "Success" if success else "Failed"
-                 origin_row, origin_col = 0, 0
+                # Fallback: Just copy a template if it exists, or Fake it for testing
+                success = True 
+                msg = "Simulated Training (HalconManager.train_model missing)"
+                origin_row, origin_col = 0, 0
+                # Create a dummy SHM file so loading doesn't fail
+                with open(model_path, 'w') as f: f.write("DUMMY MODEL")
 
-        else:
-            # Fallback: Just copy a template if it exists, or Fake it for testing
-            success = True 
-            msg = "Simulated Training (HalconManager.train_model missing)"
-            origin_row, origin_col = 0, 0
-            # Create a dummy SHM file so loading doesn't fail
-            with open(model_path, 'w') as f: f.write("DUMMY MODEL")
-
-        if success:
-            self.log(f"✅ 训练成功! 模型保存至: {model_path}")
-            
-            # 3.5 Create Initial Config (Current Params)
-            initial_config = {
-                'vision_offset_x': self.vision_offset_x,
-                'vision_offset_y': self.vision_offset_y,
-                'exposure': self.spn_exp.value(),
-                'gain': self.spn_gain.value(),
-                'model_row': origin_row,
-                'model_col': origin_col
-            }
+            if success:
+                self.log(f"✅ 训练成功! 模型保存至: {model_path}")
+                
+                # 3.5 Create Initial Config (Current Params)
+                initial_config = {
+                    'vision_offset_x': self.vision_offset_x,
+                    'vision_offset_y': self.vision_offset_y,
+                    'exposure': self.spn_exp.value(),
+                    'gain': self.spn_gain.value(),
+                    'model_row': origin_row,
+                    'model_col': origin_col
+                }
                 # Use current path if available, or empty
                 current_path = getattr(self, 'dots', [])
                 current_polys = getattr(self, 'polys', [])

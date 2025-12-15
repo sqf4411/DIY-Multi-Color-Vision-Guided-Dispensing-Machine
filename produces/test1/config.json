@@ -1,12 +1,12 @@
 {
-  "vision_offset_x": 0.0,
+  "vision_offset_x": 20.0,
   "vision_offset_y": 0.0,
   "exposure": 4.4,
   "gain": 5.5,
   "gamma": 2.6,
-  "feedrate_xy": 2111,
-  "feedrate_z": 536,
-  "accel": 458.0,
+  "feedrate_xy": 1709,
+  "feedrate_z": 441,
+  "accel": 403.0,
   "jog_step_mm": 1.0,
   "safe_z_cavity": 100.0,
   "safe_z_product": 100.0,
@@ -14,8 +14,8 @@
   "nozzle_offset_x": 0.0,
   "nozzle_offset_y": 0.0,
   "z_base": 0.0,
-  "model_file": "332.shm",
   "model_row": 0,
   "model_col": 0,
-  "product_name": "332"
+  "product_name": "test1",
+  "model_file": "test1.shm"
 }

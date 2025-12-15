@@ -11,7 +11,7 @@
     "nozzle_offset_y": 0.0,
     "nozzle_offset_z": 0.0,
     "vision_offset_x": 0.0,
-    "vision_offset_y": 0.0,
+    "vision_offset_y": 44.0,
     "cam_safe_z_cavity": 213.0,
     "cam_safe_z_product": 215.0,
     "cam_work_z": 211.0,

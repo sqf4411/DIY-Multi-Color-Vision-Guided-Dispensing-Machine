@@ -37,7 +37,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QSlider,
     QGroupBox, QFormLayout, QDoubleSpinBox, QSpinBox, QTextEdit,
     QMessageBox, QLineEdit, QScrollArea,QDialog, QDialogButtonBox,
-    QCheckBox, QTabWidget, QSplitter, QInputDialog
+    QCheckBox, QTabWidget, QSplitter, QInputDialog, QListWidget
 )
 
 
@@ -4926,39 +4926,66 @@ class MainWindow(QWidget):
         self.on_load_product()
     
     def on_load_product(self):
-        """加载产品"""
+        """加载产品 (Enhanced Dialog)"""
         products = self.product_manager.list_products()
         if not products:
             QMessageBox.information(self, "提示", "没有可用的产品\n请先训练新模型")
             return
         
-        # 选择产品
-        name, ok = QInputDialog.getItem(
-            self, "加载产品", "选择产品:", products, 0, False
-        )
-        if not ok or not name:
-            return
+        # --- Create Custom Dialog ---
+        dialog = QDialog(self)
+        dialog.setWindowTitle("加载产品配方")
+        dialog.resize(400, 500)
         
-        # 显示操作选择对话框
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("产品操作")
-        msg_box.setText(f"产品: {name}\n\n请选择操作:")
+        layout = QVBoxLayout()
         
-        btn_load = msg_box.addButton("加载", QMessageBox.AcceptRole)
-        btn_delete = msg_box.addButton("删除", QMessageBox.DestructiveRole)
-        btn_cancel = msg_box.addButton("取消", QMessageBox.RejectRole)
+        layout.addWidget(QLabel("可用产品列表:"))
         
-        msg_box.exec_()
+        list_widget = QListWidget()
+        list_widget.addItems(products)
+        list_widget.setCurrentRow(0) # Default select first
+        layout.addWidget(list_widget)
         
-        clicked = msg_box.clickedButton()
+        # --- Action Buttons ---
+        btn_layout = QHBoxLayout()
         
-        if clicked == btn_delete:
-            # 删除产品
+        btn_load = QPushButton("加载 (Load)")
+        btn_load.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 6px;")
+        
+        btn_delete = QPushButton("删除 (Delete)")
+        btn_delete.setStyleSheet("background-color: #EF4444; color: white; padding: 6px;")
+        
+        btn_cancel = QPushButton("取消 (Cancel)")
+        btn_cancel.setStyleSheet("padding: 6px;")
+        
+        btn_layout.addWidget(btn_load)
+        btn_layout.addWidget(btn_delete)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+        
+        dialog.setLayout(layout)
+        
+        # --- Internal Functions ---
+        self._selected_product_to_load = None
+        
+        def do_load():
+            item = list_widget.currentItem()
+            if not item: return
+            self._selected_product_to_load = item.text()
+            dialog.accept()
+            
+        def do_delete():
+            item = list_widget.currentItem()
+            if not item: return
+            name = item.text()
+            
+            # Confirm
             reply = QMessageBox.question(
-                self, "确认删除",
+                dialog, "确认删除",
                 f"确定要删除产品 '{name}' 吗？\n此操作不可恢复！",
                 QMessageBox.Yes | QMessageBox.No
             )
+            
             if reply == QMessageBox.Yes:
                 try:
                     import shutil
@@ -4966,38 +4993,52 @@ class MainWindow(QWidget):
                     if os.path.exists(product_path):
                         shutil.rmtree(product_path)
                         self.log(f"✅ 已删除产品: {name}")
-                        QMessageBox.information(self, "成功", f"产品 '{name}' 已删除")
-                        # 如果删除的是当前产品，清空状态
+                        
+                        # Remove from list
+                        row = list_widget.row(item)
+                        list_widget.takeItem(row)
+                        
+                        # Reset current if matches
                         if self.current_product == name:
-                            self.current_product = None
-                            self.lbl_recipe_name.setText("未加载")
-                            self.lbl_recipe_name.setStyleSheet("color: red; font-weight: bold;")
-                            self.dots = []
-                            self.polys = []
-                            self.update_button_states()
+                             self.current_product = None
+                             self.lbl_recipe_name.setText("未加载")
+                             self.lbl_recipe_name.setStyleSheet("color: red; font-weight: bold;")
+                             self.dots = []
+                             self.polys = []
+                             self.update_button_states()
+                             
+                        if list_widget.count() == 0:
+                             QMessageBox.information(dialog, "提示", "所有产品已删除")
+                             dialog.reject()
                 except Exception as e:
-                    QMessageBox.critical(self, "删除失败", f"无法删除产品: {e}")
-                    self.log(f"❌ 删除产品失败: {e}")
-            return
+                    QMessageBox.critical(dialog, "删除失败", f"无法删除产品: {e}")
         
-        if clicked != btn_load:
-            return
+        # Check double click
+        list_widget.itemDoubleClicked.connect(do_load)
         
-        # 加载产品
-        self.log(f"📂 正在加载产品: {name}")
+        btn_load.clicked.connect(do_load)
+        btn_delete.clicked.connect(do_delete)
+        btn_cancel.clicked.connect(dialog.reject)
         
-        success, msg = self.halcon_product.load_product(name)
-        
-        if success:
-            self.current_product = name
-            self.lbl_recipe_name.setText(name)
-            self.lbl_recipe_name.setStyleSheet("color: #10B981; font-weight: bold;")
+        # --- Execute Dialog ---
+        if dialog.exec_() == QDialog.Accepted and self._selected_product_to_load:
+            name = self._selected_product_to_load
             
-            # 同步参数到UI
-            self.model_ref_row = self.halcon_product.model_ref_row
-            self.model_ref_col = self.halcon_product.model_ref_col
-            self.vision_offset_x = self.halcon_product.vision_offset_x
-            self.vision_offset_y = self.halcon_product.vision_offset_y
+            # Exec Loading Logic
+            self.log(f"📂 正在加载产品: {name}")
+            
+            success, msg = self.halcon_product.load_product(name)
+            
+            if success:
+                self.current_product = name
+                self.lbl_recipe_name.setText(name)
+                self.lbl_recipe_name.setStyleSheet("color: #10B981; font-weight: bold;")
+                
+                # 同步参数到UI
+                self.model_ref_row = self.halcon_product.model_ref_row
+                self.model_ref_col = self.halcon_product.model_ref_col
+                self.vision_offset_x = self.halcon_product.vision_offset_x
+                self.vision_offset_y = self.halcon_product.vision_offset_y
             
             # 更新UI显示
             if hasattr(self, 'spn_vision_offset_x'):

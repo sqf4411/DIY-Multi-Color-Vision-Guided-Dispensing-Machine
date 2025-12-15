@@ -51,11 +51,12 @@ class HalconProductManager:
             product_dir = self.products.get_product_path(product_name)
             os.makedirs(product_dir, exist_ok=True)
             
-            # 2. 保存并翻转训练图片
+            # 2. 保存训练图片（翻转为正向）
+            # 必须翻转，因为路径编辑器使用正向warp图，Halcon必须使用相同方向
             dest_img_path = os.path.join(product_dir, 'reference.png')
             raw_img = cv2.imread(image_path)
             if raw_img is not None:
-                # 翻转180度以匹配相机方向
+                # 翻转180度，与路径编辑器的warp图方向一致
                 upright_img = cv2.flip(raw_img, -1)
                 cv2.imwrite(dest_img_path, upright_img)
             else:
@@ -254,12 +255,17 @@ class HalconProductManager:
         Returns:
             (found_paths, debug_img)
         """
-        # 1. 运行Halcon识别
-        res = self.halcon.process_image(gray_img)
-        debug_img = cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
+        # 1. 翻转图像为正向（与训练图和路径编辑器一致）
+        gray_img_upright = cv2.flip(gray_img, -1)
+        
+        # 2. 运行Halcon识别（使用正向图）
+        res = self.halcon.process_image(gray_img_upright)
+        debug_img = cv2.cvtColor(gray_img_upright, cv2.COLOR_GRAY2BGR)
         found_paths = []
         
         if not res or 'matches' not in res:
+            # 翻转回倒置，用于UI显示（render会再翻转回正向）
+            debug_img = cv2.flip(debug_img, -1)
             return found_paths, debug_img
         
         # 2. 获取参考点
@@ -290,6 +296,9 @@ class HalconProductManager:
             text = f"S:{score:.2f}"
             cv2.putText(debug_img, text, (cx_i + 25, cy_i), 
                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        
+        # 翻转回倒置，用于UI显示（render会再翻转回正向）
+        debug_img = cv2.flip(debug_img, -1)
         
         return found_paths, debug_img
     

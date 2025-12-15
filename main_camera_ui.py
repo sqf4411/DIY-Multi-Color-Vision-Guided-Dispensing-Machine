@@ -2845,12 +2845,16 @@ class MainWindow(QWidget):
 
         frame_to_save = self.last_frame.copy()
 
-        os.makedirs("scripts/captures", exist_ok=True)
+        # Use absolute path for captures directory
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        captures_dir = os.path.join(base_dir, "captures")
+        os.makedirs(captures_dir, exist_ok=True)
+        
         default_name = datetime.now().strftime("capture_%Y%m%d_%H%M%S.png")
         save_path, _ = QFileDialog.getSaveFileName(
             self,
             "保存图片",
-            os.path.join("scripts/captures", default_name),
+            os.path.join(captures_dir, default_name),
             "Image Files (*.png *.jpg *.bmp)"
         )
 
@@ -3073,17 +3077,29 @@ class MainWindow(QWidget):
         
         # ⚠️ 确定保存目录：Halcon模式使用配方目录，OpenCV模式使用全局config
         save_directory = None
+        img_path_for_teach = None  # ⭐ 新增：指定路径编辑使用的图片
+        
         if use_halcon:
             current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
             if "未加载" not in current_recipe:
                 save_directory = self.product_manager.get_product_path(current_recipe)
+                # ⭐ 关键修复：使用配方的training图片（reference.png）
+                # 这样路径编辑器和Halcon使用完全相同的图片，坐标系统一致
+                ref_img_path = os.path.join(save_directory, "reference.png")
+                if os.path.exists(ref_img_path):
+                    img_path_for_teach = ref_img_path
+                    self.log(f"📍 使用配方训练图片: reference.png")
         
         # 暂时默认编辑第 0 个格子
         cell_idx = 0
         self.log(f"🧵 启动路径编辑器 (Cell {cell_idx})...")
         
         # 运行编辑器 (会阻塞直到窗口关闭)
-        ok = run_path_teach(cell_index=cell_idx, save_dir=save_directory)
+        # ⭐ 传入指定的图片路径
+        if img_path_for_teach:
+            ok = run_path_teach(cell_index=cell_idx, img_path=img_path_for_teach, save_dir=save_directory)
+        else:
+            ok = run_path_teach(cell_index=cell_idx, save_dir=save_directory)
         
         if ok:
             self.log(f"✅ 路径示教完成 (Cell {cell_idx})")

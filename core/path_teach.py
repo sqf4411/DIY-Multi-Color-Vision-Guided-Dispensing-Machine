@@ -159,59 +159,77 @@ def run_path_teach(cell_index: int = 0,
     disp_h = int(maxH * scale)
 
     # ---------- 4. 尝试加载小格坐标下的历史路径 ----------
-    # ⭐ 加载显示文件（与保存的文件名一致）
-    poly_file = os.path.join(save_dir, f"disp_poly_cell{cell_index}.npy")
-    dots_file = os.path.join(save_dir, f"disp_dots_cell{cell_index}.npy")
+    # 策略：优先加载本地坐标文件(cell_*)，如果没有则尝试加载显示文件(disp_*)并转换
+    
+    # 1. 本地坐标文件 (用于编辑，最准确)
+    local_poly_file = os.path.join(save_dir, f"cell_{cell_index}_polylines.npy")
+    local_dots_file = os.path.join(save_dir, f"cell_{cell_index}_dots.npy")
+    
+    # 2. 显示文件 (用于主界面显示，需要逆转换)
+    disp_poly_file = os.path.join(save_dir, f"disp_poly_cell{cell_index}.npy")
+    disp_dots_file = os.path.join(save_dir, f"disp_dots_cell{cell_index}.npy")
 
     polylines = []  # list of (N,2)
     dots = []       # list of (2,)
     current_line = []
     entity_history = []  # ['dot', 'line', 'dot', ...]
     
-    
-    # 加载polylines（黄金坐标系）
-    if os.path.exists(poly_file):
+    # --- 加载 Polylines ---
+    if os.path.exists(local_poly_file):
         try:
-            print(f"🔍 DEBUG: 开始加载poly文件: {poly_file}")
-            raw = np.load(poly_file, allow_pickle=True)
-            print(f"🔍 DEBUG: poly文件加载成功, type={type(raw)}, dtype={raw.dtype if hasattr(raw, 'dtype') else 'N/A'}, size={raw.size if hasattr(raw, 'size') else len(raw)}")
+            print(f"🔍 DEBUG: 发现本地poly文件: {local_poly_file}")
+            raw = np.load(local_poly_file, allow_pickle=True)
+            if isinstance(raw, np.ndarray):
+                if raw.dtype == object:
+                    polylines = list(raw)
+                elif raw.ndim == 2:
+                    polylines = [raw]
+            elif isinstance(raw, list):
+                polylines = raw
+            print(f"✅ 从本地文件载入折线, 条数 = {len(polylines)}")
+        except Exception as e:
+            print(f"⚠ 加载本地折线失败: {e}")
+            
+    elif os.path.exists(disp_poly_file):
+        # Fallback: 尝试从显示文件加载并转换
+        try:
+            print(f"🔍 DEBUG: 未找到本地文件，尝试从显示文件加载: {disp_poly_file}")
+            raw = np.load(disp_poly_file, allow_pickle=True)
             if isinstance(raw, np.ndarray) and raw.size > 0:
                 if raw.dtype == object:
-                    # 转换回局部坐标
-                    for idx, seg_gold in enumerate(raw):
+                    for seg_gold in raw:
                         if seg_gold is not None and len(seg_gold) > 0:
-                            print(f"🔍 DEBUG: 转换第{idx}条线, 点数={len(seg_gold)}")
                             seg_local = golden_to_local(seg_gold)
                             polylines.append(seg_local)
-                            print(f"🔍 DEBUG: 转换后局部坐标点数={len(seg_local)}")
                 else:
                     seg_local = golden_to_local(raw)
                     polylines.append(seg_local)
-            print(f"✅ 载入已有折线 {poly_file}, 条数 = {len(polylines)}")
+            print(f"✅ 从显示文件恢复折线, 条数 = {len(polylines)}")
         except Exception as e:
-            print(f"⚠ 加载折线失败: {e}")
-            import traceback
-            traceback.print_exc()
-    else:
-        print(f"ℹ️ poly文件不存在: {poly_file}")
-    
-    # 加载dots（黄金坐标系）
-    if os.path.exists(dots_file):
+            print(f"⚠ 加载显示文件失败: {e}")
+            
+    # --- 加载 Dots ---
+    if os.path.exists(local_dots_file):
         try:
-            print(f"🔍 DEBUG: 开始加载dots文件: {dots_file}")
-            dots_gold = np.load(dots_file)
-            print(f"🔍 DEBUG: dots文件加载成功, shape={dots_gold.shape}, size={dots_gold.size}")
+            print(f"🔍 DEBUG: 发现本地dots文件: {local_dots_file}")
+            dots_arr = np.load(local_dots_file, allow_pickle=True)
+            if dots_arr.size > 0:
+                dots = dots_arr.tolist()
+                print(f"✅ 从本地文件载入点集, 点数 = {len(dots)}")
+        except Exception as e:
+            print(f"⚠ 加载本地点集失败: {e}")
+            
+    elif os.path.exists(disp_dots_file):
+        # Fallback
+        try:
+            print(f"🔍 DEBUG: 未找到本地文件，尝试从显示文件加载: {disp_dots_file}")
+            dots_gold = np.load(disp_dots_file)
             if dots_gold.size > 0:
                 dots_local = golden_to_local(dots_gold)
                 dots = dots_local.tolist()
-                print(f"🔍 DEBUG: 转换后局部坐标点数={len(dots)}")
-                print(f"✅ 载入已有点集 {dots_file}, 点数 = {len(dots)}")
+                print(f"✅ 从显示文件恢复点集, 点数 = {len(dots)}")
         except Exception as e:
-            print(f"⚠ 加载点集失败: {e}")
-            import traceback
-            traceback.print_exc()
-    else:
-        print(f"ℹ️ dots文件不存在: {dots_file}")
+            print(f"⚠ 加载显示文件失败: {e}")
 
     # Initialize history from loaded files (approximate order)
     if polylines:
@@ -391,7 +409,18 @@ def run_path_teach(cell_index: int = 0,
                 polylines.append(np.array(current_line, dtype=np.float32))
                 current_line = []
 
-            # 生成黄金坐标系下的显示路径并保存
+            # A) 保存小格局部坐标数据（用于下次编辑，最准确，无损）
+            try:
+                np.save(local_poly_file, np.array(polylines, dtype=object))
+                if dots:
+                    np.save(local_dots_file, np.array(dots, dtype=np.float32))
+                else:
+                    np.save(local_dots_file, np.zeros((0, 2), dtype=np.float32))
+                print("✅ 已保存本地坐标路径")
+            except Exception as e:
+                print(f"❌ 保存本地路径失败: {e}")
+
+            # B) 生成黄金坐标系下的显示路径并保存（用于主界面显示）
             try:
                 poly_disp_list = []
                 if polylines:
@@ -400,9 +429,8 @@ def run_path_teach(cell_index: int = 0,
                         seg_gold = local_to_golden(seg)
                         poly_disp_list.append(seg_gold)
                 
-                # 保存为对象数组 (允许不规则形状)
-                disp_poly_path = os.path.join(save_dir, f"disp_poly_cell{cell_index}.npy")
-                np.save(disp_poly_path, np.array(poly_disp_list, dtype=object))
+                # 保存为对象数组
+                np.save(disp_poly_file, np.array(poly_disp_list, dtype=object))
 
                 if dots:
                     dots_arr = np.array(dots, dtype=np.float32)
@@ -410,14 +438,12 @@ def run_path_teach(cell_index: int = 0,
                 else:
                     dots_disp = np.zeros((0, 2), dtype=np.float32)
 
-                dots_path = os.path.join(save_dir, f"disp_dots_cell{cell_index}.npy")
-                np.save(dots_path, dots_disp)
-                print(f"✅ 已保存显示路径 disp_poly_cell{cell_index}.npy / disp_dots_cell{cell_index}.npy")
+                np.save(disp_dots_file, dots_disp)
+                print("✅ 已保存显示路径 (Golden)")
             except Exception as e:
-                print("⚠ 生成显示路径失败：", e)
+                print(f"❌ 保存显示路径失败: {e}")
 
-            print(f"✅ 已保存折线到 {poly_file}，条数 = {len(polylines)}")
-            print(f"✅ 已保存点集到 {dots_file}，点数 = {len(dots)}")
+            print(f"✅ 路径保存完毕 -> {save_dir}")
             cv2.destroyWindow(WINDOW_NAME)
             return True
         # 其它按键忽略

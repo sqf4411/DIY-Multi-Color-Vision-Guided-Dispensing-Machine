@@ -1624,21 +1624,38 @@ class MainWindow(QWidget):
         group = QGroupBox("系统状态 & 温控")
         layout = QGridLayout()
         
-        # 1. 标题头（3列）
-        layout.addWidget(QLabel("设备"), 0, 0)
-        layout.addWidget(QLabel("当前"), 0, 1)
-        layout.addWidget(QLabel("状态/设定"), 0, 2)
+        # 0. 设置列宽均匀拉伸
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(2, 1)
+        
+        # 1. 标题头（3列）- 加大 "状态/设定" 字体
+        lbl_dev = QLabel("设备")
+        lbl_cur = QLabel("当前")
+        lbl_set = QLabel("状态/设定")
+        
+        # 设置字体稍微大一点，加粗
+        style_header = "font-weight: bold; font-size: 14px; color: #9CA3AF;"
+        #style_header_big = "font-weight: bold; font-size: 16px; color: #E5E7EB;" # 重点加大
+        
+        lbl_dev.setStyleSheet(style_header)
+        lbl_cur.setStyleSheet(style_header)
+        lbl_set.setStyleSheet("font-weight: bold; font-size: 16px; color: #E5E7EB;") # 特别加大
+        
+        layout.addWidget(lbl_dev, 0, 0)
+        layout.addWidget(lbl_cur, 0, 1)
+        layout.addWidget(lbl_set, 0, 2)
         
         # 2. Syringe Heater - 只显示状态
         self.lbl_syringe_name = QLabel("针筒加热:")
         
         # 当前温度
         self.lbl_syringe_temp = QLabel("0.0°C")
-        self.lbl_syringe_temp.setStyleSheet("color: #F59E0B; font-weight: bold;") # Amber
+        self.lbl_syringe_temp.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 15px;") # Amber
         
         # 实际目标 (状态)
         self.lbl_syringe_target_status = QLabel("Off")
-        self.lbl_syringe_target_status.setStyleSheet("color: #9CA3AF;")
+        self.lbl_syringe_target_status.setStyleSheet("color: #9CA3AF; font-weight: bold;")
         
         # 布局 Syringe
         layout.addWidget(self.lbl_syringe_name, 1, 0)
@@ -1655,7 +1672,9 @@ class MainWindow(QWidget):
         self.spn_syringe_target.setRange(0, 80) 
         self.spn_syringe_target.setSuffix("°C")
         self.spn_syringe_target.setDecimals(1)
-        self.spn_syringe_target.setFixedWidth(70)
+        # self.spn_syringe_target.setFixedWidth(70) # [CHANGE] Remove fixed width to fill column
+        self.spn_syringe_target.setStyleSheet("font-size: 14px; height: 24px;")
+        
         # 加载上次保存的设定值 (如果存在)
         if hasattr(self, 'saved_params') and 'last_syringe_target' in self.saved_params:
              self.spn_syringe_target.setValue(float(self.saved_params['last_syringe_target']))
@@ -1668,8 +1687,8 @@ class MainWindow(QWidget):
         
         # 执行按钮（放在FLY-pi行）
         self.btn_set_syringe_temp = QPushButton("执行")
-        self.btn_set_syringe_temp.setFixedWidth(70)
-        self.btn_set_syringe_temp.setStyleSheet("background-color: #3B82F6; color: white;")
+        # self.btn_set_syringe_temp.setFixedWidth(70) # [CHANGE] Remove fixed width
+        self.btn_set_syringe_temp.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold; height: 26px;")
         self.btn_set_syringe_temp.clicked.connect(self.on_set_syringe_temp)
         layout.addWidget(self.btn_set_syringe_temp, 3, 2)
         

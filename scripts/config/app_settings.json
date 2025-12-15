@@ -14,6 +14,6 @@
     "cam_safe_z_cavity": 219.0,
     "cam_safe_z_product": 220.0,
     "cam_work_z": 211.0,
-    "vision_offset_x": 15.0,
-    "vision_offset_y": 20.0
+    "vision_offset_x": 0.0,
+    "vision_offset_y": 0.0
 }

@@ -1857,9 +1857,10 @@ class MainWindow(QWidget):
             if self.machine.connected:
                 self.btn_connect_klipper.setText("断开")
         else:
-            # 断开
-            self.machine.disconnect()
+            # 断开 (MachineClient没有disconnect方法，直接设置状态)
+            self.machine.connected = False
             self.btn_connect_klipper.setText("连接")
+            self.btn_connect_klipper.setStyleSheet("")
             self.log("🔌 已断开 Klipper 连接")
             # 停止温度监控线程
             if hasattr(self, 'temp_worker') and self.temp_worker:
@@ -2168,8 +2169,7 @@ class MainWindow(QWidget):
         # 2. Apply saved params
         QTimer.singleShot(1000, self.apply_saved_params)
 
-        self.btn_start.setEnabled(False)
-        self.btn_stop.setEnabled(True)
+        # Enable save button (btn_camera status managed by on_toggle_camera)
         self.btn_save.setEnabled(True)
 
         # Start USB Camera as well if URL is present (Added)
@@ -2790,12 +2790,12 @@ class MainWindow(QWidget):
 
         frame_to_save = self.last_frame.copy()
 
-        os.makedirs("captures", exist_ok=True)
+        os.makedirs("scripts/captures", exist_ok=True)
         default_name = datetime.now().strftime("capture_%Y%m%d_%H%M%S.png")
         save_path, _ = QFileDialog.getSaveFileName(
             self,
             "保存图片",
-            os.path.join("captures", default_name),
+            os.path.join("scripts/captures", default_name),
             "Image Files (*.png *.jpg *.bmp)"
         )
 
@@ -2859,8 +2859,8 @@ class MainWindow(QWidget):
         # ====== ✅ 3按钮选择逻辑 ======
         candidate_path = self.latest_capture_path
         if not candidate_path:
-            if os.path.exists("captures"):
-                files = [os.path.join("captures", f) for f in os.listdir("captures") if f.lower().endswith(('.png', '.jpg', '.bmp'))]
+            if os.path.exists("scripts/captures"):
+                files = [os.path.join("scripts/captures", f) for f in os.listdir("scripts/captures") if f.lower().endswith(('.png', '.jpg', '.bmp'))]
                 if files:
                     files.sort(key=lambda x: os.path.getmtime(x))
                     candidate_path = files[-1]
@@ -2948,8 +2948,8 @@ class MainWindow(QWidget):
         # ====== ✅ 3按钮选择逻辑 ======
         candidate_path = self.latest_capture_path
         if not candidate_path:
-            if os.path.exists("captures"):
-                files = [os.path.join("captures", f) for f in os.listdir("captures") if f.lower().endswith(('.png', '.jpg', '.bmp'))]
+            if os.path.exists("scripts/captures"):
+                files = [os.path.join("scripts/captures", f) for f in os.listdir("scripts/captures") if f.lower().endswith(('.png', '.jpg', '.bmp'))]
                 if files:
                     files.sort(key=lambda x: os.path.getmtime(x))
                     candidate_path = files[-1]
@@ -4410,7 +4410,7 @@ class MainWindow(QWidget):
         if hasattr(self, 'poll_worker'):
             self.poll_worker.stop()
             
-        if hasattr(self, 'temp_worker'):
+        if hasattr(self, 'temp_worker') and self.temp_worker:
             self.temp_worker.stop()
 
         self.stop_cam()

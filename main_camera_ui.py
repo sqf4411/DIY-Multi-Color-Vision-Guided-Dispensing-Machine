@@ -3082,11 +3082,9 @@ class MainWindow(QWidget):
             try:
                 # ⭐ 从正确的目录加载：配方目录（Halcon）或全局config（OpenCV）
                 load_dir = save_directory if save_directory else os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
-                self.log(f"🔍 DEBUG: 从目录加载路径: {load_dir}")
                 
                 # 加载dots
                 dots_path = os.path.join(load_dir, f"disp_dots_cell{cell_idx}.npy")
-                self.log(f"🔍 DEBUG: 检查dots文件: {dots_path}, 存在={os.path.exists(dots_path)}")
                 if os.path.exists(dots_path):
                     self.dots = np.load(dots_path)
                     self.log(f"✅ 已重新加载点路径: {len(self.dots)} points")
@@ -3096,7 +3094,6 @@ class MainWindow(QWidget):
                 
                 # 加载polys
                 polys_path = os.path.join(load_dir, f"disp_poly_cell{cell_idx}.npy")
-                self.log(f"🔍 DEBUG: 检查poly文件: {polys_path}, 存在={os.path.exists(polys_path)}")
                 if os.path.exists(polys_path):
                     self.polys = np.load(polys_path, allow_pickle=True)
                     self.log(f"✅ 已重新加载线路径: {len(self.polys)} lines")

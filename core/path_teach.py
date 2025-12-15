@@ -47,14 +47,6 @@ def run_path_teach(cell_index: int = 0,
     if save_dir is None:
         save_dir = config_dir
     
-    print(f"=" * 60)
-    print(f"🔍 DEBUG [run_path_teach]: 函数启动")
-    print(f"🔍 DEBUG: cell_index={cell_index}")
-    print(f"🔍 DEBUG: img_path={img_path}")  
-    print(f"🔍 DEBUG: save_dir={save_dir}")
-    print(f"=" * 60)
-  # 默认使用全局config（兼容OpenCV模式）
-    
     # Resolve img_path relative to project root if it's relative
     if not os.path.isabs(img_path):
         img_path = os.path.join(base_dir, img_path)
@@ -174,10 +166,14 @@ def run_path_teach(cell_index: int = 0,
     current_line = []
     entity_history = []  # ['dot', 'line', 'dot', ...]
     
+    polylines = []  # list of (N,2)
+    dots = []       # list of (2,)
+    current_line = []
+    entity_history = []  # ['dot', 'line', 'dot', ...]
+    
     # --- 加载 Polylines ---
     if os.path.exists(local_poly_file):
         try:
-            print(f"🔍 DEBUG: 发现本地poly文件: {local_poly_file}")
             raw = np.load(local_poly_file, allow_pickle=True)
             if isinstance(raw, np.ndarray):
                 if raw.dtype == object:
@@ -193,7 +189,7 @@ def run_path_teach(cell_index: int = 0,
     elif os.path.exists(disp_poly_file):
         # Fallback: 尝试从显示文件加载并转换
         try:
-            print(f"🔍 DEBUG: 未找到本地文件，尝试从显示文件加载: {disp_poly_file}")
+            print(f"ℹ️ 本地记录不存在，尝试从旧版文件恢复: {disp_poly_file}")
             raw = np.load(disp_poly_file, allow_pickle=True)
             if isinstance(raw, np.ndarray) and raw.size > 0:
                 if raw.dtype == object:
@@ -211,7 +207,6 @@ def run_path_teach(cell_index: int = 0,
     # --- 加载 Dots ---
     if os.path.exists(local_dots_file):
         try:
-            print(f"🔍 DEBUG: 发现本地dots文件: {local_dots_file}")
             dots_arr = np.load(local_dots_file, allow_pickle=True)
             if dots_arr.size > 0:
                 dots = dots_arr.tolist()
@@ -222,7 +217,7 @@ def run_path_teach(cell_index: int = 0,
     elif os.path.exists(disp_dots_file):
         # Fallback
         try:
-            print(f"🔍 DEBUG: 未找到本地文件，尝试从显示文件加载: {disp_dots_file}")
+            print(f"ℹ️ 本地记录不存在，尝试从旧版文件恢复: {disp_dots_file}")
             dots_gold = np.load(disp_dots_file)
             if dots_gold.size > 0:
                 dots_local = golden_to_local(dots_gold)
@@ -252,12 +247,6 @@ def run_path_teach(cell_index: int = 0,
         pts_gold = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
         # ⭐ 直接使用 M_cell (Golden -> Local)
         pts_local = cv2.perspectiveTransform(pts_gold, M_cell)
-        
-        # 🔍 DEBUG: 检查转换后的坐标范围
-        min_xy = pts_local.reshape(-1, 2).min(axis=0)
-        max_xy = pts_local.reshape(-1, 2).max(axis=0)
-        print(f"🔍 DEBUG: golden_to_local 转换范围: Min={min_xy}, Max={max_xy}, Canvas=({maxW}, {maxH})")
-        
         return pts_local.reshape(-1, 2)
 
     # ---------- 5. 交互绘制 ----------

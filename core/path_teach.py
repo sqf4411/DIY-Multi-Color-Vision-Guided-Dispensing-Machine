@@ -28,13 +28,32 @@ def order_points(pts: np.ndarray) -> np.ndarray:
 import os
 
 def run_path_teach(cell_index: int = 0,
-                   img_path: str = "config/mold2.png") -> bool:
-    """在黄金示教后的某一个小格子中编辑点胶路径。"""
+                   img_path: str = "config/mold2.png",
+                   save_dir: str = None) -> bool:
+    """在黄金示教后的某一个小格子中编辑点胶路径。
+    
+    Args:
+        cell_index: 小格子索引
+        img_path: 训练图像路径
+        save_dir: 保存路径的目录（None=使用config/，否则使用配方目录）
+    """
 
     # Get Base Dir (Project Root)
     # This file is in core/, so project root is one level up
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_dir = os.path.join(base_dir, "config")
+    
+    # ⭐ 确定保存/加载目录
+    if save_dir is None:
+        save_dir = config_dir
+    
+    print(f"=" * 60)
+    print(f"🔍 DEBUG [run_path_teach]: 函数启动")
+    print(f"🔍 DEBUG: cell_index={cell_index}")
+    print(f"🔍 DEBUG: img_path={img_path}")  
+    print(f"🔍 DEBUG: save_dir={save_dir}")
+    print(f"=" * 60)
+  # 默认使用全局config（兼容OpenCV模式）
     
     # Resolve img_path relative to project root if it's relative
     if not os.path.isabs(img_path):
@@ -140,31 +159,59 @@ def run_path_teach(cell_index: int = 0,
     disp_h = int(maxH * scale)
 
     # ---------- 4. 尝试加载小格坐标下的历史路径 ----------
-    # ---------- 4. 尝试加载小格坐标下的历史路径 ----------
-    poly_file = os.path.join(config_dir, f"cell_{cell_index}_polylines.npy")
-    dots_file = os.path.join(config_dir, f"cell_{cell_index}_dots.npy")
+    # ⭐ 加载显示文件（与保存的文件名一致）
+    poly_file = os.path.join(save_dir, f"disp_poly_cell{cell_index}.npy")
+    dots_file = os.path.join(save_dir, f"disp_dots_cell{cell_index}.npy")
 
     polylines = []  # list of (N,2)
     dots = []       # list of (2,)
     current_line = []
     entity_history = []  # ['dot', 'line', 'dot', ...]
-
-    try:
-        arr = np.load(poly_file, allow_pickle=True)
-        for seg in arr:
-            seg = np.array(seg, dtype=np.float32)
-            if seg.size >= 2:
-                polylines.append(seg)
-        print(f"✅ 载入已有折线 {poly_file}, 条数 = {len(polylines)}")
-    except Exception:
-        print("ℹ 未找到历史折线文件，重新开始绘制")
-
-    try:
-        arr = np.load(dots_file)
-        dots = [tuple(map(float, p)) for p in arr.reshape(-1, 2)]
-        print(f"✅ 载入已有点集 {dots_file}, 点数 = {len(dots)}")
-    except Exception:
-        print("ℹ 未找到历史点文件，重新开始绘制")
+    
+    
+    # 加载polylines（黄金坐标系）
+    if os.path.exists(poly_file):
+        try:
+            print(f"🔍 DEBUG: 开始加载poly文件: {poly_file}")
+            raw = np.load(poly_file, allow_pickle=True)
+            print(f"🔍 DEBUG: poly文件加载成功, type={type(raw)}, dtype={raw.dtype if hasattr(raw, 'dtype') else 'N/A'}, size={raw.size if hasattr(raw, 'size') else len(raw)}")
+            if isinstance(raw, np.ndarray) and raw.size > 0:
+                if raw.dtype == object:
+                    # 转换回局部坐标
+                    for idx, seg_gold in enumerate(raw):
+                        if seg_gold is not None and len(seg_gold) > 0:
+                            print(f"🔍 DEBUG: 转换第{idx}条线, 点数={len(seg_gold)}")
+                            seg_local = golden_to_local(seg_gold)
+                            polylines.append(seg_local)
+                            print(f"🔍 DEBUG: 转换后局部坐标点数={len(seg_local)}")
+                else:
+                    seg_local = golden_to_local(raw)
+                    polylines.append(seg_local)
+            print(f"✅ 载入已有折线 {poly_file}, 条数 = {len(polylines)}")
+        except Exception as e:
+            print(f"⚠ 加载折线失败: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print(f"ℹ️ poly文件不存在: {poly_file}")
+    
+    # 加载dots（黄金坐标系）
+    if os.path.exists(dots_file):
+        try:
+            print(f"🔍 DEBUG: 开始加载dots文件: {dots_file}")
+            dots_gold = np.load(dots_file)
+            print(f"🔍 DEBUG: dots文件加载成功, shape={dots_gold.shape}, size={dots_gold.size}")
+            if dots_gold.size > 0:
+                dots_local = golden_to_local(dots_gold)
+                dots = dots_local.tolist()
+                print(f"🔍 DEBUG: 转换后局部坐标点数={len(dots)}")
+                print(f"✅ 载入已有点集 {dots_file}, 点数 = {len(dots)}")
+        except Exception as e:
+            print(f"⚠ 加载点集失败: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print(f"ℹ️ dots文件不存在: {dots_file}")
 
     # Initialize history from loaded files (approximate order)
     if polylines:
@@ -172,13 +219,28 @@ def run_path_teach(cell_index: int = 0,
     if dots:
         entity_history.extend(['dot'] * len(dots))
 
-    # ---------- 4.5 工具：小格坐标 -> 黄金坐标 ----------
+    # ---------- 4.5 工具：小格坐标 <-> 黄金坐标 ----------
     def local_to_golden(points: np.ndarray) -> np.ndarray:
         if points is None or len(points) == 0:
             return np.zeros((0, 2), dtype=np.float32)
         pts_local = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
         pts_gold = cv2.perspectiveTransform(pts_local, Minv_cell)
         return pts_gold.reshape(-1, 2)
+    
+    def golden_to_local(points: np.ndarray) -> np.ndarray:
+        """黄金坐标 -> 局部小格坐标（用于加载已保存的路径）"""
+        if points is None or len(points) == 0:
+            return np.zeros((0, 2), dtype=np.float32)
+        pts_gold = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+        # ⭐ 直接使用 M_cell (Golden -> Local)
+        pts_local = cv2.perspectiveTransform(pts_gold, M_cell)
+        
+        # 🔍 DEBUG: 检查转换后的坐标范围
+        min_xy = pts_local.reshape(-1, 2).min(axis=0)
+        max_xy = pts_local.reshape(-1, 2).max(axis=0)
+        print(f"🔍 DEBUG: golden_to_local 转换范围: Min={min_xy}, Max={max_xy}, Canvas=({maxW}, {maxH})")
+        
+        return pts_local.reshape(-1, 2)
 
     # ---------- 5. 交互绘制 ----------
     mode = "line"  # "line" or "dot"
@@ -325,18 +387,11 @@ def run_path_teach(cell_index: int = 0,
             return False
         elif key in (ord('s'), ord('S')):
             # 先把 current_line 也并入
-            if len(current_line) >= 2:
+            if current_line:
                 polylines.append(np.array(current_line, dtype=np.float32))
                 current_line = []
 
-            # 1) 保存小格坐标数据（编辑用）
-            np.save(poly_file, np.array(polylines, dtype=object))
-            if dots:
-                np.save(dots_file, np.array(dots, dtype=np.float32))
-            else:
-                np.save(dots_file, np.zeros((0, 2), dtype=np.float32))
-
-            # 2) 生成黄金坐标系下的显示路径
+            # 生成黄金坐标系下的显示路径并保存
             try:
                 poly_disp_list = []
                 if polylines:
@@ -346,7 +401,7 @@ def run_path_teach(cell_index: int = 0,
                         poly_disp_list.append(seg_gold)
                 
                 # 保存为对象数组 (允许不规则形状)
-                disp_poly_path = os.path.join(config_dir, f"disp_poly_cell{cell_index}.npy")
+                disp_poly_path = os.path.join(save_dir, f"disp_poly_cell{cell_index}.npy")
                 np.save(disp_poly_path, np.array(poly_disp_list, dtype=object))
 
                 if dots:
@@ -355,7 +410,7 @@ def run_path_teach(cell_index: int = 0,
                 else:
                     dots_disp = np.zeros((0, 2), dtype=np.float32)
 
-                dots_path = os.path.join(config_dir, f"disp_dots_cell{cell_index}.npy")
+                dots_path = os.path.join(save_dir, f"disp_dots_cell{cell_index}.npy")
                 np.save(dots_path, dots_disp)
                 print(f"✅ 已保存显示路径 disp_poly_cell{cell_index}.npy / disp_dots_cell{cell_index}.npy")
             except Exception as e:

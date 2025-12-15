@@ -1,6 +1,25 @@
 {
   "vision_offset_x": 0.0,
   "vision_offset_y": 0.0,
-  "exposure": 5.5,
-  "gain": 3.8
+  "exposure": 4.4,
+  "gain": 5.5,
+  "gamma": 2.6,
+  "feedrate_xy": 2111,
+  "feedrate_z": 536,
+  "accel": 458.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 100.0,
+  "safe_z_product": 100.0,
+  "work_z": 100.0,
+  "cam_safe_z_cavity": 213.0,
+  "cam_safe_z_product": 215.0,
+  "cam_work_z": 211.0,
+  "nozzle_offset_x": 0.0,
+  "nozzle_offset_y": 0.0,
+  "nozzle_offset_z": 0.0,
+  "z_base": 0.0,
+  "model_file": "test1.shm",
+  "model_row": 0,
+  "model_col": 0,
+  "use_halcon": false
 }

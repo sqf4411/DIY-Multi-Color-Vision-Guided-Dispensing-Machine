@@ -56,7 +56,8 @@ from core.config_manager import ConfigManager
 from core.camera_manager import CameraManager
 from core.halcon_manager import HalconManager
 from core.visualizer_3d import Visualizer3D
-from core.recipe_manager import RecipeManager
+from core.product_manager import ProductManager
+from core.halcon_product_manager import HalconProductManager
 
 # MvImport dependency removed from UI (managed by CameraManager)
 # from MvImport.MvCameraControl_class import *
@@ -594,7 +595,9 @@ class MainWindow(QWidget):
         self.config = ConfigManager()
         self.camera_manager = CameraManager()
         self.halcon_manager = HalconManager()
-        self.recipe_manager = RecipeManager() # [NEW] Recipe System
+        self.product_manager = ProductManager()  # 产品管理器
+        self.halcon_product = HalconProductManager(self.halcon_manager, self.product_manager)  # Halcon产品逻辑
+        self.current_product = None  # 当前加载的产品名称
         self.camera_manager.get_frame_signal().connect(self.update_image) if self.camera_manager.get_frame_signal() else None
         # Load Config
         # self.load_app_settings()  # Moved after UI init
@@ -811,14 +814,14 @@ class MainWindow(QWidget):
         # 空跑/点胶时的安全高度与工作高度（mm）
         # 用户反馈：Z轴最大200+（上），0是下。
         self.safe_z = None          # 抬刀 / 快移高度 (Legacy)
-        self.safe_z_cavity = None   # 腔内安全高度 (小抬刀)
-        self.safe_z_product = None  # 产品安全高度 (大抬刀)
-        self.work_z = None          # 点胶 / 下刀高度 (接近0)
+        self.safe_z_cavity = 100.0   # 腔内安全高度 (小抬刀)
+        self.safe_z_product = 100.0  # 产品安全高度 (大抬刀)
+        self.work_z = 100.0          # 点胶 / 下刀高度 (接近0)
         
         # ====== ✅ 新增：相机空跑专用高度参数 ======
-        self.cam_safe_z_cavity = None
-        self.cam_safe_z_product = None
-        self.cam_work_z = None # 相机通常比针头高，避免撞到
+        self.cam_safe_z_cavity = 213.0
+        self.cam_safe_z_product = 215.0
+        self.cam_work_z = 211.0 # 相机通常比针头高，避免撞到
         # =======================================
         
         # 对刀基准 (上次对刀时的 Z 坐标)
@@ -851,6 +854,12 @@ class MainWindow(QWidget):
         self.load_golden_templates()
         self.init_calibration()
         self.init_done = True
+        
+        # 自动迁移旧版recipes目录
+        self.migrate_recipes_to_produces()
+        
+        # 初始化按钮状态（确保Halcon按钮默认禁用）
+        self.update_button_states()
 
     def _log_impl(self, msg):
         """实际更新 UI 的槽函数，运行在主线程"""
@@ -2293,8 +2302,18 @@ class MainWindow(QWidget):
             self.log(f"❌ 加载坐标标定矩阵失败: {e}")
 
     # ===== 黄金模板 =====
+    def check_recipe_loaded_halcon(self):
+        """检查Halcon模式下是否已加载配方"""
+        use_halcon = hasattr(self, 'chk_use_halcon') and self.chk_use_halcon.isChecked()
+        if not use_halcon:
+            return True  # OpenCV模式不需要配方
+        
+        current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
+        return "未加载" not in current_recipe
+    
     def load_golden_templates(self):
         try:
+            # ✅ OpenCV Mode: Load slot templates
             if os.path.exists("config/slot_templates.npy"):
                 self.slot_templates = np.load("config/slot_templates.npy")
                 self.log(f"✅ 黄金模板 config/slot_templates.npy 加载成功，形状：{self.slot_templates.shape}")
@@ -2302,15 +2321,23 @@ class MainWindow(QWidget):
                 self.log("⚠ 未找到 config/slot_templates.npy，暂时无法做黄金对位")
                 self.slot_templates = None
             
-            # Load Golden Path for visualization (CRITICAL: use allow_pickle=True for object arrays)
-            if os.path.exists("config/disp_poly_cell0.npy"):
-                # Path templates are object arrays containing variable-length segments
-                self.golden_path_cache = np.load("config/disp_poly_cell0.npy", allow_pickle=True)
-                self.log(f"✅ 加载点胶路径缓存: {len(self.golden_path_cache)} 个路径段")
+            # ✅ Load Golden Path ONLY in OpenCV mode
+            # In Halcon mode, paths come from recipes, not global config
+            use_halcon = hasattr(self, 'chk_use_halcon') and self.chk_use_halcon.isChecked()
+            
+            if not use_halcon:
+                # OpenCV Mode: Load global paths
+                if os.path.exists("config/disp_poly_cell0.npy"):
+                    self.golden_path_cache = np.load("config/disp_poly_cell0.npy", allow_pickle=True)
+                    self.log(f"✅ 加载点胶路径缓存: {len(self.golden_path_cache)} 个路径段")
+                else:
+                    self.golden_path_cache = None
+                    self.log("ℹ️ 未找到点胶路径缓存文件")
             else:
+                # Halcon Mode: Skip global paths, they should come from recipe
                 self.golden_path_cache = None
-                self.log("ℹ️ 未找到点胶路径缓存文件")
-    
+                self.log("ℹ️ Halcon模式: 路径将从配方加载")
+
         except Exception as e:
             self.log("❌ 加载黄金模板失败：", e)
             import traceback
@@ -2352,9 +2379,10 @@ class MainWindow(QWidget):
         """Load application settings from ConfigManager (unified config system)"""
         try:
             # Load all parameters from ConfigManager (app_settings.json)
-            self.safe_z_cavity = self.config.get('safe_z_cavity', 10.0)
-            self.safe_z_product = self.config.get('safe_z_product', 30.0)
-            self.work_z = self.config.get('work_z', 0.0)
+            # Nozzle Z Parameters (针头高度参数 - 主界面使用)
+            self.safe_z_cavity = self.config.get('safe_z_cavity', 100.0)
+            self.safe_z_product = self.config.get('safe_z_product', 100.0)
+            self.work_z = self.config.get('work_z', 100.0)
             self.jog_step_mm = self.config.get('jog_step', 1.0)
             self.feedrate_xy = self.config.get('feedrate_xy', 3000.0)
             self.feedrate_z = self.config.get('feedrate_z', 500.0)
@@ -2372,14 +2400,18 @@ class MainWindow(QWidget):
             # Load Z Base (tool setting reference)
             self.z_base = self.config.get('z_base', 0.0)
 
-            # Load Camera Dry Run Params
-            self.cam_safe_z_cavity = self.config.get('cam_safe_z_cavity', self.safe_z_cavity)
-            self.cam_safe_z_product = self.config.get('cam_safe_z_product', self.safe_z_product)
-            self.cam_work_z = self.config.get('cam_work_z', self.work_z)
+            # Load Camera Dry Run Params (相机空跑参数)
+            self.cam_safe_z_cavity = self.config.get('cam_safe_z_cavity', 213.0)
+            self.cam_safe_z_product = self.config.get('cam_safe_z_product', 215.0)
+            self.cam_work_z = self.config.get('cam_work_z', 211.0)
 
             # Load Halcon Vision Offset
             self.vision_offset_x = self.config.get('vision_offset_x', 0.0)
             self.vision_offset_y = self.config.get('vision_offset_y', 0.0)
+
+            # Load Dispensing Dwell Times (点胶延迟参数)
+            self.dwell_ms = self.config.get('dwell_ms', 100)
+            self.line_dwell_ms = self.config.get('line_dwell_ms', 0)
 
             # Update UI elements (if they exist)
             if hasattr(self, 'sld_spd_xy'):
@@ -2456,6 +2488,10 @@ class MainWindow(QWidget):
             
             self.config.set('vision_offset_x', self.vision_offset_x)
             self.config.set('vision_offset_y', self.vision_offset_y)
+            
+            # Dispensing Dwell Times
+            self.config.set('dwell_ms', self.dwell_ms)
+            self.config.set('line_dwell_ms', self.line_dwell_ms)
             
             # Trigger ConfigManager to write to file
             self.config.save_app_settings()
@@ -2823,6 +2859,13 @@ class MainWindow(QWidget):
 
     # ================== 识别模具 ==================
     def detect_mold(self):
+        # ✅ Halcon模式检查
+        if not self.check_recipe_loaded_halcon():
+            QMessageBox.warning(self, "需要配方", 
+                              "Halcon模式下，请先加载或创建配方后再进行识别。\n"
+                              "识别需要配方中的模型和路径数据。")
+            return
+        
         if self.last_frame is None:
             self.log("当前无图像，先启动相机")
             return
@@ -2943,6 +2986,18 @@ class MainWindow(QWidget):
     # ================== 点胶路径编辑 ==================
     def on_edit_path(self):
         """点击按钮：在黄金图片中编辑某个小框的点胶路径"""
+        
+        # ✅ Halcon模式检查
+        use_halcon = hasattr(self, 'chk_use_halcon') and self.chk_use_halcon.isChecked()
+        if use_halcon:
+            # 检查是否已加载配方
+            current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
+            if "未加载" in current_recipe:
+                QMessageBox.warning(self, "需要配方", 
+                                  "Halcon模式下，请先加载或创建配方后再编辑路径。\n"
+                                  "路径将保存到配方中，而非全局配置。")
+                return
+        
         self.log("🧵 打开点胶路径示教窗口（默认小框 index=0）")
 
         # ====== ✅ 3按钮选择逻辑 ======
@@ -2997,12 +3052,19 @@ class MainWindow(QWidget):
 
         from core.path_teach import run_path_teach
         
+        # ⚠️ 确定保存目录：Halcon模式使用配方目录，OpenCV模式使用全局config
+        save_directory = None
+        if use_halcon:
+            current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
+            if "未加载" not in current_recipe:
+                save_directory = self.product_manager.get_product_path(current_recipe)
+        
         # 暂时默认编辑第 0 个格子
         cell_idx = 0
         self.log(f"🧵 启动路径编辑器 (Cell {cell_idx})...")
         
         # 运行编辑器 (会阻塞直到窗口关闭)
-        ok = run_path_teach(cell_index=cell_idx)
+        ok = run_path_teach(cell_index=cell_idx, save_dir=save_directory)
         
         if ok:
             self.log(f"✅ 路径示教完成 (Cell {cell_idx})")
@@ -3016,16 +3078,36 @@ class MainWindow(QWidget):
                 self.halcon_path_template = None
                 self.log("🔄 已清除 Halcon 路径缓存，下次识别将重新计算")
             
-            # [FIX] Reload self.dots so on_save_recipe picks up the changes
+            # [FIX] Reload self.dots and self.polys from the correct location
             try:
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-                dots_path = os.path.join(base_dir, "config", "disp_dots_cell0.npy")
+                # ⭐ 从正确的目录加载：配方目录（Halcon）或全局config（OpenCV）
+                load_dir = save_directory if save_directory else os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
+                self.log(f"🔍 DEBUG: 从目录加载路径: {load_dir}")
+                
+                # 加载dots
+                dots_path = os.path.join(load_dir, f"disp_dots_cell{cell_idx}.npy")
+                self.log(f"🔍 DEBUG: 检查dots文件: {dots_path}, 存在={os.path.exists(dots_path)}")
                 if os.path.exists(dots_path):
-                    import numpy as np # Import numpy here as it's used in this block
                     self.dots = np.load(dots_path)
-                    self.log(f"✅ 已重新加载内存路径: {len(self.dots)} points")
+                    self.log(f"✅ 已重新加载点路径: {len(self.dots)} points")
+                else:
+                    self.dots = []
+                    self.log("ℹ️ 无点路径数据")
+                
+                # 加载polys
+                polys_path = os.path.join(load_dir, f"disp_poly_cell{cell_idx}.npy")
+                self.log(f"🔍 DEBUG: 检查poly文件: {polys_path}, 存在={os.path.exists(polys_path)}")
+                if os.path.exists(polys_path):
+                    self.polys = np.load(polys_path, allow_pickle=True)
+                    self.log(f"✅ 已重新加载线路径: {len(self.polys)} lines")
+                else:
+                    self.polys = []
+                    self.log("ℹ️ 无线路径数据")
             except Exception as e:
-                self.log(f"⚠ 重新加载内存路径失败: {e}")
+                self.log(f"⚠ 重新加载路径失败: {e}")
+            
+            # ⭐ 重要：更新按钮状态，因为路径已改变
+            self.update_button_states()
         else:
             self.log("⚠ 路径示教取消或未保存")
     # ================== 点胶任务按钮（占位） ==================
@@ -3163,7 +3245,7 @@ class MainWindow(QWidget):
         if not os.path.exists(recipe_dir):
             os.makedirs(recipe_dir)
             
-        model_path = os.path.join(recipe_dir, "model.shm")
+        model_path = os.path.join(recipe_dir, f"{name}.shm")
         
         # Call Halcon Logic (Synchronous for now, or Worker)
         # For this step, we might need to rely on the existing "run_training_script" logic 
@@ -3173,6 +3255,7 @@ class MainWindow(QWidget):
         try:
             # Try to copy the image to recipe dir
             # [FIX] Ensure the saved image is FLIPPED (Upright) to match path_teach and live view
+            dest_img_path = os.path.join(recipe_dir, "reference.png")
             # shutil.copy2(img_path, dest_img_path) 
             raw_img = cv2.imread(img_path)
             if raw_img is not None:
@@ -3219,8 +3302,9 @@ class MainWindow(QWidget):
                 # 3.5 Create Initial Config (⭐ Complete Current Params)
                 initial_config = {
                     # === 视觉参数 ===
-                    'vision_offset_x': self.vision_offset_x,
-                    'vision_offset_y': self.vision_offset_y,
+                    # ⭐ 新配方默认偏移为0（与启动时未加载配方一致）
+                    'vision_offset_x': 0.0,
+                    'vision_offset_y': 0.0,
                     'exposure': self.spn_exp.value() if hasattr(self, 'spn_exp') else 200.0,
                     'gain': self.spn_gain.value() if hasattr(self, 'spn_gain') else 10.0,
                     'gamma': self.spn_gamma.value() if hasattr(self, 'spn_gamma') else 1.0,
@@ -3248,26 +3332,27 @@ class MainWindow(QWidget):
                     'z_base': self.z_base,
                     
                     # === Halcon 模型信息 ===
+                    'model_file': f"{name}.shm",
                     'model_row': origin_row,
                     'model_col': origin_col,
                     'use_halcon': self.chk_use_halcon.isChecked() if hasattr(self, 'chk_use_halcon') else False,
                 }
-                # Use current path if available, or empty
-                current_path = getattr(self, 'dots', [])
-                current_polys = getattr(self, 'polys', [])
+                # 4. Save Recipe with initial empty paths
+                success, msg = self.recipe_manager.save_recipe(
+                    name,
+                    config_data=initial_config,
+                    path_points=None,  # No paths initially
+                    path_polys=None
+                )
                 
-                # Try load polys from file if empty (initial case)
-                if not current_polys:
-                     try:
-                        p_path = os.path.join(self.config_dir, "disp_poly_cell0.npy")
-                        if os.path.exists(p_path):
-                            current_polys = np.load(p_path, allow_pickle=True)
-                     except: pass
-
-                self.recipe_manager.save_recipe(name, initial_config, current_path, current_polys)
-                
-                # 4. Auto-load
-                self.on_load_recipe_by_name(name)
+                if success:
+                    # ⭐ 清空内存中的旧路径数据（新配方应该是干净的）
+                    self.dots = []
+                    self.polys = []
+                    
+                    self.log(f"✅ 配方 '{name}' 已创建（路径为空，可开始编辑）")
+                    # Auto-load the new recipe
+                    self.on_load_recipe_by_name(name)
             else:
                 self.log(f"❌ 训练失败: {msg}")
 
@@ -3581,30 +3666,37 @@ class MainWindow(QWidget):
         self.log(f"✅ 已恢复所有参数: 速度XY={int(self.feedrate_xy)}, 偏移X={self.nozzle_offset_x:.2f}, Y={self.nozzle_offset_y:.2f}, Z基准={self.z_base:.2f}")
             
         # 2. Load Model
-        # Assuming model.shm in recipe dir
+        # Use model_file from config, fallback to model.shm
         recipe_dir = self.recipe_manager.get_recipe_path(name)
-        model_path = os.path.join(recipe_dir, "model.shm")
+        model_file = config.get('model_file', 'model.shm')
+        model_path = os.path.join(recipe_dir, model_file)
         if os.path.exists(model_path):
             ok = self.halcon_manager.set_model_path(model_path)
             if ok:
-                self.log(f"✅ 模型已更新: {os.path.basename(model_path)}")
+                self.log(f"✅ 模型已更新: {model_file}")
             else:
-                self.log("❌ 模型加载失败 (HalconManager Error)")
+                self.log(f"⚠️ 模型更新失败: {model_file}")
         else:
-            self.log("⚠️ 配方目录中未找到 model.shm")
+            self.log(f"⚠️ 配方目录中未找到 {model_file}")
 
         # 3. Load Path
         if path_data is not None:
-            # Update global dots
+            # Update dots
             self.dots = path_data
-            
-            # Save to the "active" path file so it persists across restarts if we don't use recipe manager on init
-            np.save(os.path.join(self.config_dir, "disp_dots_cell0.npy"), self.dots)
+            # ⚠️ In Halcon mode, DON'T save to global config!
+            # Paths stay in recipe only
+            use_halcon = config.get('use_halcon', False)
+            if not use_halcon:
+                # OpenCV mode: save to global for compatibility
+                np.save(os.path.join(self.config_dir, "disp_dots_cell0.npy"), self.dots)
             self.log(f"✅ 点路径已加载 ({len(self.dots)} points)")
             
         if poly_data is not None:
             self.polys = poly_data
-            np.save(os.path.join(self.config_dir, "disp_poly_cell0.npy"), self.polys)
+            use_halcon = config.get('use_halcon', False)
+            if not use_halcon:
+                # OpenCV mode: save to global
+                np.save(os.path.join(self.config_dir, "disp_poly_cell0.npy"), self.polys)
             self.log(f"✅ 线路径已加载 ({len(self.polys)} lines)")
         
         self.lbl_recipe_name.setText(name)
@@ -3864,13 +3956,22 @@ class MainWindow(QWidget):
         按钮：相机空跑 (原虚拟跑)
         使用相机中心进行路径演示，不加偏移，使用【相机专用】高度参数。
         """
+        # ✅ Halcon模式检查
+        if not self.check_recipe_loaded_halcon():
+            QMessageBox.warning(self, "需要配方", 
+                              "Halcon模式下，请先加载或创建配方后再进行空跑。\n"
+                              "空跑需要配方中的路径数据。")
+            return
+        
         # 准备相机高度参数
         height_params = {
             'safe_z_cavity': self.cam_safe_z_cavity,
             'safe_z_product': self.cam_safe_z_product,
             'work_z': self.cam_work_z,
             'speed_xy': int(self.feedrate_xy),
-            'speed_z': int(self.feedrate_z)
+            'speed_z': int(self.feedrate_z),
+            'dwell_ms': self.dwell_ms,
+            'line_dwell_ms': self.line_dwell_ms
         }
         
         def save_cam_params(dialog):
@@ -3893,6 +3994,10 @@ class MainWindow(QWidget):
             self.sld_spd_z.blockSignals(False)
             self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
 
+            # Save dwell times
+            self.dwell_ms = dialog.dwell_ms
+            self.line_dwell_ms = dialog.line_dwell_ms
+
             self.save_app_settings()
 
         self._prepare_dry_run(
@@ -3907,6 +4012,13 @@ class MainWindow(QWidget):
         按钮：针头空跑
         使用针头进行路径演示，加上偏移，使用【主界面】高度参数。
         """
+        # ✅ Halcon模式检查
+        if not self.check_recipe_loaded_halcon():
+            QMessageBox.warning(self, "需要配方", 
+                              "Halcon模式下，请先加载或创建配方后再进行空跑。\n"
+                              "空跑需要配方中的路径数据。")
+            return
+        
         # 0. 检查参数是否设置
         if self.safe_z_cavity is None or self.safe_z_product is None or self.work_z is None:
              QMessageBox.warning(self, "参数未设置", "检测到针头高度参数未设置！\n\n请先在批量运行或设置中配置高度参数。")
@@ -3918,7 +4030,9 @@ class MainWindow(QWidget):
             'safe_z_product': float(self.safe_z_product),
             'work_z': float(self.work_z),
             'speed_xy': int(self.feedrate_xy),
-            'speed_z': int(self.feedrate_z)
+            'speed_z': int(self.feedrate_z),
+            'dwell_ms': self.dwell_ms,
+            'line_dwell_ms': self.line_dwell_ms
         }
 
         def save_nozzle_params(dialog):
@@ -3942,6 +4056,10 @@ class MainWindow(QWidget):
             self.sld_spd_z.setValue(int(self.feedrate_z))
             self.sld_spd_z.blockSignals(False)
             self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+
+            # Save dwell times
+            self.dwell_ms = dialog.dwell_ms
+            self.line_dwell_ms = dialog.line_dwell_ms
 
             self.save_app_settings()
 
@@ -4565,8 +4683,17 @@ class MainWindow(QWidget):
             # Do this FIRST to avoid expensive image loading if no paths exist
             segments = []
             
+            # Determine path directory: use product directory if product loaded, else config
+            path_dir = config_dir
+            current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
+            if current_recipe and "未加载" not in current_recipe:
+                path_dir = self.product_manager.get_product_path(current_recipe)
+                print(f"[Halcon] Loading paths from product: {path_dir}")
+            else:
+                print(f"[Halcon] Loading paths from global config: {path_dir}")
+            
             # Poly
-            poly_path = os.path.join(config_dir, "disp_poly_cell0.npy")
+            poly_path = os.path.join(path_dir, "disp_poly_cell0.npy")
             if os.path.exists(poly_path):
                 raw = np.load(poly_path, allow_pickle=True)
                 if isinstance(raw, np.ndarray):
@@ -4580,7 +4707,7 @@ class MainWindow(QWidget):
                  print(f"[Halcon] Poly file not found: {poly_path}")
             
             # Dots
-            dots_path = os.path.join(config_dir, "disp_dots_cell0.npy")
+            dots_path = os.path.join(path_dir, "disp_dots_cell0.npy")
             if os.path.exists(dots_path):
                 dots = np.load(dots_path, allow_pickle=True)
                 if dots.size > 0:
@@ -4599,35 +4726,17 @@ class MainWindow(QWidget):
             gray_gold = None
             used_path = "mold2.png"
             
-            # 0. Try Recipe Image FIRST (If a recipe is loaded)
+            # 0. Try Product Image FIRST (If a product is loaded)
             # This is CRITICAL for getting the correct Minv aligned with the Model
             current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
             if current_recipe and "未加载" not in current_recipe:
-                 recipe_img_path = os.path.join(self.recipe_manager.get_recipe_path(current_recipe), "image.png")
-                 if os.path.exists(recipe_img_path):
-                     print(f"[Halcon] Using Recipe Image: {recipe_img_path}")
-                     img_raw = cv2.imread(recipe_img_path)
-                     if img_raw is not None:
-                          # Assuming recipe image is SAVED AS SEEN (which is rotated 180 if camera is upside down)
-                          # BUT our path is drawn on top of the rotated image.
-                          # We need to ensure we process it in the same orientation as path teaching.
-                          
-                          # Image on disk (png) is usually raw pixels.
-                          # Camera feed is flipped. Path Editor shows flipped.
-                          # on_train_model -> saves `image.png` from file selection? Or capture?
-                          # If from capture, it's raw.
-                          # If from external file, it's raw.
-                          
-                          # Path Editor (`run_path_teach`) -> reads `img_path`.
-                          # If `img_path` is raw, Editor uses raw.
-                          
-                          # But wait, `get_vision_result` (Live View) uses `cv2.flip(img, -1)`.
-                          # So live view is rotated 180.
-                          # If user trains on a "flipped" image, `image.png` is flipped.
-                          
-                          # Let's trust `gray_gold = cv2.imread`.
-                          gray_gold = cv2.cvtColor(img_raw, cv2.COLOR_BGR2GRAY)
-                          used_path = recipe_img_path
+                recipe_img_path = os.path.join(self.product_manager.get_product_path(current_recipe), "reference.png")
+                if os.path.exists(recipe_img_path):
+                    print(f"[Halcon] Using Product Image: {recipe_img_path}")
+                    img_raw = cv2.imread(recipe_img_path)
+                    if img_raw is not None:
+                        gray_gold = cv2.cvtColor(img_raw, cv2.COLOR_BGR2GRAY)
+                        used_path = recipe_img_path
 
             # 1. Try latest capture first (User Request)
             # latest_capture_path is likely absolute if from QFileDialog, but let's be safe
@@ -4725,6 +4834,307 @@ class MainWindow(QWidget):
             print(f"[Halcon] Template compute error: {e}")
             import traceback
             traceback.print_exc()
+
+    # ================== 产品管理方法 (Product Management) ==================
+    
+    def on_halcon_toggled(self):
+        """Halcon复选框切换"""
+        enabled = self.chk_use_halcon.isChecked()
+        
+        if enabled and not self.halcon_manager.is_initialized:
+            if not self.halcon_manager.init_engine():
+                QMessageBox.warning(self, "错误", "Halcon引擎初始化失败\n请确保已安装mvtec-halcon")
+                self.chk_use_halcon.setChecked(False)
+                return
+        
+        self.update_button_states()
+        self.log(f"Halcon模式: {'启用' if enabled else '禁用'}")
+    
+    def on_train_model(self):
+        """训练新模型"""
+        # 1. 选择图片
+        img_path, _ = QFileDialog.getOpenFileName(
+            self, "选择训练图像", "", "Images (*.png *.jpg *.bmp)")
+        if not img_path:
+            return
+        
+        # 2. 输入产品名
+        name, ok = QInputDialog.getText(self, "新建产品", "请输入产品名称:")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        
+        # 3. 检查是否已存在
+        if name in self.product_manager.list_products():
+            reply = QMessageBox.question(
+                self, "产品已存在", 
+                f"产品 '{name}' 已存在，是否覆盖？",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+        
+        self.log(f"📝 开始训练产品: {name}")
+        
+        # 4. 收集初始配置
+        initial_config = {
+            'vision_offset_x': 0.0,
+            'vision_offset_y': 0.0,
+            'exposure': self.spn_exp.value() if hasattr(self, 'spn_exp') else 4.4,
+            'gain': self.spn_gain.value() if hasattr(self, 'spn_gain') else 5.5,
+            'gamma': self.spn_gamma.value() if hasattr(self, 'spn_gamma') else 2.6,
+            'feedrate_xy': self.feedrate_xy,
+            'feedrate_z': self.feedrate_z,
+            'accel': self.accel,
+            'jog_step_mm': self.jog_step_mm,
+            'safe_z_cavity': self.safe_z_cavity,
+            'safe_z_product': self.safe_z_product,
+            'work_z': self.work_z,
+            'nozzle_offset_x': self.nozzle_offset_x,
+            'nozzle_offset_y': self.nozzle_offset_y,
+            'z_base': self.z_base,
+        }
+        
+        # 5. 调用HalconProductManager训练
+        success, msg = self.halcon_product.train_new_product(
+            img_path, name, initial_config
+        )
+        
+        if success:
+            self.current_product = name
+            self.lbl_recipe_name.setText(name)
+            self.lbl_recipe_name.setStyleSheet("color: #10B981; font-weight: bold;")
+            
+            # 同步模型参数
+            self.model_ref_row = self.halcon_product.model_ref_row
+            self.model_ref_col = self.halcon_product.model_ref_col
+            
+            # 清空路径
+            self.dots = []
+            self.polys = []
+            
+            # 清除缓存
+            if hasattr(self, 'halcon_path_template'):
+                self.halcon_path_template = None
+            
+            self.update_button_states()
+            self.log(f"✅ {msg}")
+            QMessageBox.information(self, "成功", f"产品 '{name}' 训练完成！\n可以开始编辑路径。")
+        else:
+            QMessageBox.critical(self, "训练失败", msg)
+            self.log(f"❌ {msg}")
+    
+    def on_load_recipe(self):
+        """加载产品（保持方法名兼容性）"""
+        self.on_load_product()
+    
+    def on_load_product(self):
+        """加载产品"""
+        products = self.product_manager.list_products()
+        if not products:
+            QMessageBox.information(self, "提示", "没有可用的产品\n请先训练新模型")
+            return
+        
+        # 选择产品
+        name, ok = QInputDialog.getItem(
+            self, "加载产品", "选择产品:", products, 0, False
+        )
+        if not ok or not name:
+            return
+        
+        # 显示操作选择对话框
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("产品操作")
+        msg_box.setText(f"产品: {name}\n\n请选择操作:")
+        
+        btn_load = msg_box.addButton("加载", QMessageBox.AcceptRole)
+        btn_delete = msg_box.addButton("删除", QMessageBox.DestructiveRole)
+        btn_cancel = msg_box.addButton("取消", QMessageBox.RejectRole)
+        
+        msg_box.exec_()
+        
+        clicked = msg_box.clickedButton()
+        
+        if clicked == btn_delete:
+            # 删除产品
+            reply = QMessageBox.question(
+                self, "确认删除",
+                f"确定要删除产品 '{name}' 吗？\n此操作不可恢复！",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                try:
+                    import shutil
+                    product_path = self.product_manager.get_product_path(name)
+                    if os.path.exists(product_path):
+                        shutil.rmtree(product_path)
+                        self.log(f"✅ 已删除产品: {name}")
+                        QMessageBox.information(self, "成功", f"产品 '{name}' 已删除")
+                        # 如果删除的是当前产品，清空状态
+                        if self.current_product == name:
+                            self.current_product = None
+                            self.lbl_recipe_name.setText("未加载")
+                            self.lbl_recipe_name.setStyleSheet("color: red; font-weight: bold;")
+                            self.dots = []
+                            self.polys = []
+                            self.update_button_states()
+                except Exception as e:
+                    QMessageBox.critical(self, "删除失败", f"无法删除产品: {e}")
+                    self.log(f"❌ 删除产品失败: {e}")
+            return
+        
+        if clicked != btn_load:
+            return
+        
+        # 加载产品
+        self.log(f"📂 正在加载产品: {name}")
+        
+        success, msg = self.halcon_product.load_product(name)
+        
+        if success:
+            self.current_product = name
+            self.lbl_recipe_name.setText(name)
+            self.lbl_recipe_name.setStyleSheet("color: #10B981; font-weight: bold;")
+            
+            # 同步参数到UI
+            self.model_ref_row = self.halcon_product.model_ref_row
+            self.model_ref_col = self.halcon_product.model_ref_col
+            self.vision_offset_x = self.halcon_product.vision_offset_x
+            self.vision_offset_y = self.halcon_product.vision_offset_y
+            
+            # 更新UI显示
+            if hasattr(self, 'spn_vision_offset_x'):
+                self.spn_vision_offset_x.blockSignals(True)
+                self.spn_vision_offset_x.setValue(self.vision_offset_x)
+                self.spn_vision_offset_x.blockSignals(False)
+            if hasattr(self, 'spn_vision_offset_y'):
+                self.spn_vision_offset_y.blockSignals(True)
+                self.spn_vision_offset_y.setValue(self.vision_offset_y)
+                self.spn_vision_offset_y.blockSignals(False)
+            
+            # 同步路径
+            paths = self.halcon_product.get_current_paths()
+            self.dots = paths['dots'] if paths['dots'] is not None else []
+            self.polys = paths['polys'] if paths['polys'] is not None else []
+            
+            # 清除缓存
+            if hasattr(self, 'halcon_path_template'):
+                self.halcon_path_template = None
+            
+            self.update_button_states()
+            self.log(f"✅ {msg}")
+            self.log(f"📊 路径: {len(self.dots)} 点, {len(self.polys)} 线")
+        else:
+            QMessageBox.critical(self, "加载失败", msg)
+            self.log(f"❌ {msg}")
+    
+    def on_save_recipe(self):
+        """保存产品（保持方法名兼容性）"""
+        self.on_save_product()
+    
+    def on_save_product(self):
+        """保存当前产品"""
+        if not self.current_product:
+            QMessageBox.warning(self, "提示", "没有加载的产品\n请先训练或加载产品")
+            return
+        
+        self.log(f"💾 正在保存产品: {self.current_product}")
+        
+        # 收集配置
+        config_data = {
+            'vision_offset_x': self.vision_offset_x,
+            'vision_offset_y': self.vision_offset_y,
+            'exposure': self.spn_exp.value() if hasattr(self, 'spn_exp') else 4.4,
+            'gain': self.spn_gain.value() if hasattr(self, 'spn_gain') else 5.5,
+            'gamma': self.spn_gamma.value() if hasattr(self, 'spn_gamma') else 2.6,
+            'feedrate_xy': self.feedrate_xy,
+            'feedrate_z': self.feedrate_z,
+            'accel': self.accel,
+            'jog_step_mm': self.jog_step_mm,
+            'safe_z_cavity': self.safe_z_cavity,
+            'safe_z_product': self.safe_z_product,
+            'work_z': self.work_z,
+            'nozzle_offset_x': self.nozzle_offset_x,
+            'nozzle_offset_y': self.nozzle_offset_y,
+            'z_base': self.z_base,
+        }
+        
+        # 更新HalconProductManager的路径
+        self.halcon_product.save_paths_to_product(self.dots, self.polys)
+        
+        success, msg = self.halcon_product.save_product(config_data)
+        
+        if success:
+            self.log(f"✅ {msg}")
+            QMessageBox.information(self, "成功", f"产品 '{self.current_product}' 已保存")
+        else:
+            QMessageBox.critical(self, "保存失败", msg)
+            self.log(f"❌ {msg}")
+
+    # ================== 产品管理方法 (Product Management) ==================
+    
+    def migrate_recipes_to_produces(self):
+        """启动时自动迁移recipes→produces"""
+        if os.path.exists('recipes') and not os.path.exists('produces'):
+            self.log("ℹ️ 检测到旧版recipes目录，正在迁移...")
+            try:
+                shutil.move('recipes', 'produces')
+                self.log("✅ 已迁移 recipes/ → produces/")
+            except Exception as e:
+                self.log(f"❌ 迁移失败: {e}")
+    
+    def update_button_states(self):
+        """根据Halcon状态、产品加载状态和路径存在更新按钮"""
+        halcon_enabled = hasattr(self, 'chk_use_halcon') and self.chk_use_halcon.isChecked()
+        product_loaded = self.current_product is not None
+        has_paths = len(self.dots) > 0 or len(self.polys) > 0
+        
+        # === 1. Halcon专用按钮（默认全部禁用，只有勾选Halcon才启用） ===
+        # 训练新模型：只要Halcon启用就可以用
+        if hasattr(self, 'btn_train_model'):
+            self.btn_train_model.setEnabled(halcon_enabled)
+        
+        # 加载产品：只要Halcon启用就可以用
+        if hasattr(self, 'btn_load_recipe'):
+            self.btn_load_recipe.setEnabled(halcon_enabled)
+        
+        # 保存产品：需要Halcon启用 且 产品已加载
+        if hasattr(self, 'btn_save_recipe'):
+            self.btn_save_recipe.setEnabled(halcon_enabled and product_loaded)
+        
+        # === 2. 功能按钮细粒度控制 ===
+        if halcon_enabled:
+            # Halcon模式：需要根据产品和路径状态细分
+            # 编辑路径：产品加载后就可用（新建或已有产品都可以编辑）
+            edit_enabled = product_loaded
+            
+            # 识别、空跑、批量：需要有路径
+            run_enabled = product_loaded and has_paths
+        else:
+            # OpenCV模式：全部可用
+            edit_enabled = True
+            run_enabled = True
+        
+        # 编辑按钮
+        if hasattr(self, 'btn_path'):
+            self.btn_path.setEnabled(edit_enabled)
+        
+        # 识别按钮
+        if hasattr(self, 'btn_detect'):
+            self.btn_detect.setEnabled(run_enabled)
+        
+        # 空跑按钮
+        if hasattr(self, 'btn_virtual'):
+            self.btn_virtual.setEnabled(run_enabled)
+        if hasattr(self, 'btn_dry_run'):
+            self.btn_dry_run.setEnabled(run_enabled)
+        
+        # 批量按钮
+        if hasattr(self, 'btn_batch_run'):
+            self.btn_batch_run.setEnabled(run_enabled)
+
+
+
 
 
 if __name__ == "__main__":

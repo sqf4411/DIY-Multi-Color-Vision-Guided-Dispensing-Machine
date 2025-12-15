@@ -37,7 +37,10 @@ class ConfigManager:
         # Camera-specific Z heights
         "cam_safe_z_cavity": 5.0,
         "cam_safe_z_product": 20.0,
-        "cam_work_z": 0.0
+        "cam_work_z": 0.0,
+        # Dispensing dwell times
+        "dwell_ms": 100,           # Point dispensing dwell (ms)
+        "line_dwell_ms": 0         # Line start dwell (ms)
     }
 
     def __init__(self):

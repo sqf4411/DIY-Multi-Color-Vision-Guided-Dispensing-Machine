@@ -173,7 +173,13 @@ class DryRunDialog(QDialog):
             
             for seg_idx, p_px in enumerate(prod_segments):
                 # 1. Convert pixels to mm
-                delta_px = p_px - np.array([self.center_x, self.center_y])
+                # [FIX] Handle PathSegment objects
+                if hasattr(p_px, 'points'):
+                    path_array = np.array(p_px.points)
+                else:
+                    path_array = p_px
+                
+                delta_px = path_array - np.array([self.center_x, self.center_y])
                 delta_mm_x = delta_px[:, 0] * self.m[0, 0] + delta_px[:, 1] * self.m[0, 1]
                 delta_mm_y = delta_px[:, 0] * self.m[1, 0] + delta_px[:, 1] * self.m[1, 1]
 

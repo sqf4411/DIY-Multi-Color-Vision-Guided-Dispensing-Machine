@@ -1,0 +1,21 @@
+{
+  "vision_offset_x": 0.0,
+  "vision_offset_y": 0.0,
+  "exposure": 4.4,
+  "gain": 4.7,
+  "gamma": 3.2,
+  "feedrate_xy": 1172,
+  "feedrate_z": 359,
+  "accel": 452.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 100.0,
+  "safe_z_product": 100.0,
+  "work_z": 100.0,
+  "nozzle_offset_x": 0.0,
+  "nozzle_offset_y": 0.0,
+  "z_base": 0.0,
+  "model_row": 0,
+  "model_col": 0,
+  "product_name": "D02",
+  "model_file": "D02.shm"
+}

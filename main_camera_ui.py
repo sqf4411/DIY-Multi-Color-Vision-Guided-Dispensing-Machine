@@ -5090,6 +5090,100 @@ class MainWindow(QWidget):
             self.dots = paths['dots'] if paths['dots'] is not None else []
             self.polys = paths['polys'] if paths['polys'] is not None else []
             
+            # ⭐ 加载并应用配方的所有参数
+            config = self.product_manager.load_product_config(name)
+            if config:
+                # 1. 相机参数（直接应用到相机硬件）
+                if 'exposure' in config:
+                    exp_ms = config['exposure']  # 单位：ms
+                    if hasattr(self, 'spn_exp'):
+                        self.spn_exp.blockSignals(True)
+                        self.spn_exp.setValue(exp_ms)
+                        self.spn_exp.blockSignals(False)
+                    # ⭐ 同步slider (0-100, 对应0-10ms)
+                    if hasattr(self, 'sld_exp'):
+                        slider_val = int(exp_ms * 10.0)
+                        self.sld_exp.blockSignals(True)
+                        self.sld_exp.setValue(slider_val)
+                        self.sld_exp.blockSignals(False)
+                    # 应用到相机（单位：us）
+                    self.camera_manager.set_exposure(exp_ms * 1000.0)
+                
+                if 'gain' in config:
+                    gain_val = config['gain']
+                    if hasattr(self, 'spn_gain'):
+                        self.spn_gain.blockSignals(True)
+                        self.spn_gain.setValue(gain_val)
+                        self.spn_gain.blockSignals(False)
+                    # ⭐ 同步slider (0-100, 对应0-10dB)
+                    if hasattr(self, 'sld_gain'):
+                        slider_val = int(gain_val * 10)
+                        self.sld_gain.blockSignals(True)
+                        self.sld_gain.setValue(slider_val)
+                        self.sld_gain.blockSignals(False)
+                    # 应用到相机
+                    self.camera_manager.set_gain(gain_val)
+                
+                if 'gamma' in config:
+                    gamma_val = config['gamma']
+                    if hasattr(self, 'spn_gamma'):
+                        self.spn_gamma.blockSignals(True)
+                        self.spn_gamma.setValue(gamma_val)
+                        self.spn_gamma.blockSignals(False)
+                    # ⭐ 同步slider (1-40, 对应0.1-4.0)
+                    if hasattr(self, 'sld_gamma'):
+                        slider_val = int(gamma_val * 10)
+                        self.sld_gamma.blockSignals(True)
+                        self.sld_gamma.setValue(slider_val)
+                        self.sld_gamma.blockSignals(False)
+                    # 应用到相机
+                    self.camera_manager.set_gamma(gamma_val)
+                
+                # 2. 运动参数
+                if 'feedrate_xy' in config:
+                    self.feedrate_xy = config['feedrate_xy']
+                    if hasattr(self, 'sld_spd_xy'):
+                        self.sld_spd_xy.blockSignals(True)
+                        self.sld_spd_xy.setValue(int(self.feedrate_xy))
+                        self.sld_spd_xy.blockSignals(False)
+                        self.lbl_spd_xy.setText(f"XY 速度: {int(self.feedrate_xy)}")
+                
+                if 'feedrate_z' in config:
+                    self.feedrate_z = config['feedrate_z']
+                    if hasattr(self, 'sld_spd_z'):
+                        self.sld_spd_z.blockSignals(True)
+                        self.sld_spd_z.setValue(int(self.feedrate_z))
+                        self.sld_spd_z.blockSignals(False)
+                        self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+                
+                if 'accel' in config:
+                    self.accel = config['accel']
+                
+                if 'jog_step_mm' in config:
+                    self.jog_step_mm = config['jog_step_mm']
+                
+                # 3. Z高度参数
+                if 'safe_z_cavity' in config:
+                    self.safe_z_cavity = config['safe_z_cavity']
+                
+                if 'safe_z_product' in config:
+                    self.safe_z_product = config['safe_z_product']
+                
+                if 'work_z' in config:
+                    self.work_z = config['work_z']
+                
+                # 4. 针头偏移
+                if 'nozzle_offset_x' in config:
+                    self.nozzle_offset_x = config['nozzle_offset_x']
+                
+                if 'nozzle_offset_y' in config:
+                    self.nozzle_offset_y = config['nozzle_offset_y']
+                
+                if 'z_base' in config:
+                    self.z_base = config['z_base']
+                
+                self.log(f"✅ 已加载配方参数: 曝光={config.get('exposure', '?')}, XY速度={int(self.feedrate_xy)}, Z={self.safe_z_product:.1f}")
+            
             # 清除缓存
             if hasattr(self, 'halcon_path_template'):
                 self.halcon_path_template = None

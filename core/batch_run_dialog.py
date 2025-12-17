@@ -297,29 +297,24 @@ class BatchWorker(QThread):
                 # Color/Valve Change Comments
                 lines.append(f"; Segment {seg_idx+1}: Type={seg_type}, Color={seg_color}, Dwell={dwell_ms}ms")
                 
-                # [NEW] Inject Valve Selection Tag
+                # Prepare Valve Commands
+                # Default to A1 if no color info
                 valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
-                if 0 <= seg_color < len(valve_macros):
-                    macro = valve_macros[seg_color]
+                current_valve = valve_macros[seg_color] if 0 <= seg_color < 4 else "A1_VALVE"
+                
+                # ON Sequence: Color -> A -> B
+                on_cmds = [current_valve, "VALVE_A_CTRL", "VALVE_B_CTRL"]
+                # OFF Sequence: B -> A -> Color
+                off_cmds = ["VALVE_B_CTRL", "VALVE_A_CTRL", current_valve]
+
+                # Helper to append commands
+                def append_valve_cmds(cmds, is_on):
                     if self.mode == 'real':
-                        lines.append(macro)
+                        for c in cmds: lines.append(c)
                     else:
-                        # In Dry Run, just show as comment to verify tags
-                        lines.append(f"; [Tag] {macro}")
-                # 目前仅作为注释
-                
-                # 定义颜色与阀门的映射关系
-                # Color 0 (A1): A1_VALVE + VALVE_A_CTRL + VALVE_B_CTRL
-                # Color 1 (A2): A2_VALVE + VALVE_A_CTRL + VALVE_B_CTRL
-                # ...
-                COLOR_VALVE_MAP = {
-                    0: ['A1_VALVE', 'VALVE_A_CTRL', 'VALVE_B_CTRL'],
-                    1: ['A2_VALVE', 'VALVE_A_CTRL', 'VALVE_B_CTRL'],
-                    2: ['A3_VALVE', 'VALVE_A_CTRL', 'VALVE_B_CTRL'],
-                    3: ['A4_VALVE', 'VALVE_A_CTRL', 'VALVE_B_CTRL'],
-                }
-                
-                target_valves = COLOR_VALVE_MAP.get(seg_color, ['VALVE_A_CTRL', 'VALVE_B_CTRL']) # Default A+B
+                        # Dry Run: Show as comment
+                        action = "ON" if is_on else "OFF"
+                        lines.append(f"; [Tag] {' + '.join(cmds)} ({action})")
 
                 first_pt = True
                 for (px, py) in path_points:
@@ -343,8 +338,7 @@ class BatchWorker(QThread):
                         # 3. 开阀逻辑 (如果需要出胶)
                         if valve_on:
                             lines.append(f"; Open Valves for Color {seg_color}")
-                            for pin_name in target_valves:
-                                lines.append(f"SET_PIN PIN={pin_name} VALUE=1")
+                            append_valve_cmds(on_cmds, True)
                                 
                         # 4. 点胶延时 (如果是 Dot)
                         if seg_type == 'dot' and dwell_ms > 0:
@@ -358,9 +352,7 @@ class BatchWorker(QThread):
                 # 一条路径段结束：关阀
                 if valve_on:
                     lines.append(f"; Close Valves for Color {seg_color}")
-                    # 关闭当前开启的所有阀门
-                    for pin_name in target_valves:
-                         lines.append(f"SET_PIN PIN={pin_name} VALUE=0")
+                    append_valve_cmds(off_cmds, False)
                 
                 # 抬升逻辑：
                 # 每一段结束后抬起点，防止刮擦 (用户建议：每段操作独立)

@@ -191,18 +191,7 @@ class DryRunDialog(QDialog):
 
                 gcode_lines.append(f";   Segment {seg_idx + 1}")
 
-                # [NEW] Inject Valve Selection Tag
-                # Multicolor path segments have 'color' attribute (0-3)
-                if hasattr(p_px, 'color'):
-                    valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
-                    color_idx = p_px.color
-                    if 0 <= color_idx < len(valve_macros):
-                        macro = valve_macros[color_idx]
-                        if self.is_real_run:
-                            gcode_lines.append(macro)
-                        else:
-                            # In Dry Run, just show as comment to verify tags
-                            gcode_lines.append(f"; [Tag] {macro}")
+                # [TAG REMOVED] Logic moved to dispense block
 
                 # 2. Move to Start Point
                 start_x, start_y = path_machine[0]
@@ -216,26 +205,44 @@ class DryRunDialog(QDialog):
                 gcode_lines.append(f"G0 Z{self.work_z:.2f} F{self.speed_z}")
 
                 # Check if it is a Dot (1 point) or Line (>1 points)
+                # Prepare Valve Commands
+                # Default to A1 if no color info
+                color_idx = getattr(p_px, 'color', 0)
+                valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
+                current_valve = valve_macros[color_idx] if 0 <= color_idx < 4 else "A1_VALVE"
+                
+                # ON Sequence: Color -> A -> B
+                on_cmds = [current_valve, "VALVE_A_CTRL", "VALVE_B_CTRL"]
+                # OFF Sequence: B -> A -> Color
+                off_cmds = ["VALVE_B_CTRL", "VALVE_A_CTRL", current_valve]
+
+                # Helper to append commands
+                def append_valve_cmds(cmds, is_on):
+                    if self.is_real_run:
+                        for c in cmds: gcode_lines.append(c)
+                    else:
+                        # Dry Run: Show as comment
+                        action = "ON" if is_on else "OFF"
+                        gcode_lines.append(f"; [Tag] {' + '.join(cmds)} ({action})")
+
                 if len(path_machine) == 1:
                     # --- Dot Dispensing ---
-                    # Dwell
                     if self.dwell_ms > 0:
-                        if self.is_real_run: gcode_lines.append("VALVE_ON")
+                        append_valve_cmds(on_cmds, True)
                         gcode_lines.append(f"G4 P{self.dwell_ms}")
-                        if self.is_real_run: gcode_lines.append("VALVE_OFF")
+                        append_valve_cmds(off_cmds, False)
                 else:
                     # --- Line Dispensing ---
-                    # Line Start Dwell
                     if self.line_dwell_ms > 0:
                         gcode_lines.append(f"G4 P{self.line_dwell_ms}")
 
                     # 4. Dispense Path
-                    if self.is_real_run: gcode_lines.append("VALVE_ON")
+                    append_valve_cmds(on_cmds, True)
                     for pt in path_machine[1:]:
                         pt_x = pt[0] + self.nozzle_offset_x
                         pt_y = pt[1] + self.nozzle_offset_y
                         gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{self.speed_xy}")
-                    if self.is_real_run: gcode_lines.append("VALVE_OFF")
+                    append_valve_cmds(off_cmds, False)
 
                 # 5. Lift after segment
                 # If this is the LAST segment of the product, lift to Product Safe Z

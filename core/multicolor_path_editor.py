@@ -304,6 +304,17 @@ class MultiColorPathEditor(QDialog):
             btn.setChecked(i == color)
         # 更新画布
         self.canvas.set_color(color)
+        
+        # [NEW] 如果当前有选中项，直接修改颜色 (便捷操作)
+        selected_rows = set()
+        for item in self.table.selectedItems():
+            selected_rows.add(item.row())
+        if selected_rows:
+            for row in selected_rows:
+                 if 0 <= row < self.path_list.count():
+                     self.path_list.get_all()[row].color = color
+            self.refresh_table()
+            self.update_canvas()
     
     def on_dwell_changed(self, value):
         """时间改变"""

@@ -597,7 +597,7 @@ class MainWindow(QWidget):
         self.camera_manager = CameraManager()
         self.halcon_manager = HalconManager()
         self.product_manager = ProductManager()  # 产品管理器
-        self.halcon_product = HalconProductManager(self.halcon_manager, self.product_manager)  # Halcon产品逻辑
+        self.halcon_product_manager = HalconProductManager(self.halcon_manager, self.product_manager)  # Halcon产品逻辑
         self.current_product = None  # 当前加载的产品名称
         self.camera_manager.get_frame_signal().connect(self.update_image) if self.camera_manager.get_frame_signal() else None
         # Load Config
@@ -2728,12 +2728,19 @@ class MainWindow(QWidget):
                     flat_paths.append(prod_paths)
 
             for path in flat_paths:
-                # path 是 (N, 2) 的数组，需要转成 int32
-                pts = path.reshape((-1, 1, 2)).astype(np.int32)
+                # [FIX] Handle PathSegment objects (Multicolor) vs numpy arrays (Legacy)
+                if hasattr(path, 'points'): # Duck typing for PathSegment
+                     # PathSegment stores points as list of lists [[x,y],...]
+                     # Convert to numpy for polylines
+                     pts = np.array(path.points, dtype=np.int32).reshape((-1, 1, 2))
+                else:
+                     # Legacy numpy array
+                     pts = path.reshape((-1, 1, 2)).astype(np.int32)
                 
-                if len(path) == 1:
+                if len(pts) == 1:
                     # Draw Dot (Magenta)
-                    cx, cy = int(path[0][0]), int(path[0][1])
+                    # pts is (N, 1, 2), so pts[0][0] is [x, y]
+                    cx, cy = int(pts[0][0][0]), int(pts[0][0][1])
                     # [USER ADJUST] 孤立点大小 (Radius): 2=小, 5=中, 8=大
                     cv2.circle(vis_img, (cx, cy), 5, (255, 0, 255), -1)
                 else:
@@ -2741,8 +2748,8 @@ class MainWindow(QWidget):
                     cv2.polylines(vis_img, [pts], False, (0, 255, 0), 2, cv2.LINE_AA)
 
                     # 标记起点
-                    if len(path) > 0:
-                        sx, sy = int(path[0][0]), int(path[0][1])
+                    if len(pts) > 0:
+                        sx, sy = int(pts[0][0][0]), int(pts[0][0][1])
                         # [USER ADJUST] 起点圆圈大小
                         cv2.circle(vis_img, (sx, sy), 3, (0, 0, 255), -1)
 
@@ -3047,7 +3054,16 @@ class MainWindow(QWidget):
                 # 虽然用户说"暂时不用实现连接"，但为了基本功能正常（比如能在识别后显示）
                 # 我们依然通知 manager 加载新数据。
                 if hasattr(self, 'halcon_product_manager') and self.halcon_product_manager:
-                     self.halcon_product_manager.load_product(current_recipe)
+                     self.halcon_product_manager.load_product(current_recipe, force=True)
+                     
+                     # [FIX] 同步更新 UI 实例的缓存
+                     self.current_segments = self.halcon_product_manager.get_current_segments()
+                     self.log(f"🔄 这里的缓存已更新，段数: {len(self.current_segments.segments) if self.current_segments else 0}")
+                     
+                     # [FIX] 重新计算 Halcon 模板 (关键！否则还是用旧的)
+                     # 传入 True 强制刷新
+                     self._compute_halcon_template(force_reload=True)
+                     
             else:
                 self.log("❌ 编辑取消或保存失败")
         except Exception as e:
@@ -4684,7 +4700,23 @@ class MainWindow(QWidget):
                             path_segments = self.halcon_path_template
                             
                             # 3. Transform & Draw Each Segment
-                            for pts in path_segments:
+                            for item in path_segments:
+                                seg_pts = None
+                                is_obj = False
+                                
+                                # Compatibility: Handle both PathSegment object and raw numpy array
+                                if hasattr(item, 'points'): # PathSegment
+                                    # Use cached numpy array if available (from _compute), else convert
+                                    if hasattr(item, 'points_np'):
+                                        pts = item.points_np
+                                    else:
+                                        pts = np.array(item.points, dtype=np.float32)
+                                    is_obj = True
+                                else:
+                                    pts = item # Expecting numpy array
+                                
+                                if pts is None or len(pts) == 0: continue
+
                                 # pts is already Centered relative to Halcon ROI Center (Reference Point)
                                 
                                 # b. Rotate
@@ -4710,17 +4742,21 @@ class MainWindow(QWidget):
                                 
                                 # d. Draw (Magenta)
                                 pts_draw = pts_transformed.astype(np.int32)
-                                is_closed = False # Dots might be tiny closed loops or just points
-                                # Heuristic: if len < 3, draw as point
+                                is_closed = False 
                                 if len(pts_draw) == 1:
-                                     # [USER ADJUST] 实时识别点大小
                                      cv2.circle(debug_img, tuple(pts_draw[0]), 4, (255, 0, 255), -1)
                                 else:
-                                     # [USER ADJUST] 实时识别线条粗细
                                      cv2.polylines(debug_img, [pts_draw], is_closed, (255, 0, 255), 4, cv2.LINE_AA)
                                 
-                                mold_segments.append(pts_transformed)
-                                
+                                # Append to results
+                                if is_obj:
+                                    # Create NEW PathSegment with FINAL coordinates
+                                    # This ensures G-code generator receives Absolute Pixels + Color Info
+                                    from core.path_segment import PathSegment
+                                    final_seg = PathSegment(item.type, item.color, pts_transformed.tolist(), item.dwell_ms)
+                                    mold_segments.append(final_seg)
+                                    mold_segments.append(pts_transformed)
+                            
                          except Exception as e:
                             print(f"[ERROR] Path draw failed: {e}")
                             
@@ -4740,7 +4776,7 @@ class MainWindow(QWidget):
             from core.mold_detector import get_paths_and_image
             return get_paths_and_image(gray_img)
 
-    def _compute_halcon_template(self):
+    def _compute_halcon_template(self, force_reload=False):
         """
         One-time computation:
         1. Load disp_poly & disp_dots (Warped Space) FIRST.
@@ -4750,11 +4786,15 @@ class MainWindow(QWidget):
         4. Project them to Raw Space
         5. Subtract Halcon ROI Center to get 'Relative Path' for Halcon
         """
+        if not force_reload and getattr(self, 'halcon_path_template', None):
+             return
+
         try:
             print("[Halcon] Computing offline path template...")
             import cv2
             import numpy as np
             from core.mold_detector import _find_big_mold
+            from core.path_segment import PathSegment
             
             # --- BASE DIR ---
             base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -4764,38 +4804,61 @@ class MainWindow(QWidget):
             # Do this FIRST to avoid expensive image loading if no paths exist
             segments = []
             
-            # Determine path directory: use product directory if product loaded, else config
-            path_dir = config_dir
-            current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
-            if current_recipe and "未加载" not in current_recipe:
-                path_dir = self.product_manager.get_product_path(current_recipe)
-                print(f"[Halcon] Loading paths from product: {path_dir}")
+            # [Fix] Prioritize In-Memory Paths (Loaded from JSON via ProductManager)
+            # 1. Try Multicolor Segments (New)
+            if hasattr(self, 'current_segments') and self.current_segments and self.current_segments.segments:
+                print(f"[Halcon] Using in-memory Multicolor Segments: {len(self.current_segments.segments)}")
+                # current_segments.segments is a list of PathSegment objects
+                segments.extend(self.current_segments.segments)
+                
+            # 2. Try Legacy Polys/Dots (Old)
+            elif hasattr(self, 'polys') and hasattr(self, 'dots') and (self.polys or self.dots):
+                print(f"[Halcon] Using in-memory Legacy paths: {len(self.polys)} polys, {len(self.dots)} dots")
+                # Polys
+                if self.polys:
+                    segments.extend([p.astype(np.float32) for p in self.polys])
+                # Dots
+                if self.dots:
+                     for d in self.dots:
+                         d_np = np.array(d, dtype=np.float32)
+                         if d_np.ndim == 1:
+                             segments.append(d_np.reshape(1, 2))
+                         elif d_np.ndim == 2:
+                             segments.append(d_np)
             else:
-                print(f"[Halcon] Loading paths from global config: {path_dir}")
-            
-            # Poly
-            poly_path = os.path.join(path_dir, "disp_poly_cell0.npy")
-            if os.path.exists(poly_path):
-                raw = np.load(poly_path, allow_pickle=True)
-                if isinstance(raw, np.ndarray):
-                     if raw.dtype == object: 
-                         segments.extend([s.astype(np.float32) for s in raw if s is not None])
-                     elif raw.ndim == 2:
-                         segments.append(raw.astype(np.float32))
-                elif isinstance(raw, list):
-                    segments.extend([np.array(s, dtype=np.float32) for s in raw])
-            else:
-                 print(f"[Halcon] Poly file not found: {poly_path}")
-            
-            # Dots
-            dots_path = os.path.join(path_dir, "disp_dots_cell0.npy")
-            if os.path.exists(dots_path):
-                dots = np.load(dots_path, allow_pickle=True)
-                if dots.size > 0:
-                    # Treat each dot as a 1-point segment (1, 2)
-                     if dots.ndim == 2:
-                         for d in dots:
-                             segments.append(d.reshape(1, 2).astype(np.float32))
+                # Fallback to disk (Legacy)
+                # Determine path directory: use product directory if product loaded, else config
+                path_dir = config_dir
+                current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
+                if current_recipe and "未加载" not in current_recipe:
+                    path_dir = self.product_manager.get_product_path(current_recipe)
+                    print(f"[Halcon] Loading paths from product (disk): {path_dir}")
+                else:
+                    print(f"[Halcon] Loading paths from global config: {path_dir}")
+                
+                # Poly
+                poly_path = os.path.join(path_dir, "disp_poly_cell0.npy")
+                if os.path.exists(poly_path):
+                    raw = np.load(poly_path, allow_pickle=True)
+                    if isinstance(raw, np.ndarray):
+                        if raw.dtype == object: 
+                            segments.extend([s.astype(np.float32) for s in raw if s is not None])
+                        elif raw.ndim == 2:
+                            segments.append(raw.astype(np.float32))
+                    elif isinstance(raw, list):
+                        segments.extend([np.array(s, dtype=np.float32) for s in raw])
+                else:
+                     print(f"[Halcon] Poly file not found: {poly_path}")
+                
+                # Dots
+                dots_path = os.path.join(path_dir, "disp_dots_cell0.npy")
+                if os.path.exists(dots_path):
+                    dots = np.load(dots_path, allow_pickle=True)
+                    if dots.size > 0:
+                        # Treat each dot as a 1-point segment (1, 2)
+                         if dots.ndim == 2:
+                             for d in dots:
+                                 segments.append(d.reshape(1, 2).astype(np.float32))
 
             if not segments:
                 print("[Halcon] ERR: No paths loaded. Stopping template computation.")
@@ -4898,18 +4961,53 @@ class MainWindow(QWidget):
             self.halcon_ref_center = roi_center
             ref_center = self.halcon_ref_center
             
+            self.halcon_ref_center = roi_center
+            ref_center = self.halcon_ref_center
+            
             final_template = []
+            
+            # [Fix] Handle PathSegment objects to preserve metadata (Color/Type)
+            # If segments list contains PathSegment objects (from PathSegmentList), use them.
+            # Otherwise (from .npy), they are just numpy arrays.
+            
+            from core.path_segment import PathSegment
+            
             for seg in segments:
-                # 1. Project Warped -> Raw
-                pts_w = seg.reshape(-1, 1, 2)
-                pts_raw = cv2.perspectiveTransform(pts_w, Minv).reshape(-1, 2)
-                
-                # 2. Subtract ROI Center
-                pts_rel = pts_raw - ref_center
-                final_template.append(pts_rel)
+                # 1. Check type
+                if isinstance(seg, PathSegment):
+                    # It's an object. Extract points.
+                    # Note: seg.points might be list of tuples. Convert to numpy.
+                    pts_np = np.array(seg.points, dtype=np.float32)
+                    pts_w = pts_np.reshape(-1, 1, 2)
+                    
+                    # Project Warped -> Raw
+                    pts_raw = cv2.perspectiveTransform(pts_w, Minv).reshape(-1, 2)
+                    
+                    # Subtract ROI Center -> Relative
+                    pts_rel = pts_raw - ref_center
+                    
+                    # Create NEW Segment with transformed points
+                    # (Keep color, dwell, type)
+                    # Store as OBJECT in template list
+                    new_seg = PathSegment(seg.type, seg.color, pts_rel.tolist(), seg.dwell_ms)
+                    # OPTIMIZATION: Store numpy array in points for speed, if downstream supports it?
+                    # BatchWorker checks if hasattr points.
+                    # HalconManager._transform_and_draw_paths expects... wait.
+                    # Let's keep points as List[Tuple] to match class definition, 
+                    # OR hijack it to store numpy if we are careful.
+                    # Safer: Store as object, but maybe add a .points_np attribute?
+                    new_seg.points_np = pts_rel # Attached for calculation convenience
+                    final_template.append(new_seg)
+                    
+                else:
+                    # Legacy: Just a numpy array
+                    pts_w = seg.reshape(-1, 1, 2)
+                    pts_raw = cv2.perspectiveTransform(pts_w, Minv).reshape(-1, 2)
+                    pts_rel = pts_raw - ref_center
+                    final_template.append(pts_rel)
                 
             self.halcon_path_template = final_template
-            print(f"[Halcon] Template computed! {len(final_template)} segments.")
+            print(f"[Halcon] Template computed! {len(final_template)} segments (Mixed Mode).")
             
         except Exception as e:
             print(f"[Halcon] Template compute error: {e}")
@@ -4977,7 +5075,7 @@ class MainWindow(QWidget):
         }
         
         # 5. 调用HalconProductManager训练
-        success, msg = self.halcon_product.train_new_product(
+        success, msg = self.halcon_product_manager.train_new_product(
             img_path, name, initial_config
         )
         
@@ -4987,8 +5085,8 @@ class MainWindow(QWidget):
             self.lbl_recipe_name.setStyleSheet("color: #10B981; font-weight: bold;")
             
             # 同步模型参数
-            self.model_ref_row = self.halcon_product.model_ref_row
-            self.model_ref_col = self.halcon_product.model_ref_col
+            self.model_ref_row = self.halcon_product_manager.model_ref_row
+            self.model_ref_col = self.halcon_product_manager.model_ref_col
             
             # 清空路径
             self.dots = []
@@ -5111,7 +5209,7 @@ class MainWindow(QWidget):
             # Exec Loading Logic
             self.log(f"📂 正在加载产品: {name}")
             
-            success, msg = self.halcon_product.load_product(name)
+            success, msg = self.halcon_product_manager.load_product(name)
             
             if success:
                 self.current_product = name
@@ -5119,10 +5217,10 @@ class MainWindow(QWidget):
                 self.lbl_recipe_name.setStyleSheet("color: #10B981; font-weight: bold;")
                 
                 # 同步参数到UI
-                self.model_ref_row = self.halcon_product.model_ref_row
-                self.model_ref_col = self.halcon_product.model_ref_col
-                self.vision_offset_x = self.halcon_product.vision_offset_x
-                self.vision_offset_y = self.halcon_product.vision_offset_y
+                self.model_ref_row = self.halcon_product_manager.model_ref_row
+                self.model_ref_col = self.halcon_product_manager.model_ref_col
+                self.vision_offset_x = self.halcon_product_manager.vision_offset_x
+                self.vision_offset_y = self.halcon_product_manager.vision_offset_y
             
             # 更新UI显示
             if hasattr(self, 'spn_vision_offset_x'):
@@ -5135,9 +5233,25 @@ class MainWindow(QWidget):
                 self.spn_vision_offset_y.blockSignals(False)
             
             # 同步路径
-            paths = self.halcon_product.get_current_paths()
+            paths = self.halcon_product_manager.get_current_paths()
             self.dots = paths['dots'] if paths['dots'] is not None else []
             self.polys = paths['polys'] if paths['polys'] is not None else []
+            
+            # [NEW] 获取并存储 PathSegmentList (包含颜色/阀门信息)
+            # 用于 _compute_halcon_template 和 G-code 生成
+            self.current_segments = self.halcon_product_manager.get_current_segments()
+            if self.current_segments:
+                 print(f"[Main] Loaded {len(self.current_segments.segments)} multicolor segments.")
+            else:
+                 print("[Main] Warning: No multicolor segments loaded (Legacy Mode?)")
+
+            # [NEW] 强制覆盖 mold_detector 中的路径，确保 Vision 识别使用的是最新加载的 (JSON or NPY)
+            # 解决: 编辑完了多色路径，但识别还是用的旧 NPY 的问题
+            try:
+                from core.mold_detector import set_override_paths
+                set_override_paths(self.polys, self.dots)
+            except ImportError:
+                print("[Main] Warning: mold_detector.set_override_paths not found")
             
             # ⭐ 加载并应用配方的所有参数
             config = self.product_manager.load_product_config(name)

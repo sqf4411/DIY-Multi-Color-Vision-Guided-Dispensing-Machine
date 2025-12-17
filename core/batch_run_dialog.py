@@ -300,6 +300,19 @@ class BatchWorker(QThread):
                 # TODO: 在这里插入换色指令 (e.g. T{seg_color} or M6)
                 # 目前仅作为注释
                 
+                # 定义颜色与阀门的映射关系
+                # Color 0 (A1): A1_VALVE + VALVE_A_CTRL + VALVE_B_CTRL
+                # Color 1 (A2): A2_VALVE + VALVE_A_CTRL + VALVE_B_CTRL
+                # ...
+                COLOR_VALVE_MAP = {
+                    0: ['A1_VALVE', 'VALVE_A_CTRL', 'VALVE_B_CTRL'],
+                    1: ['A2_VALVE', 'VALVE_A_CTRL', 'VALVE_B_CTRL'],
+                    2: ['A3_VALVE', 'VALVE_A_CTRL', 'VALVE_B_CTRL'],
+                    3: ['A4_VALVE', 'VALVE_A_CTRL', 'VALVE_B_CTRL'],
+                }
+                
+                target_valves = COLOR_VALVE_MAP.get(seg_color, ['VALVE_A_CTRL', 'VALVE_B_CTRL']) # Default A+B
+
                 first_pt = True
                 for (px, py) in path_points:
                     # 像素 -> 相对 mm
@@ -314,26 +327,38 @@ class BatchWorker(QThread):
                     target_mach_y = current_y + dy_mm + off_y
                     
                     if first_pt:
-                        # 1. 移动到起点上方
-                        lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
-                        # 2. 下降到工作高度
+                        # 1. 移动到起点上方 (快速 G0)
+                        lines.append(f"G0 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
+                        # 2. 下降到工作高度 (慢速 G1)
                         lines.append(f"G1 Z{work_z:.2f} F{speed_z}")
-                        # 3. 开阀
-                        if valve_on:
-                            lines.append("M106 S255")
                         
-                        # [NEW] 点胶延时 (如果是 Dot)
+                        # 3. 开阀逻辑 (如果需要出胶)
+                        if valve_on:
+                            lines.append(f"; Open Valves for Color {seg_color}")
+                            for pin_name in target_valves:
+                                lines.append(f"SET_PIN PIN={pin_name} VALUE=1")
+                                
+                        # 4. 点胶延时 (如果是 Dot)
                         if seg_type == 'dot' and dwell_ms > 0:
                             lines.append(f"G4 P{dwell_ms}")
                             
                         first_pt = False
                     else:
-                        # [NEW] 移动到后续点 (Line Only)
+                        # 移动到后续点
                         lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
                 
-                # 一条路径结束：关阀
+                # 一条路径段结束：关阀
                 if valve_on:
-                    lines.append("M107") # 关阀
+                    lines.append(f"; Close Valves for Color {seg_color}")
+                    # 关闭当前开启的所有阀门
+                    for pin_name in target_valves:
+                         lines.append(f"SET_PIN PIN={pin_name} VALUE=0")
+                
+                # 抬升逻辑：
+                # 每一段结束后抬起点，防止刮擦 (用户建议：每段操作独立)
+                # 或者，如果是连续线段（end point == next start point），可以优化。
+                # 但当前逻辑是按照 "Segment List" 处理，为了安全，段与段之间抬起。
+                lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
                 
                 # 抬升逻辑：
 

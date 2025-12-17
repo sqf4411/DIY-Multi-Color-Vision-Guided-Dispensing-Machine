@@ -140,7 +140,7 @@ class PathCanvas(QWidget):
         self.update()
         
         if event.button() == Qt.LeftButton:
-            # 左键：根据当前模式添加点或线节点
+            # 左键逻辑
             if self.current_mode == 'dot':
                 # 点模式：添加点
                 seg = PathSegment(
@@ -155,7 +155,6 @@ class PathCanvas(QWidget):
             elif self.current_mode == 'line':
                 # 线模式：添加线的节点
                 self.current_line.append((x, y))
-                self.update()
                 self.update()
     
     def mouseMoveEvent(self, event):

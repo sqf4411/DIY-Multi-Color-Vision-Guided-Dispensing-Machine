@@ -119,17 +119,20 @@ class HalconProductManager:
             traceback.print_exc()
             return False, f"训练产品失败: {e}"
     
-    def load_product(self, product_name: str) -> Tuple[bool, str]:
+    def load_product(self, product_name: str, force: bool = False) -> Tuple[bool, str]:
         """
         加载产品（模型+路径+参数）
         
         Args:
             product_name: 产品名称
+            force:是否强制从磁盘重新加载
             
         Returns:
             (成功, 消息)
         """
         try:
+            print(f"[HalconProductManager] Loading product '{product_name}' (Force={force})...")
+            
             # 1. 加载配置
             config = self.products.load_product_config(product_name)
             if not config:
@@ -323,6 +326,13 @@ class HalconProductManager:
         
         return found_paths, debug_img
     
+    def get_current_segments(self):
+        """
+        Get the current PathSegmentList object (contains colors/metadata).
+        Returns: PathSegmentList or None
+        """
+        return getattr(self, 'current_segments', None)
+
     def _transform_and_draw_paths(self, debug_img: np.ndarray, 
                                   cx: float, cy: float, angle: float,
                                   ref_row: float, ref_col: float) -> List[PathSegment]:

@@ -210,6 +210,7 @@ def _load_golden_and_paths():
             print(f"[mold_detector] Template generation error: {e}")
 
 
+
 def reload_golden_templates():
     """
     Reset all caches, force reload.
@@ -222,6 +223,17 @@ def reload_golden_templates():
     _PATH_DOTS = None
     _CORE_TEMPLATE = None
     _load_golden_and_paths()
+
+def set_override_paths(polys=None, dots=None):
+    """
+    [NEW] Force set the paths from external source (e.g. JSON from ProductManager).
+    This bypasses the default .npy loading.
+    """
+    global _PATH_POLY, _PATH_DOTS
+    _PATH_POLY = polys
+    _PATH_DOTS = dots
+    print(f"[mold_detector] Manual path override: {len(polys) if polys else 0} polys, {len(dots) if dots else 0} dots")
+
 
 
 def detect_mold_and_cells(gray: np.ndarray):

@@ -1,0 +1,21 @@
+{
+  "vision_offset_x": 0.0,
+  "vision_offset_y": 0.0,
+  "exposure": 4.7,
+  "gain": 5.6,
+  "gamma": 1.6,
+  "feedrate_xy": 1843.0,
+  "feedrate_z": 452.0,
+  "accel": 452.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 100.0,
+  "safe_z_product": 100.0,
+  "work_z": 100.0,
+  "nozzle_offset_x": 0.0,
+  "nozzle_offset_y": 0.0,
+  "z_base": 0.0,
+  "model_file": "opt1.shm",
+  "model_row": 0,
+  "model_col": 0,
+  "product_name": "opt1"
+}

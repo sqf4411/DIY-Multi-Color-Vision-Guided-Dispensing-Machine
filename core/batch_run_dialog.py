@@ -278,9 +278,30 @@ class BatchWorker(QThread):
         for prod_idx, product_paths in enumerate(paths_groups):
             lines.append(f"; --- Product {prod_idx + 1} ---")
             
-            for seg_idx, path in enumerate(product_paths):
+            for seg_idx, path_obj in enumerate(product_paths):
+                # 统一获取数据 (兼容 PathSegment 对象和旧列表)
+                if hasattr(path_obj, 'points'):
+                    # PathSegment 对象
+                    path_points = path_obj.points
+                    seg_type = path_obj.type
+                    seg_color = path_obj.color
+                    # color_name = path_obj.get_color_name()
+                    dwell_ms = path_obj.dwell_ms
+                else:
+                    # 旧格式 (List or Array)
+                    path_points = path_obj
+                    seg_type = 'line' if len(path_points) > 1 else 'dot'
+                    seg_color = 0
+                    dwell_ms = 100 # Default
+
+                # Color/Valve Change Comments
+                lines.append(f"; Segment {seg_idx+1}: Type={seg_type}, Color={seg_color}, Dwell={dwell_ms}ms")
+                
+                # TODO: 在这里插入换色指令 (e.g. T{seg_color} or M6)
+                # 目前仅作为注释
+                
                 first_pt = True
-                for (px, py) in path:
+                for (px, py) in path_points:
                     # 像素 -> 相对 mm
                     dx_pix = px - center_x
                     dy_pix = py - center_y
@@ -288,35 +309,33 @@ class BatchWorker(QThread):
                     dx_mm = M[0, 0] * dx_pix + M[0, 1] * dy_pix
                     dy_mm = M[1, 0] * dx_pix + M[1, 1] * dy_pix
                     
-                    # 目标机器坐标 = 相机中心 + 视觉偏移 + 针头偏移
-                    # (Calibration: offset = Nozzle - Camera => Nozzle = Camera + offset)
+                    # 目标机器坐标
                     target_mach_x = current_x + dx_mm + off_x
                     target_mach_y = current_y + dy_mm + off_y
                     
                     if first_pt:
-                        # 1. 移动到第一个点上方 (保持当前高度，可能是 Product Z 或 Cavity Z)
+                        # 1. 移动到起点上方
                         lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
                         # 2. 下降到工作高度
                         lines.append(f"G1 Z{work_z:.2f} F{speed_z}")
-                        # 3. 开阀 (仅真实模式)
+                        # 3. 开阀
                         if valve_on:
                             lines.append("M106 S255")
+                        
+                        # [NEW] 点胶延时 (如果是 Dot)
+                        if seg_type == 'dot' and dwell_ms > 0:
+                            lines.append(f"G4 P{dwell_ms}")
+                            
                         first_pt = False
                     else:
-                        # 移动到后续点
+                        # [NEW] 移动到后续点 (Line Only)
                         lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
                 
-                # 一条路径(Segment)结束：关阀
+                # 一条路径结束：关阀
                 if valve_on:
                     lines.append("M107") # 关阀
                 
                 # 抬升逻辑：
-                # 如果是该产品的最后一段 -> 抬升到【产品安全高度】(准备去下一个产品)
-                # 否则 -> 抬升到【腔内安全高度】(准备去同产品的下一段)
-                if seg_idx == len(product_paths) - 1:
-                    lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
-                else:
-                    lines.append(f"G1 Z{safe_z_cavity:.2f} F{speed_z}")
 
         # 最后确保在最高安全高度
         lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
@@ -499,6 +518,10 @@ class BatchRunDialog(QDialog):
         self.btn_nozzle_dry = QPushButton("针头批量")
         self.btn_nozzle_dry.clicked.connect(lambda: self.on_start('nozzle_dry'))
 
+        self.btn_test_valve = QPushButton("测试出胶")
+        self.btn_test_valve.setStyleSheet("background-color: #8B5CF6; color: white;") # Purple
+        self.btn_test_valve.clicked.connect(self.on_test_dispense)
+
         self.btn_start = QPushButton("真实批量执行")
         self.btn_start.setStyleSheet("background-color: #10B981; color: white; font-weight: bold; font-size: 14px;")
         self.btn_start.clicked.connect(lambda: self.on_start('real'))
@@ -523,6 +546,7 @@ class BatchRunDialog(QDialog):
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_cam_dry)
         btn_layout.addWidget(self.btn_nozzle_dry)
+        btn_layout.addWidget(self.btn_test_valve) # [NEW]
         btn_layout.addWidget(self.btn_start)
         btn_layout.addWidget(self.btn_pause)
         btn_layout.addWidget(self.btn_resume)
@@ -653,6 +677,21 @@ class BatchRunDialog(QDialog):
         if hasattr(self, 'worker'):
             self.worker.stop()
             self.log("正在停止...")
+
+    # [NEW] Check Dispense
+    def on_test_dispense(self):
+        """调用主界面的测试出胶功能"""
+        if hasattr(self.mw, 'on_test_valve'):
+            # self.hide() # 可选：是否隐藏对话框？如果不隐藏，可以在对话框里看日志（如果日志同步）
+            # 测试出胶通常很快，不一定要隐藏
+            self.log("正在执行测试出胶...")
+            try:
+                self.mw.on_test_valve()
+                self.log("✅ 测试出胶指令已发送")
+            except Exception as e:
+                self.log(f"❌ 测试出胶失败: {e}")
+        else:
+            QMessageBox.warning(self, "错误", "主窗口未找到测试出胶功能")
 
     def on_finished(self, success, msg):
         self.btn_cam_dry.setEnabled(True)

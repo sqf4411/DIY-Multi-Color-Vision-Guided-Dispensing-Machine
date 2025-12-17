@@ -58,6 +58,7 @@ from core.halcon_manager import HalconManager
 from core.visualizer_3d import Visualizer3D
 from core.product_manager import ProductManager
 from core.halcon_product_manager import HalconProductManager
+from core.path_editor_wrapper import edit_path_halcon_mode
 
 # MvImport dependency removed from UI (managed by CameraManager)
 # from MvImport.MvCameraControl_class import *
@@ -1103,7 +1104,8 @@ class MainWindow(QWidget):
         self.btn_dry_run = QPushButton("针头空跑")
         # btn_real_run已删除 - 无效按钮
         self.btn_batch_run = QPushButton("批量运行")
-        self.btn_test_valve = QPushButton("测试出胶")
+        self.btn_multicolor = QPushButton("编辑多色路径")
+        self.btn_multicolor.setStyleSheet("background-color: #3B82F6; color: white;")
 
         # ===== 不设置固定宽度，让按钮自动扩展填充空间 =====
         self.btn_save.setEnabled(False)
@@ -1118,9 +1120,11 @@ class MainWindow(QWidget):
 
         btn_layout.addWidget(self.btn_save)
         btn_layout.addWidget(self.btn_detect)
+        btn_layout.addWidget(self.btn_multicolor) # [NEW]
         btn_layout.addWidget(self.btn_golden)
         btn_layout.addWidget(self.btn_path)
-        btn_layout.addWidget(self.btn_test_valve)
+        # self.btn_path.setVisible(False) # [UNHIDE]
+        # Removed btn_test_valve from here
         # 不添加stretch，让按钮自动扩展
 
         # 第二排：5个按钮 (均匀铺满)
@@ -1598,7 +1602,9 @@ class MainWindow(QWidget):
         self.btn_dry_run.clicked.connect(self.on_dry_run)
         # btn_real_run已删除，不需要连接
         self.btn_batch_run.clicked.connect(self.on_batch_run)
-        self.btn_test_valve.clicked.connect(self.on_test_valve)
+        # self.btn_path.clicked.connect(self.on_edit_path) # Duplicate removed
+        self.btn_multicolor.clicked.connect(self.on_edit_multicolor_paths)
+        # self.btn_test_valve.clicked.connect(self.on_test_valve) # Moved to Batch Dialog
 
         # XYZ 点动按钮
         self.btn_x_minus.clicked.connect(lambda: self.on_jog('x', -1))
@@ -3005,6 +3011,49 @@ class MainWindow(QWidget):
             self.log("⏹ 已关闭中心十字显示")
             
         self.render_current_frame()
+
+    # ================== 多色路径编辑器 (独立) ==================
+    def on_edit_multicolor_paths(self):
+        """打开多色路径编辑器 (直接在reference.png上编辑)"""
+        print("[DEBUG UI] on_edit_multicolor_paths CLICKED") # Debug
+        # 1. 检查 Halcon 模式
+        use_halcon = hasattr(self, 'chk_use_halcon') and self.chk_use_halcon.isChecked()
+        if not use_halcon:
+            QMessageBox.warning(self, "模式错误", "此功能仅在 Halcon 模式下可用。")
+            return
+            
+        # 2. 检查配方
+        current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
+        if "未加载" in current_recipe or not current_recipe:
+            QMessageBox.warning(self, "需要配方", "请先加载或创建配方。")
+            return
+            
+        # 3. 获取产品目录
+        product_dir = self.product_manager.get_product_path(current_recipe)
+        if not product_dir or not os.path.exists(product_dir):
+            QMessageBox.critical(self, "错误", f"产品目录不存在: {product_dir}")
+            return
+            
+        self.log(f"🎨 打开多色路径编辑器: {current_recipe}")
+        
+        # 4. 打开编辑器
+        # 注意：这里直接使用 path_editor_wrapper.py 中的逻辑
+        try:
+            success = edit_path_halcon_mode(self, current_recipe, product_dir)
+            if success:
+                self.log(f"✅ 多色路径已保存")
+                
+                # [CRITICAL] 重新加载数据到 HalconProductManager
+                # 虽然用户说"暂时不用实现连接"，但为了基本功能正常（比如能在识别后显示）
+                # 我们依然通知 manager 加载新数据。
+                if hasattr(self, 'halcon_product_manager') and self.halcon_product_manager:
+                     self.halcon_product_manager.load_product(current_recipe)
+            else:
+                self.log("❌ 编辑取消或保存失败")
+        except Exception as e:
+            self.log(f"❌ 打开编辑器失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     # ================== 点胶路径编辑 ==================
     def on_edit_path(self):

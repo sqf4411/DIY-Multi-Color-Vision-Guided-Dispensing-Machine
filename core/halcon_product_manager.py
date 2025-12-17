@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 import shutil
 from typing import Optional, Dict, List, Tuple
+from core.path_segment import PathSegmentList, PathSegment
+import json
 
 
 class HalconProductManager:
@@ -30,6 +32,7 @@ class HalconProductManager:
         self.model_ref_col = 0
         self.vision_offset_x = 0.0
         self.vision_offset_y = 0.0
+        self.current_segments: Optional[PathSegmentList] = None # [NEW] Store rich segments
         
     # ========== 产品操作 ==========
     
@@ -145,7 +148,23 @@ class HalconProductManager:
                 return False, f"模型文件不存在: {model_file}"
             
             # 3. 加载路径
+            # 3. 加载路径
             path_data, poly_data = self.products.load_product_paths(product_name)
+            
+            # [NEW] 尝试加载 multicolor_path.json
+            json_path = os.path.join(product_dir, "multicolor_path.json")
+            if os.path.exists(json_path):
+                try:
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    segments = PathSegmentList.from_dict_list(data.get('segments', []))
+                    self.current_segments = segments # [NEW] Store it
+                    # 转换回 Legacy 格式供 HalconManager 使用
+                    poly_data, path_data = segments.get_legacy_format()
+                    # print(f"[HalconProductManager] 已加载多色路径: {len(segments.segments)} 段")
+                except Exception as e:
+                    print(f"[HalconProductManager] 多色路径加载失败: {e}")
+            
             
             self.current_paths['dots'] = path_data if path_data is not None else []
             self.current_paths['polys'] = poly_data if poly_data is not None else []
@@ -271,7 +290,9 @@ class HalconProductManager:
         # 2. 获取参考点
         ref_row, ref_col = self.model_ref_row, self.model_ref_col
         if ref_row == 0 and ref_col == 0:
-            ref_row, ref_col = 651.6765, 1113.3245  # Fallback
+            # Fallback to image center (assuming 5MP camera 1944x2592)
+            # Center: Row 972, Col 1296
+            ref_row, ref_col = 972.0, 1296.0
         
         # 3. 处理每个匹配
         for match in res['matches']:
@@ -304,7 +325,79 @@ class HalconProductManager:
     
     def _transform_and_draw_paths(self, debug_img: np.ndarray, 
                                   cx: float, cy: float, angle: float,
-                                  ref_row: float, ref_col: float) -> List:
+                                  ref_row: float, ref_col: float) -> List[PathSegment]:
+        """
+        转换并绘制路径 (返回 PathSegment 对象列表)
+        """
+        mold_segments = []
+        
+        try:
+            # 1. 确定源路径 (优先使用 rich segments)
+            source_segments = []
+            if self.current_segments and self.current_segments.count() > 0:
+                source_segments = self.current_segments.get_all()
+            else:
+                # Legacy fallback (create dummy segments)
+                if self.current_paths.get('polys'):
+                    for p in self.current_paths['polys']:
+                        # p is numpy array (N,2) => Convert to List[Tuple]
+                        pts = [tuple(x) for x in p]
+                        source_segments.append(PathSegment('line', 0, pts))
+                if self.current_paths.get('dots') and len(self.current_paths['dots']) > 0:
+                    for p in self.current_paths['dots']:
+                        # p is dot (x,y)
+                        if isinstance(p, np.ndarray): p = tuple(p)
+                        else: p = tuple(p)
+                        source_segments.append(PathSegment('dot', 0, [p]))
+            
+            if not source_segments:
+                # Return center point as dummy dot?
+                return [PathSegment('dot', 2, [(cx, cy)])] # Color 2=Blue
+            
+            # 2. 转换每个段
+            for seg in source_segments:
+                pts = np.array(seg.points, dtype=np.float32)
+                if len(pts) == 0: continue
+                
+                # 2.1 居中（相对于ROI参考点）
+                pts_centered = pts - np.array([ref_col, ref_row])
+                
+                # 2.2 旋转
+                cos_a = np.cos(angle)
+                sin_a = np.sin(angle)
+                # 保持原有旋转逻辑
+                x_new = pts_centered[:, 0] * cos_a + pts_centered[:, 1] * sin_a
+                y_new = -pts_centered[:, 0] * sin_a + pts_centered[:, 1] * cos_a
+                
+                pts_rotated = np.stack([x_new, y_new], axis=1)
+                
+                # 2.3 平移到匹配中心
+                pts_transformed = pts_rotated + np.array([cx, cy])
+                
+                # 2.4 应用视觉偏移
+                pts_transformed[:, 0] += self.vision_offset_x
+                pts_transformed[:, 1] += self.vision_offset_y
+                
+                # 2.5 创建新段 (保留原有属性)
+                new_pts = [tuple(p) for p in pts_transformed]
+                new_seg = PathSegment(seg.type, seg.color, new_pts, seg.dwell_ms)
+                mold_segments.append(new_seg)
+                
+                # 2.6 绘制 (使用段的颜色)
+                pts_draw = pts_transformed.astype(np.int32)
+                color = seg.get_display_color_bgr() # (B,G,R)
+                
+                if seg.type == 'dot':
+                    cv2.circle(debug_img, tuple(pts_draw[0]), 4, color, -1)
+                else:
+                    cv2.polylines(debug_img, [pts_draw], False, color, 2, cv2.LINE_AA)
+                
+        except Exception as e:
+            print(f"[HalconProductManager] 路径转换失败: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return mold_segments if mold_segments else []
         """
         转换并绘制路径
         

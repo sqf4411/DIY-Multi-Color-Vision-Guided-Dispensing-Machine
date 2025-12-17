@@ -191,6 +191,19 @@ class DryRunDialog(QDialog):
 
                 gcode_lines.append(f";   Segment {seg_idx + 1}")
 
+                # [NEW] Inject Valve Selection Tag
+                # Multicolor path segments have 'color' attribute (0-3)
+                if hasattr(p_px, 'color'):
+                    valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
+                    color_idx = p_px.color
+                    if 0 <= color_idx < len(valve_macros):
+                        macro = valve_macros[color_idx]
+                        if self.is_real_run:
+                            gcode_lines.append(macro)
+                        else:
+                            # In Dry Run, just show as comment to verify tags
+                            gcode_lines.append(f"; [Tag] {macro}")
+
                 # 2. Move to Start Point
                 start_x, start_y = path_machine[0]
                 start_x += self.nozzle_offset_x

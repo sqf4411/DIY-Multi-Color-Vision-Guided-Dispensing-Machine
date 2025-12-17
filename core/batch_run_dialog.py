@@ -297,7 +297,15 @@ class BatchWorker(QThread):
                 # Color/Valve Change Comments
                 lines.append(f"; Segment {seg_idx+1}: Type={seg_type}, Color={seg_color}, Dwell={dwell_ms}ms")
                 
-                # TODO: 在这里插入换色指令 (e.g. T{seg_color} or M6)
+                # [NEW] Inject Valve Selection Tag
+                valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
+                if 0 <= seg_color < len(valve_macros):
+                    macro = valve_macros[seg_color]
+                    if self.mode == 'real':
+                        lines.append(macro)
+                    else:
+                        # In Dry Run, just show as comment to verify tags
+                        lines.append(f"; [Tag] {macro}")
                 # 目前仅作为注释
                 
                 # 定义颜色与阀门的映射关系

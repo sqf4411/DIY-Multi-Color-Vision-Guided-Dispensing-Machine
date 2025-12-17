@@ -3063,6 +3063,9 @@ class MainWindow(QWidget):
                      # [FIX] 重新计算 Halcon 模板 (关键！否则还是用旧的)
                      # 传入 True 强制刷新
                      self._compute_halcon_template(force_reload=True)
+                
+                # [NEW] ⭐ 重要：更新按钮状态，解锁识别模具、空跑、批量等功能
+                self.update_button_states()
                      
             else:
                 self.log("❌ 编辑取消或保存失败")
@@ -5417,7 +5420,13 @@ class MainWindow(QWidget):
         """根据Halcon状态、产品加载状态和路径存在更新按钮"""
         halcon_enabled = hasattr(self, 'chk_use_halcon') and self.chk_use_halcon.isChecked()
         product_loaded = self.current_product is not None
-        has_paths = len(self.dots) > 0 or len(self.polys) > 0
+        
+        # [FIX] 检测路径：支持旧格式（dots/polys）和新格式（current_segments）
+        has_legacy_paths = len(self.dots) > 0 or len(self.polys) > 0
+        has_multicolor_paths = (hasattr(self, 'current_segments') and 
+                                self.current_segments and 
+                                len(self.current_segments.segments) > 0)
+        has_paths = has_legacy_paths or has_multicolor_paths
         
         # === 1. Halcon专用按钮（默认全部禁用，只有勾选Halcon才启用） ===
         # 训练新模型：只要Halcon启用就可以用

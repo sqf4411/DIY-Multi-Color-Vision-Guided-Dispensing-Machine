@@ -1106,6 +1106,11 @@ class MainWindow(QWidget):
         self.btn_batch_run = QPushButton("批量运行")
         self.btn_multicolor = QPushButton("编辑多色路径")
         self.btn_multicolor.setStyleSheet("background-color: #3B82F6; color: white;")
+        
+        # [NEW] 测试出胶按钮（从batch_run_dialog提取出来）
+        self.btn_test_valve = QPushButton("测试出胶")
+        self.btn_test_valve.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold;")
+        self.btn_test_valve.setToolTip("打开阀门控制面板，测试各颜色出胶")
 
         # ===== 不设置固定宽度，让按钮自动扩展填充空间 =====
         self.btn_save.setEnabled(False)
@@ -1120,11 +1125,10 @@ class MainWindow(QWidget):
 
         btn_layout.addWidget(self.btn_save)
         btn_layout.addWidget(self.btn_detect)
-        btn_layout.addWidget(self.btn_multicolor) # [NEW]
+        btn_layout.addWidget(self.btn_multicolor) # 多色编辑
         btn_layout.addWidget(self.btn_golden)
-        btn_layout.addWidget(self.btn_path)
-        # self.btn_path.setVisible(False) # [UNHIDE]
-        # Removed btn_test_valve from here
+        btn_layout.addWidget(self.btn_test_valve) # [NEW] 测试出胶替换原编辑点胶路径位置
+        # self.btn_path 已隐藏，不再显示
         # 不添加stretch，让按钮自动扩展
 
         # 第二排：5个按钮 (均匀铺满)
@@ -1604,7 +1608,7 @@ class MainWindow(QWidget):
         self.btn_batch_run.clicked.connect(self.on_batch_run)
         # self.btn_path.clicked.connect(self.on_edit_path) # Duplicate removed
         self.btn_multicolor.clicked.connect(self.on_edit_multicolor_paths)
-        # self.btn_test_valve.clicked.connect(self.on_test_valve) # Moved to Batch Dialog
+        self.btn_test_valve.clicked.connect(self.on_test_valve) # [NEW] 测试出胶
 
         # XYZ 点动按钮
         self.btn_x_minus.clicked.connect(lambda: self.on_jog('x', -1))

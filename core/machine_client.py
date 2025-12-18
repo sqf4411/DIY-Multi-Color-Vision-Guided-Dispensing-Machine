@@ -275,6 +275,30 @@ class MachineClient:
         except:
             return 'unknown'
 
+    def get_output_pin_status(self, pin_name: str) -> bool:
+        """
+        查询 output_pin 的状态 (value)。
+        返回 True (On/1) 或 False (Off/0)。
+        """
+        if not self.base_url or not self.connected:
+            return False
+        
+        # 名字中有空格需分别处理，但一般 output_pin xx 没有空格
+        # Klipper object name: output_pin pin_name
+        obj_name = f"output_pin {pin_name}"
+        
+        url = f"{self.base_url}/printer/objects/query"
+        params = {obj_name: ""}
+        
+        try:
+            r = self.session.get(url, params=params, headers=self._headers(), timeout=1)
+            data = r.json()
+            val = data.get("result", {}).get("status", {}).get(obj_name, {}).get("value")
+            # value 通常是 0.0 或 1.0
+            return bool(val and val > 0.001)
+        except:
+            return False
+
     # ------------------------------------------------------------------ #
     # 坐标查询
     # ------------------------------------------------------------------ #

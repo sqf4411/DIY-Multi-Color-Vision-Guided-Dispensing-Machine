@@ -605,6 +605,10 @@ class MainWindow(QWidget):
 
         # 连接日志信号
         self.log_signal.connect(self._log_impl)
+        
+        # [NEW] Mobile Monitor
+        from mobile_ui.mobile_monitor_dialog import MobileMonitorDialog
+        self.mobile_monitor = None # Lazy init
 
         # 设置黑色主题样式
         self.setStyleSheet("""
@@ -1479,6 +1483,24 @@ class MainWindow(QWidget):
         right_layout.addWidget(action_group)   # 多功能区（包含所有按钮）
         # param_group 已移到第一行，这里不再添加
         right_layout.addWidget(self.vision_group)
+
+        # [NEW] iPad Monitor Button (Standalone)
+        btn_ipad = QPushButton("📱 启动 iPad 监控副屏")
+        btn_ipad.setMinimumHeight(40)
+        btn_ipad.setStyleSheet("""
+            QPushButton { 
+                background-color: #059669; 
+                color: white; 
+                font-weight: bold; 
+                font-size: 16px; 
+                border-radius: 6px;
+                margin-top: 10px;
+                margin-bottom: 10px;
+            }
+            QPushButton:hover { background-color: #10B981; }
+        """)
+        btn_ipad.clicked.connect(self.open_mobile_monitor)
+        right_layout.addWidget(btn_ipad)
         
         # 日志窗口
         right_layout.addWidget(self.log_box)
@@ -5516,6 +5538,24 @@ class MainWindow(QWidget):
 
 
 
+
+    def open_mobile_monitor(self):
+        """Open the simplified iPad dashboard"""
+        from mobile_ui.mobile_monitor_dialog import MobileMonitorDialog
+        if not self.mobile_monitor:
+            # Pass machine client and valve pin name (VALVE_A_CTRL is standard per user script)
+            self.mobile_monitor = MobileMonitorDialog(self, self.machine, "VALVE_A_CTRL")
+            
+            # Connect image signal
+            if self.camera_manager and self.camera_manager.get_frame_signal():
+                self.camera_manager.get_frame_signal().connect(self.mobile_monitor.update_image)
+            # If using USBCameraWorker directly (fallback)
+            elif hasattr(self, 'usb_worker') and self.usb_worker:
+                 self.usb_worker.frame_signal.connect(self.mobile_monitor.update_image)
+        
+        self.mobile_monitor.show()
+        self.mobile_monitor.raise_()
+        self.mobile_monitor.activateWindow()
 
 if __name__ == "__main__":
     print("🚀 App Starting...")

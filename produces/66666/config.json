@@ -14,8 +14,8 @@
   "nozzle_offset_x": 0.0,
   "nozzle_offset_y": 0.0,
   "z_base": 0.0,
-  "model_file": "66666.shm",
   "model_row": 0,
   "model_col": 0,
-  "product_name": "66666"
+  "product_name": "66666",
+  "model_file": "66666.shm"
 }

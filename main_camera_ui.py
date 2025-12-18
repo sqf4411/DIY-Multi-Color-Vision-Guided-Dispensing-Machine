@@ -1204,23 +1204,25 @@ class MainWindow(QWidget):
         
         self.btn_load_halcon = QPushButton("加载 Halcon 脚本")
         self.btn_load_halcon.setEnabled(False)
-        # [NEW] Recipe System Controls (3-Button Workflow)
+        # [NEW] Recipe System Controls (3-Button Workflow in one row)
         vision_layout.addWidget(self.chk_use_halcon)
         
-        # 1. 训练新模型
+        # 配方操作 (3个按钮在一行)
+        lay_recipe = QHBoxLayout()
+        
         self.btn_train_model = QPushButton("🆕 训练新模型")
         self.btn_train_model.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold;")
         self.btn_train_model.clicked.connect(self.on_train_model)
-        vision_layout.addWidget(self.btn_train_model)
         
-        # 2. 配方操作 (水平布局)
-        lay_recipe = QHBoxLayout()
         self.btn_save_recipe = QPushButton("💾 保存配方")
+        self.btn_save_recipe.setStyleSheet("background-color: #3B82F6; color: white;")
         self.btn_save_recipe.clicked.connect(self.on_save_recipe)
         
         self.btn_load_recipe = QPushButton("📂 加载配方")
+        self.btn_load_recipe.setStyleSheet("background-color: #F59E0B; color: white;")
         self.btn_load_recipe.clicked.connect(self.on_load_recipe)
         
+        lay_recipe.addWidget(self.btn_train_model)
         lay_recipe.addWidget(self.btn_save_recipe)
         lay_recipe.addWidget(self.btn_load_recipe)
         vision_layout.addLayout(lay_recipe)
@@ -5358,12 +5360,12 @@ class MainWindow(QWidget):
             if hasattr(self, 'halcon_path_template'):
                 self.halcon_path_template = None
             
-            self.update_button_states()
-            self.log(f"✅ {msg}")
-            self.log(f"📊 路径: {len(self.dots)} 点, {len(self.polys)} 线")
-        else:
-            QMessageBox.critical(self, "加载失败", msg)
-            self.log(f"❌ {msg}")
+                self.update_button_states()
+                self.log(f"✅ 产品加载成功")
+                self.log(f"📊 路径: {len(self.dots)} 点, {len(self.polys)} 线")
+            else:
+                QMessageBox.critical(self, "加载失败", msg)
+                self.log(f"❌ {msg}")
     
     def on_save_recipe(self):
         """保存产品（保持方法名兼容性）"""
@@ -5397,9 +5399,9 @@ class MainWindow(QWidget):
         }
         
         # 更新HalconProductManager的路径
-        self.halcon_product.save_paths_to_product(self.dots, self.polys)
+        self.halcon_product_manager.save_paths_to_product(self.dots, self.polys)
         
-        success, msg = self.halcon_product.save_product(config_data)
+        success, msg = self.halcon_product_manager.save_product(config_data)
         
         if success:
             self.log(f"✅ {msg}")

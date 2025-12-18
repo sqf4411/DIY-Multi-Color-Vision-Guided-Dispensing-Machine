@@ -5405,7 +5405,42 @@ class MainWindow(QWidget):
         
         if success:
             self.log(f"✅ {msg}")
-            QMessageBox.information(self, "成功", f"产品 '{self.current_product}' 已保存")
+            
+            # 构建详细信息
+            details = f"""产品 '{self.current_product}' 保存成功！
+
+📊 保存的参数：
+━━━━━━━━━━━━━━━━━━━━━━━━
+📷 相机参数：
+  • 曝光: {config_data['exposure']:.1f} ms
+  • 增益: {config_data['gain']:.1f} dB
+  • Gamma: {config_data['gamma']:.2f}
+
+🎯 视觉偏移：
+  • X: {config_data['vision_offset_x']:.2f} mm
+  • Y: {config_data['vision_offset_y']:.2f} mm
+
+🚀 运动参数：
+  • XY速度: {int(config_data['feedrate_xy'])} mm/min
+  • Z速度: {int(config_data['feedrate_z'])} mm/min
+  • 加速度: {int(config_data['accel'])} mm/s²
+
+📏 Z轴高度：
+  • 腔内安全Z: {config_data['safe_z_cavity']:.1f} mm
+  • 产品安全Z: {config_data['safe_z_product']:.1f} mm
+  • 点胶工作Z: {config_data['work_z']:.1f} mm
+  • Z基准: {config_data['z_base']:.1f} mm
+
+🔧 针头偏移：
+  • X偏移: {config_data['nozzle_offset_x']:.2f} mm
+  • Y偏移: {config_data['nozzle_offset_y']:.2f} mm
+
+🎨 点胶路径：
+  • 点路径: {len(self.dots)} 个点
+  • 线路径: {len(self.polys)} 条线
+"""
+            
+            QMessageBox.information(self, "保存成功", details)
         else:
             QMessageBox.critical(self, "保存失败", msg)
             self.log(f"❌ {msg}")

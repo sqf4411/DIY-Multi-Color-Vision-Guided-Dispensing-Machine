@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 
+from core.touch_spinbox import apply_touch_support
+
 class ValveControlDialog(QDialog):
     def __init__(self, parent=None, machine_client=None):
         super().__init__(parent)
@@ -45,6 +47,8 @@ class ValveControlDialog(QDialog):
         super().showEvent(event)
         # 每次显示对话框时重新加载参数
         self.load_params_from_file_silent()
+        # ⭐ 确保所有SpinBox都启用了触屏支持
+        apply_touch_support(self)
     
     def init_ui(self):
         layout = QVBoxLayout()

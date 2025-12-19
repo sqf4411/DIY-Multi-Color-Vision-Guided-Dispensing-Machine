@@ -18,7 +18,7 @@
   "model_col": 0,
   "product_name": "7777",
   "model_file": "7777.shm",
-  "valve_prefeed_time": 0.7,
-  "valve_a_dispense_time": 0.7,
-  "valve_b_dispense_time": 0.7
+  "valve_prefeed_time": 0.1,
+  "valve_a_dispense_time": 0.77,
+  "valve_b_dispense_time": 2.0
 }

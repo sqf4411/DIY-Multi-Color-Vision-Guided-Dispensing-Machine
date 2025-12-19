@@ -59,6 +59,8 @@ from core.visualizer_3d import Visualizer3D
 from core.product_manager import ProductManager
 from core.halcon_product_manager import HalconProductManager
 from core.path_editor_wrapper import edit_path_halcon_mode
+from core.touch_spinbox import TouchSpinBox, apply_touch_support
+from core.touch_numpad import TouchNumberPad
 
 # MvImport dependency removed from UI (managed by CameraManager)
 # from MvImport.MvCameraControl_class import *
@@ -1054,6 +1056,30 @@ class MainWindow(QWidget):
                 background-color: #EF4444;  /* 红色表示停止 */
             }
         """)
+        
+        # ⭐ 触摸模式按钮
+        self.btn_touch_mode = QPushButton("触摸模式")
+        self.btn_touch_mode.setCheckable(True)
+        self.btn_touch_mode.setMinimumHeight(28)
+        self.btn_touch_mode.setFixedWidth(80)
+        self.btn_touch_mode.setStyleSheet("""
+            QPushButton {
+                background-color: #3B82F6;
+                color: white;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2563EB;
+            }
+            QPushButton:checked {
+                background-color: #EF4444;  /* 红色=触摸模式启用 */
+            }
+            QPushButton:checked:hover {
+                background-color: #DC2626;
+            }
+        """)
+        self.btn_touch_mode.toggled.connect(self.toggle_touch_mode)
 
         # ====== Row 1 排列 ======
         row1_layout.addWidget(lbl_ip)
@@ -1063,6 +1089,9 @@ class MainWindow(QWidget):
         row1_layout.addWidget(self.edit_port)
         row1_layout.addStretch() 
         
+        # 触摸模式按钮
+        row1_layout.addWidget(self.btn_touch_mode)
+        row1_layout.addSpacing(10)
         # 单个相机toggle按钮
         row1_layout.addWidget(self.btn_camera)
         row1_layout.addSpacing(10)
@@ -2058,6 +2087,77 @@ class MainWindow(QWidget):
 
         # 不要在这里销毁线程对象，否则会报 "QThread: Destroyed while thread is still running"
         # self.home_worker = None
+
+    # ================== 触摸模式相关 ==================
+    
+    def toggle_touch_mode(self, enabled):
+        """切换触摸模式"""
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtGui import QFont
+        
+        TouchSpinBox.set_global_touch_mode(enabled)
+        app = QApplication.instance()
+        
+        if enabled:
+            self.log("✅ 触摸模式已启用 - 双击数值框打开触屏键盘")
+            
+            # --- 1. 保存原始状态 ---
+            if not hasattr(self, '_original_font'):
+                self._original_font = app.font()
+            if not hasattr(self, '_original_style'):
+                self._original_style = app.styleSheet()
+            
+            # --- 2. 设置全局大字体 ---
+            new_font = QFont(self._original_font)
+            current_size = new_font.pointSize()
+            if current_size < 12:
+                new_font.setPointSize(12)  # 至少12点
+            else:
+                new_font.setPointSize(current_size + 2) # 稍微增大
+            app.setFont(new_font)
+            
+            # --- 3. 设置触屏优化样式 (增加点击区域) ---
+            # 叠加到现有样式
+            touch_style = """
+                QDoubleSpinBox, QSpinBox, QLineEdit {
+                    min-height: 40px;
+                    font-size: 14pt;
+                }
+                QPushButton {
+                    min-height: 40px;
+                    font-size: 13pt;
+                }
+                QComboBox {
+                    min-height: 40px;
+                    font-size: 13pt;
+                }
+                QLabel {
+                    font-size: 13pt;
+                }
+                QGroupBox {
+                    font-size: 13pt;
+                    font-weight: bold;
+                    margin-top: 10px;
+                }
+            """
+            app.setStyleSheet(self._original_style + touch_style)
+            
+            # 首次启用时为所有SpinBox添加触摸支持
+            if not hasattr(self, '_touch_initialized'):
+                self.enable_touch_for_all_spinboxes()
+                self._touch_initialized = True
+        else:
+            self.log("触摸模式已禁用")
+            # --- 恢复原始状态 ---
+            if hasattr(self, '_original_font'):
+                app.setFont(self._original_font)
+            if hasattr(self, '_original_style'):
+                app.setStyleSheet(self._original_style)
+    
+    def enable_touch_for_all_spinboxes(self):
+        """为所有QDoubleSpinBox启用触摸支持"""
+        apply_touch_support(self)
+        self.log(f"✅ 已启用全局触摸支持 (单击弹出键盘)")
 
     # ================== 相机相关 ==================
 

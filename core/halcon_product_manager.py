@@ -178,6 +178,39 @@ class HalconProductManager:
             self.vision_offset_x = config.get('vision_offset_x', 0.0)
             self.vision_offset_y = config.get('vision_offset_y', 0.0)
             
+            # 4.5 ⭐ 应用阀门参数到全局配置
+            from pathlib import Path
+            from datetime import datetime
+            
+            valve_params = {
+                "version": "1.0",
+                "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "parameters": {
+                    "prefeed_time": config.get("valve_prefeed_time", 0.10),
+                    "valve_a_dispense_time": config.get("valve_a_dispense_time", 0.50),
+                    "valve_b_dispense_time": config.get("valve_b_dispense_time", 0.50)
+                },
+                "notes": f"Loaded from product '{product_name}'"
+            }
+            
+            print(f"[HalconProductManager] 加载产品 '{product_name}' 的阀门参数:")
+            print(f"[HalconProductManager]   供料提前: {valve_params['parameters']['prefeed_time']}")
+            print(f"[HalconProductManager]   阀A时间: {valve_params['parameters']['valve_a_dispense_time']}")
+            print(f"[HalconProductManager]   阀B时间: {valve_params['parameters']['valve_b_dispense_time']}")
+            
+            valve_params_dir = Path("config")
+            valve_params_dir.mkdir(exist_ok=True)
+            valve_params_file = valve_params_dir / "valve_dispense_params.json"
+            
+            print(f"[HalconProductManager] 写入参数文件: {valve_params_file.absolute()}")
+            
+            try:
+                with open(valve_params_file, 'w', encoding='utf-8') as f:
+                    json.dump(valve_params, f, indent=2, ensure_ascii=False)
+                print(f"[HalconProductManager] ✅ 已应用产品'{product_name}'的阀门参数到全局配置")
+            except Exception as e:
+                print(f"[HalconProductManager] ⚠️ 保存阀门参数失败: {e}")
+            
             # 5. 设置当前产品
             self.current_product = product_name
             

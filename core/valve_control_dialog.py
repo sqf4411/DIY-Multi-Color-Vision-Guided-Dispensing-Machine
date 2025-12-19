@@ -40,6 +40,12 @@ class ValveControlDialog(QDialog):
         # 🚀 启动时自动加载保存的参数
         self.load_params_from_file_silent()
     
+    def showEvent(self, event):
+        """对话框显示时重新加载参数（确保加载新产品后参数正确）"""
+        super().showEvent(event)
+        # 每次显示对话框时重新加载参数
+        self.load_params_from_file_silent()
+    
     def init_ui(self):
         layout = QVBoxLayout()
         layout.setSpacing(15)
@@ -86,27 +92,28 @@ class ValveControlDialog(QDialog):
         
         params_layout.addLayout(time_grid)
         
-        # 参数管理按钮
+        # 参数管理按钮（移除加载按钮，因为加载配方时会自动加载）
         btn_layout = QHBoxLayout()
         
-        btn_save = QPushButton("💾 保存参数")
+        btn_save = QPushButton("💾 保存参数（临时）")
+        btn_save.setToolTip("保存当前参数供快速测试\n真正保存到配方需使用主UI的'保存配方'按钮")
         btn_save.clicked.connect(self.save_params_to_file)
         btn_save.setStyleSheet("background-color: #10B981; color: white; padding: 8px; font-weight: bold;")
-        
-        btn_load = QPushButton("📂 加载参数")
-        btn_load.clicked.connect(self.load_params_from_file)
-        btn_load.setStyleSheet("background-color: #3B82F6; color: white; padding: 8px; font-weight: bold;")
         
         btn_reset = QPushButton("🔄 恢复默认")
         btn_reset.clicked.connect(self.reset_to_defaults)
         btn_reset.setStyleSheet("background-color: #6B7280; color: white; padding: 8px;")
         
         btn_layout.addWidget(btn_save)
-        btn_layout.addWidget(btn_load)
         btn_layout.addWidget(btn_reset)
         btn_layout.addStretch()
         
         params_layout.addLayout(btn_layout)
+        
+        # 添加提示标签
+        lbl_hint = QLabel("💡 提示：加载产品配方时会自动应用该产品的阀门参数")
+        lbl_hint.setStyleSheet("color: #6B7280; font-size: 11px; font-style: italic;")
+        params_layout.addWidget(lbl_hint)
         params_group.setLayout(params_layout)
         layout.addWidget(params_group)
         
@@ -501,14 +508,25 @@ class ValveControlDialog(QDialog):
     def load_params_from_file_silent(self):
         """静默加载参数（启动时用）"""
         config_file = Path("config") / "valve_dispense_params.json"
+        print(f"[ValveControl] 尝试加载参数文件: {config_file.absolute()}")
+        print(f"[ValveControl] 文件存在: {config_file.exists()}")
+        
         if config_file.exists():
             try:
                 with open(config_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 params = data["parameters"]
+                
+                print(f"[ValveControl] 读取到的参数: {params}")
+                
                 self.spn_prefeed_time.setValue(params["prefeed_time"])
                 self.spn_valve_a_time.setValue(params["valve_a_dispense_time"])
                 self.spn_valve_b_time.setValue(params["valve_b_dispense_time"])
-                print(f"[ValveControl] 已加载保存的参数")
+                
+                print(f"[ValveControl] ✅ 已加载参数: 供料={params['prefeed_time']}, A={params['valve_a_dispense_time']}, B={params['valve_b_dispense_time']}")
             except Exception as e:
-                print(f"[ValveControl] 使用默认参数: {e}")
+                print(f"[ValveControl] ❌ 加载参数失败: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print(f"[ValveControl] ⚠️ 参数文件不存在，使用默认值")

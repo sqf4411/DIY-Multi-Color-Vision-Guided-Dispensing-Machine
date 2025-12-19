@@ -3,6 +3,7 @@ import json
 import shutil
 import numpy as np
 from datetime import datetime
+from pathlib import Path
 
 class ProductManager:
     """
@@ -52,7 +53,29 @@ class ProductManager:
         if not os.path.exists(product_dir):
             os.makedirs(product_dir)
 
-        # 2. Save Config JSON
+        # 2. Load current valve parameters and add to config
+        valve_params_file = Path("config") / "valve_dispense_params.json"
+        if valve_params_file.exists():
+            try:
+                with open(valve_params_file, 'r', encoding='utf-8') as f:
+                    valve_params = json.load(f)
+                # Add valve parameters to config_data
+                params = valve_params.get("parameters", {})
+                config_data["valve_prefeed_time"] = params.get("prefeed_time", 0.10)
+                config_data["valve_a_dispense_time"] = params.get("valve_a_dispense_time", 0.50)
+                config_data["valve_b_dispense_time"] = params.get("valve_b_dispense_time", 0.50)
+            except Exception as e:
+                print(f"[Warn] Could not load valve params, using defaults: {e}")
+                config_data["valve_prefeed_time"] = 0.10
+                config_data["valve_a_dispense_time"] = 0.50
+                config_data["valve_b_dispense_time"] = 0.50
+        else:
+            # Use default values
+            config_data["valve_prefeed_time"] = 0.10
+            config_data["valve_a_dispense_time"] = 0.50
+            config_data["valve_b_dispense_time"] = 0.50
+        
+        # 3. Save Config JSON
         config_path = os.path.join(product_dir, "config.json")
         try:
             with open(config_path, 'w', encoding='utf-8') as f:
@@ -98,6 +121,36 @@ class ProductManager:
                 return None, None, None, f"Error loading config.json: {e}"
         else:
             return None, None, None, "config.json missing."
+        
+        # 1.5 Apply valve parameters from config to global valve params file
+        valve_params = {
+            "version": "1.0",
+            "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "parameters": {
+                "prefeed_time": config_data.get("valve_prefeed_time", 0.10),
+                "valve_a_dispense_time": config_data.get("valve_a_dispense_time", 0.50),
+                "valve_b_dispense_time": config_data.get("valve_b_dispense_time", 0.50)
+            },
+            "notes": f"Loaded from product '{name}'"
+        }
+        
+        print(f"[ProductManager] 加载产品 '{name}' 的阀门参数:")
+        print(f"[ProductManager]   供料提前: {valve_params['parameters']['prefeed_time']}")
+        print(f"[ProductManager]   阀A时间: {valve_params['parameters']['valve_a_dispense_time']}")
+        print(f"[ProductManager]   阀B时间: {valve_params['parameters']['valve_b_dispense_time']}")
+        
+        valve_params_dir = Path("config")
+        valve_params_dir.mkdir(exist_ok=True)
+        valve_params_file = valve_params_dir / "valve_dispense_params.json"
+        
+        print(f"[ProductManager] 写入参数文件: {valve_params_file.absolute()}")
+        
+        try:
+            with open(valve_params_file, 'w', encoding='utf-8') as f:
+                json.dump(valve_params, f, indent=2, ensure_ascii=False)
+            print(f"[ProductManager] ✅ 已应用产品'{name}'的阀门参数到全局配置")
+        except Exception as e:
+            print(f"[Warn] Could not save valve params: {e}")
 
         # 2. Load Path (Dots)
         npy_path = os.path.join(product_dir, "path.npy")

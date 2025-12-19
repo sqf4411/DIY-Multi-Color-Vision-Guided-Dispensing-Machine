@@ -5458,6 +5458,11 @@ class MainWindow(QWidget):
   • X偏移: {config_data['nozzle_offset_x']:.2f} mm
   • Y偏移: {config_data['nozzle_offset_y']:.2f} mm
 
+💧 出胶参数：
+  • 供料提前: {config_data.get('valve_prefeed_time', 0.10):.2f} 秒
+  • 阀A时间: {config_data.get('valve_a_dispense_time', 0.50):.2f} 秒
+  • 阀B时间: {config_data.get('valve_b_dispense_time', 0.50):.2f} 秒
+
 🎨 点胶路径：
   • 点路径: {len(self.dots)} 个点
   • 线路径: {len(self.polys)} 条线

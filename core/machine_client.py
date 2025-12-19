@@ -486,6 +486,16 @@ class MachineClient:
         cmd = f"TEST_VALVE PIN={pin_name} T={duration:.2f}"
         self._post_gcode(cmd)
         print(f"[MachineClient] {cmd}")
+    
+    def set_pin(self, pin_name: str, value: float):
+        """
+        直接设置 output_pin 的值
+        value: 0.0 (关) 或 1.0 (开)
+        """
+        if not self.connected: return
+        cmd = f"SET_PIN PIN={pin_name} VALUE={value:.1f}"
+        self._post_gcode(cmd)
+        print(f"[MachineClient] {cmd}")
 
     def all_valves_off(self):
         """调用 HAL 宏 ALL_VALVES_OFF"""

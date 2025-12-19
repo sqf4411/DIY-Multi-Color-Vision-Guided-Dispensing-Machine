@@ -1,0 +1,10 @@
+{
+  "version": "1.0",
+  "last_updated": "2025-12-19 15:17:11",
+  "parameters": {
+    "prefeed_time": 0.1,
+    "valve_a_dispense_time": 0.5,
+    "valve_b_dispense_time": 2.0
+  },
+  "notes": ""
+}

@@ -181,7 +181,7 @@ class HalconProductManager:
             # 5. 设置当前产品
             self.current_product = product_name
             
-            return True, f"产品 '{product_name}' 加载成功"
+            return True, f"✅ 产品 '{product_name}' 加载成功"
             
         except Exception as e:
             import traceback

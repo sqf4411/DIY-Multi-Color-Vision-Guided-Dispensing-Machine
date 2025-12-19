@@ -1484,23 +1484,24 @@ class MainWindow(QWidget):
         # param_group 已移到第一行，这里不再添加
         right_layout.addWidget(self.vision_group)
 
-        # [NEW] iPad Monitor Button (Standalone)
-        btn_ipad = QPushButton("📱 启动 iPad 监控副屏")
-        btn_ipad.setMinimumHeight(40)
-        btn_ipad.setStyleSheet("""
-            QPushButton { 
-                background-color: #059669; 
-                color: white; 
-                font-weight: bold; 
-                font-size: 16px; 
-                border-radius: 6px;
-                margin-top: 10px;
-                margin-bottom: 10px;
-            }
-            QPushButton:hover { background-color: #10B981; }
-        """)
-        btn_ipad.clicked.connect(self.open_mobile_monitor)
-        right_layout.addWidget(btn_ipad)
+        # [DISABLED] iPad Monitor Button - 用户使用iPad投屏查看主程序
+        # btn_ipad = QPushButton("📱 启动 iPad 监控副屏")
+        # btn_ipad.setMinimumHeight(40)
+        # btn_ipad.setStyleSheet("""
+        #     QPushButton { 
+        #         background-color: #059669; 
+        #         color: white; 
+        #         font-weight: bold; 
+        #         font-size: 16px; 
+        #         border-radius: 6px;
+        #         margin-top: 10px;
+        #         margin-bottom: 10px;
+        #     }
+        #     QPushButton:hover { background-color: #10B981; }
+        # """)
+        # btn_ipad.clicked.connect(self.toggle_mobile_monitor)
+        # self.btn_ipad = btn_ipad
+        # right_layout.addWidget(btn_ipad)
         
         # 日志窗口
         right_layout.addWidget(self.log_box)
@@ -5382,12 +5383,12 @@ class MainWindow(QWidget):
             if hasattr(self, 'halcon_path_template'):
                 self.halcon_path_template = None
             
-                self.update_button_states()
-                self.log(f"✅ 产品加载成功")
-                self.log(f"📊 路径: {len(self.dots)} 点, {len(self.polys)} 线")
-            else:
-                QMessageBox.critical(self, "加载失败", msg)
-                self.log(f"❌ {msg}")
+            self.update_button_states()
+            self.log(f"✅ 产品加载成功")
+            self.log(f"📊 路径: {len(self.dots)} 点, {len(self.polys)} 线")
+        else:
+            QMessageBox.critical(self, "加载失败", msg)
+            self.log(f"❌ {msg}")
     
     def on_save_recipe(self):
         """保存产品（保持方法名兼容性）"""
@@ -5539,23 +5540,51 @@ class MainWindow(QWidget):
 
 
 
-    def open_mobile_monitor(self):
-        """Open the simplified iPad dashboard"""
-        from mobile_ui.mobile_monitor_dialog import MobileMonitorDialog
-        if not self.mobile_monitor:
-            # Pass machine client and valve pin name (VALVE_A_CTRL is standard per user script)
-            self.mobile_monitor = MobileMonitorDialog(self, self.machine, "VALVE_A_CTRL")
-            
-            # Connect image signal
-            if self.camera_manager and self.camera_manager.get_frame_signal():
-                self.camera_manager.get_frame_signal().connect(self.mobile_monitor.update_image)
-            # If using USBCameraWorker directly (fallback)
-            elif hasattr(self, 'usb_worker') and self.usb_worker:
-                 self.usb_worker.frame_signal.connect(self.mobile_monitor.update_image)
-        
-        self.mobile_monitor.show()
-        self.mobile_monitor.raise_()
-        self.mobile_monitor.activateWindow()
+    # ==================== iPad副屏功能（已禁用） ====================
+    # 用户使用iPad投屏直接查看主程序，不需要专门的副屏
+    
+    # def toggle_mobile_monitor(self):
+    #     """切换iPad监控副屏的开/关状态"""
+    #     if self.mobile_monitor and self.mobile_monitor.isVisible():
+    #         self.mobile_monitor.close()
+    #         self.mobile_monitor = None
+    #         self.btn_ipad.setText("📱 启动 iPad 监控副屏")
+    #         self.btn_ipad.setStyleSheet("background-color: #10B981; color: white; padding: 10px; border-radius: 5px;")
+    #         print("[副屏] 已关闭")
+    #     else:
+    #         self.open_mobile_monitor()
+    #         self.btn_ipad.setText("⏹ 停止副屏")
+    #         self.btn_ipad.setStyleSheet("background-color: #EF4444; color: white; padding: 10px; border-radius: 5px;")
+    #         print("[副屏] 已启动")
+    # 
+    # def open_mobile_monitor(self):
+    #     """Open the simplified iPad dashboard - 精简版，只显示USB画面"""
+    #     from mobile_ui.mobile_monitor_minimal import MobileMonitorDialog
+    #     if not self.mobile_monitor:
+    #         self.mobile_monitor = MobileMonitorDialog(self)
+    #     
+    #     # 每次打开都转移USB相机流到副屏
+    #     if hasattr(self, 'usb_cam_worker') and self.usb_cam_worker:
+    #         try:
+    #             try:
+    #                 self.usb_cam_worker.frame_signal.disconnect(self.update_usb_image)
+    #             except:
+    #                 pass
+    #             try:
+    #                 self.usb_cam_worker.frame_signal.disconnect(self.mobile_monitor.update_usb_image)
+    #             except:
+    #                 pass
+    #             
+    #             self.usb_cam_worker.frame_signal.connect(self.mobile_monitor.update_usb_image)
+    #             if hasattr(self, 'label_usb_cam'):
+    #                 self.label_usb_cam.hide()
+    #             print("[副屏] USB流已转移到副屏")
+    #         except Exception as e:
+    #             print(f"[副屏] USB流转移失败: {e}")
+    #     
+    #     self.mobile_monitor.show()
+    #     self.mobile_monitor.raise_()
+    #     self.mobile_monitor.activateWindow()
 
 if __name__ == "__main__":
     print("🚀 App Starting...")

@@ -4887,7 +4887,6 @@ class MainWindow(QWidget):
                                     from core.path_segment import PathSegment
                                     final_seg = PathSegment(item.type, item.color, pts_transformed.tolist(), item.dwell_ms)
                                     mold_segments.append(final_seg)
-                                    mold_segments.append(pts_transformed)
                             
                          except Exception as e:
                             print(f"[ERROR] Path draw failed: {e}")
@@ -4922,7 +4921,6 @@ class MainWindow(QWidget):
              return
 
         try:
-            print("[Halcon] Computing offline path template...")
             import cv2
             import numpy as np
             from core.mold_detector import _find_big_mold
@@ -4939,13 +4937,11 @@ class MainWindow(QWidget):
             # [Fix] Prioritize In-Memory Paths (Loaded from JSON via ProductManager)
             # 1. Try Multicolor Segments (New)
             if hasattr(self, 'current_segments') and self.current_segments and self.current_segments.segments:
-                print(f"[Halcon] Using in-memory Multicolor Segments: {len(self.current_segments.segments)}")
                 # current_segments.segments is a list of PathSegment objects
                 segments.extend(self.current_segments.segments)
                 
             # 2. Try Legacy Polys/Dots (Old)
             elif hasattr(self, 'polys') and hasattr(self, 'dots') and (self.polys or self.dots):
-                print(f"[Halcon] Using in-memory Legacy paths: {len(self.polys)} polys, {len(self.dots)} dots")
                 # Polys
                 if self.polys:
                     segments.extend([p.astype(np.float32) for p in self.polys])

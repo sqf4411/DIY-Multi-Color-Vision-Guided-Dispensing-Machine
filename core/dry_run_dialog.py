@@ -37,6 +37,7 @@ class DryRunDialog(QDialog):
         self.speed_z = initial_params.get('speed_z', 500)
         self.dwell_ms = initial_params.get('dwell_ms', 100)      # Dot Dwell
         self.line_dwell_ms = initial_params.get('line_dwell_ms', 0) # Line Start Dwell
+        self.color_delay = initial_params.get('color_delay', 500)   # Color Supply Delay
 
         self.init_ui()
         self.generate_gcode()
@@ -104,6 +105,14 @@ class DryRunDialog(QDialog):
         self.spn_line_dwell.valueChanged.connect(self.on_param_changed)
         param_layout.addWidget(self.spn_line_dwell, 3, 3)
 
+        # [NEW] Color Delay (Supply Pressure Delay)
+        param_layout.addWidget(QLabel("供料延时 (ms):"), 4, 0)
+        self.spn_color_delay = QSpinBox()
+        self.spn_color_delay.setRange(0, 5000)
+        self.spn_color_delay.setValue(self.color_delay)
+        self.spn_color_delay.valueChanged.connect(self.on_param_changed)
+        param_layout.addWidget(self.spn_color_delay, 4, 1)
+
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
 
@@ -164,6 +173,7 @@ class DryRunDialog(QDialog):
         self.speed_z = self.spn_speed_z.value()
         self.dwell_ms = self.spn_dwell.value()
         self.line_dwell_ms = self.spn_line_dwell.value()
+        self.color_delay = self.spn_color_delay.value()
         self.generate_gcode()
 
     def generate_gcode(self):
@@ -246,8 +256,12 @@ class DryRunDialog(QDialog):
                     is_sim = self.chk_simulate.isChecked()
                     if not is_sim:
                         gcode_lines.append(f"SET_PIN PIN={target_valve} VALUE=1")
+                        if self.color_delay > 0:
+                            gcode_lines.append(f"G4 P{self.color_delay}")
                     else:
                         gcode_lines.append(f"; [Tag] {target_valve} (ON)")
+                        if self.color_delay > 0:
+                            gcode_lines.append(f"; [Tag] G4 P{self.color_delay}")
                     
                     active_color_valve = target_valve
                 

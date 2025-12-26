@@ -377,10 +377,16 @@ class BatchWorker(QThread):
                     # Open new
                     # [MOD] Simulation Check
                     is_sim = self.cfg.get('disable_valves', False)
+                    color_delay = self.cfg.get('color_delay', 500)
+                    
                     if not is_sim:
                         lines.append(f"SET_PIN PIN={target_valve} VALUE=1")
+                        if color_delay > 0:
+                            lines.append(f"G4 P{color_delay}")
                     else:
                          lines.append(f"; [Tag] {target_valve} (ON)")
+                         if color_delay > 0:
+                            lines.append(f"; [Tag] G4 P{color_delay} (Supply Delay)")
                     
                     active_color_valve = target_valve
                 
@@ -607,6 +613,16 @@ class BatchRunDialog(QDialog):
         self.chk_simulate.setStyleSheet("color: #F59E0B; font-weight: bold;")
         layout.addWidget(self.chk_simulate)
 
+        # [NEW] Color Supply Delay
+        h_color_delay = QHBoxLayout()
+        h_color_delay.addWidget(QLabel("供料延时 (ms):"))
+        self.spn_color_delay = QSpinBox()
+        self.spn_color_delay.setRange(0, 5000)
+        self.spn_color_delay.setValue(500)
+        h_color_delay.addWidget(self.spn_color_delay)
+        h_color_delay.addStretch()
+        layout.addLayout(h_color_delay)
+
         # --- 3.5 进度条 ---
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
@@ -697,7 +713,8 @@ class BatchRunDialog(QDialog):
             'nozzle_safe_z_product': self.spn_nozzle_safe_product.value(),
             'nozzle_work_z': self.spn_nozzle_work.value(),
             # [NEW] Simulation
-            'disable_valves': self.chk_simulate.isChecked()
+            'disable_valves': self.chk_simulate.isChecked(),
+            'color_delay': self.spn_color_delay.value()
         }
 
     def on_start(self, mode):

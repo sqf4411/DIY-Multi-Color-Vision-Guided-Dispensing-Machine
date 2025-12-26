@@ -275,16 +275,21 @@ class DryRunDialog(QDialog):
 from PyQt5.QtWidgets import QPushButton, QProgressBar
 
 class DryRunControlDialog(QDialog):
-    def __init__(self, parent, worker):
+    def __init__(self, parent, worker, full_gcode_text=""):
         super().__init__(parent)
         self.worker = worker
+        self.full_gcode_text = full_gcode_text
         self.setWindowTitle("空跑控制 (逐行模式)")
-        self.resize(400, 180)
+        self.resize(600, 500) # [MOD] Increase size for text area
         self.init_ui()
         
         # 连接 worker 信号
         self.worker.progress_signal.connect(self.update_progress)
         self.worker.log_signal.connect(self.update_status)
+        self.worker.current_index_signal.connect(self.highlight_current_line)
+
+        # Init display
+        self.update_gcode_display(self.full_gcode_text)
 
     def init_ui(self):
         layout = QVBoxLayout()
@@ -298,6 +303,13 @@ class DryRunControlDialog(QDialog):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         layout.addWidget(self.progress_bar)
+
+        # [NEW] G-code Realtime View
+        layout.addWidget(QLabel("实时代码执行:"))
+        self.gcode_box = QTextEdit()
+        self.gcode_box.setReadOnly(True)
+        self.gcode_box.setStyleSheet("background-color: #1e1e1e; color: #dcdcdc; font-family: Consolas; font-size: 10pt;")
+        layout.addWidget(self.gcode_box)
 
         btn_layout = QHBoxLayout()
         
@@ -346,6 +358,23 @@ class DryRunControlDialog(QDialog):
         
     def update_status(self, msg):
         # 可以在这里显示来自 worker 的日志
-        # self.lbl_status.setText(msg) 
-        pass
+        self.lbl_status.setText(msg) 
+
+    def update_gcode_display(self, full_gcode):
+        """显示完整的 G-code"""
+        self.gcode_box.setText(full_gcode)
+
+    def highlight_current_line(self, line_index):
+        """高亮当前执行的行 (根据行号)"""
+        # 移动光标到指定行
+        cursor = self.gcode_box.textCursor()
+        cursor.movePosition(cursor.Start)
+        
+        # 向下移动 line_index 行
+        cursor.movePosition(cursor.Down, cursor.MoveAnchor, line_index)
+        
+        # 选中该行
+        cursor.select(cursor.LineUnderCursor)
+        self.gcode_box.setTextCursor(cursor)
+        self.gcode_box.ensureCursorVisible()
 

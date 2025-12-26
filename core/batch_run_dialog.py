@@ -470,13 +470,9 @@ class BatchRunDialog(QDialog):
         self.spn_cam_safe_product.setRange(-500, 500)
         self.spn_cam_safe_product.setValue(self.mw.cam_safe_z_product if self.mw.cam_safe_z_product is not None else 0.0)
 
-        # [Fix] Default Camera Work Z should be same as Safe Z (Detection Height)
-        # to ensure the perspective matches calibration.
-        def_cam_work = self.mw.cam_work_z if self.mw.cam_work_z is not None else def_cam_safe
-        
         self.spn_cam_work = QDoubleSpinBox()
         self.spn_cam_work.setRange(-500, 500)
-        self.spn_cam_work.setValue(def_cam_work)
+        self.spn_cam_work.setValue(self.mw.cam_work_z if self.mw.cam_work_z is not None else 0.0)
         
         h_cam_z = QHBoxLayout()
         h_cam_z.addWidget(QLabel("腔内安全:"))

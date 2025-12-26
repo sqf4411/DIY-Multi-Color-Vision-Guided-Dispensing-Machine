@@ -335,6 +335,8 @@ class GCodeLineWorker(QThread):
     progress_signal = pyqtSignal(int, int)  # 当前行, 总行数
     finished_signal = pyqtSignal(bool, str) # 成功/失败, 消息
     log_signal = pyqtSignal(str)            # 日志消息
+    current_line_signal = pyqtSignal(str)   # [NEW]
+    current_index_signal = pyqtSignal(int)  # [NEW]
 
     def __init__(self, machine_client, script_lines):
         super().__init__()
@@ -363,7 +365,15 @@ class GCodeLineWorker(QThread):
             # 3. 发送指令
             line = line.strip()
             if not line or line.startswith(';'):
+                # 即使是空行或注释，也发送高亮信号，让用户知道跑哪了
+                self.current_index_signal.emit(i)
+                self.current_line_signal.emit(line)
+                self.progress_signal.emit(i + 1, total)
                 continue
+
+            # 发送高亮信号
+            self.current_index_signal.emit(i)
+            self.current_line_signal.emit(line)
 
             # 发送并等待 ok
             # 对于移动指令，Klipper 通常会立即返回 ok (放入缓冲区)，除非缓冲区满了
@@ -4391,7 +4401,7 @@ class MainWindow(QWidget):
                     save_callback(dialog)
 
                 # 弹出控制面板
-                self.dry_run_ctrl_dlg = DryRunControlDialog(self, self.dry_run_worker)
+                self.dry_run_ctrl_dlg = DryRunControlDialog(self, self.dry_run_worker, full_script)
                 self.dry_run_ctrl_dlg.setWindowTitle(f"{title} - 运行中")
                 self.dry_run_ctrl_dlg.exec_()
             else:

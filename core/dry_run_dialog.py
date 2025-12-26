@@ -117,6 +117,14 @@ class DryRunDialog(QDialog):
             chk.stateChanged.connect(self.generate_gcode)
             prod_layout.addWidget(chk)
             self.chk_products.append(chk)
+        
+        # [NEW] Simulation Checkbox
+        self.chk_simulate = QCheckBox("模拟出胶 (关闭阀门)")
+        self.chk_simulate.setChecked(True) # Default Checked (Safety)
+        self.chk_simulate.setStyleSheet("color: #F59E0B; font-weight: bold;")
+        self.chk_simulate.stateChanged.connect(self.generate_gcode)
+        prod_layout.addWidget(self.chk_simulate)
+        
         prod_layout.addStretch()
         prod_group.setLayout(prod_layout)
         layout.addWidget(prod_group)
@@ -171,7 +179,18 @@ class DryRunDialog(QDialog):
 
             gcode_lines.append(f"; --- Product {prod_idx + 1} ---")
             
-            for seg_idx, p_px in enumerate(prod_segments):
+            # [Fix] Initialize state
+            active_color_valve = None
+
+            # [MOD] Sort segments by color for continuous dispensing
+            # Assuming prod_segments is a list of PathSegment objects or lists
+            def get_seg_color(p):
+                return getattr(p, 'color', 0) if hasattr(p, 'color') else 0
+            
+            sorted_segments = sorted(prod_segments, key=get_seg_color)
+
+            for seg_idx, p_px in enumerate(sorted_segments):
+
                 # 1. Convert pixels to mm
                 # [FIX] Handle PathSegment objects
                 if hasattr(p_px, 'points'):
@@ -207,42 +226,69 @@ class DryRunDialog(QDialog):
                 # Check if it is a Dot (1 point) or Line (>1 points)
                 # Prepare Valve Commands
                 # Default to A1 if no color info
+                dwell_ms = getattr(p_px, 'dwell_ms', 0)
                 color_idx = getattr(p_px, 'color', 0)
                 valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
-                current_valve = valve_macros[color_idx] if 0 <= color_idx < 4 else "A1_VALVE"
-                
-                # ON Sequence: Color -> A -> B
-                on_cmds = [current_valve, "VALVE_A_CTRL", "VALVE_B_CTRL"]
-                # OFF Sequence: B -> A -> Color
-                off_cmds = ["VALVE_B_CTRL", "VALVE_A_CTRL", current_valve]
+                target_valve = valve_macros[color_idx] if 0 <= color_idx < 4 else "A1_VALVE"
 
-                # Helper to append commands
-                def append_valve_cmds(cmds, is_on):
-                    if self.is_real_run:
-                        for c in cmds: gcode_lines.append(c)
+                # --- Valve State Logic ---
+                # Check if we need to switch color valve
+                if active_color_valve != target_valve:
+                    # Close previous if open
+                    if active_color_valve is not None:
+                        is_sim = self.chk_simulate.isChecked()
+                        if not is_sim:
+                             gcode_lines.append(f"SET_PIN PIN={active_color_valve} VALUE=0")
+                        else:
+                             gcode_lines.append(f"; [Tag] {active_color_valve} (OFF) - Switch Color")
+                    
+                    # Open new
+                    is_sim = self.chk_simulate.isChecked()
+                    if not is_sim:
+                        gcode_lines.append(f"SET_PIN PIN={target_valve} VALUE=1")
                     else:
-                        # Dry Run: Show as comment
-                        action = "ON" if is_on else "OFF"
-                        gcode_lines.append(f"; [Tag] {' + '.join(cmds)} ({action})")
+                        gcode_lines.append(f"; [Tag] {target_valve} (ON)")
+                    
+                    active_color_valve = target_valve
+                
+                # Master Valve A Control (Always toggle per segment)
+                master_pin = "VALVE_A_CTRL"
+                
+                # Helper to append commands
+                def append_master_cmd(is_on):
+                    val = 1 if is_on else 0
+                    action = "ON" if is_on else "OFF"
+                    
+                    # [MOD] Simulation Check
+                    is_sim = self.chk_simulate.isChecked()
+                    
+                    # Allow real output if simulation is unchecked
+                    if not is_sim:
+                        gcode_lines.append(f"SET_PIN PIN={master_pin} VALUE={val}")
+                    else:
+                        gcode_lines.append(f"; [Tag] {master_pin} ({action})")
 
                 if len(path_machine) == 1:
                     # --- Dot Dispensing ---
-                    if self.dwell_ms > 0:
-                        append_valve_cmds(on_cmds, True)
-                        gcode_lines.append(f"G4 P{self.dwell_ms}")
-                        append_valve_cmds(off_cmds, False)
+                    # [MOD] Prioritize individual segment dwell time
+                    actual_dwell = dwell_ms if dwell_ms > 0 else self.dwell_ms
+                    
+                    if actual_dwell > 0:
+                        append_master_cmd(True) # Open A
+                        gcode_lines.append(f"G4 P{actual_dwell}")
+                        append_master_cmd(False) # Close A
                 else:
                     # --- Line Dispensing ---
                     if self.line_dwell_ms > 0:
                         gcode_lines.append(f"G4 P{self.line_dwell_ms}")
 
                     # 4. Dispense Path
-                    append_valve_cmds(on_cmds, True)
+                    append_master_cmd(True) # Open A
                     for pt in path_machine[1:]:
                         pt_x = pt[0] + self.nozzle_offset_x
                         pt_y = pt[1] + self.nozzle_offset_y
                         gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{self.speed_xy}")
-                    append_valve_cmds(off_cmds, False)
+                    append_master_cmd(False) # Close A
 
                 # 5. Lift after segment
                 # If this is the LAST segment of the product, lift to Product Safe Z
@@ -251,6 +297,11 @@ class DryRunDialog(QDialog):
                     gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
                 else:
                     gcode_lines.append(f"G0 Z{self.safe_z_cavity:.2f} F{self.speed_z}")
+            
+            # End of Product: Close Color Valve if open
+            if active_color_valve is not None:
+                gcode_lines.append(f"; [Tag] {active_color_valve} (OFF) - End Product")
+                active_color_valve = None
 
         gcode_lines.append(f"; --- Return to Start ---")
         gcode_lines.append(f"G0 X{self.origin_x:.3f} Y{self.origin_y:.3f} F{self.speed_xy}")

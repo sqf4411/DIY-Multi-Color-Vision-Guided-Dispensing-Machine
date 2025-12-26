@@ -6,7 +6,7 @@ import numpy as np
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox, 
     QSpinBox, QPushButton, QGroupBox, QFormLayout, QMessageBox, QTextEdit,
-    QProgressBar
+    QProgressBar, QCheckBox
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 
@@ -46,30 +46,55 @@ class BatchWorker(QThread):
         cols = self.cfg['cols']
         start_x = self.cfg['start_x']
         start_y = self.cfg['start_y']
-        start_z = self.cfg.get('start_z', 0.0) # 新增 Start Z
+        start_z = self.cfg.get('start_z', 0.0) 
         space_x = self.cfg['space_x']
         space_y = self.cfg['space_y']
         
         total_molds = rows * cols
-        molds_finished = 0
+        # Calculate total colors to determine total steps (molds * colors)
+        # We need to know segments first. 
+        # But we only get segments AFTER first vision or from main window.
+        # Assuming all molds have same colors. We can check self.mw.mold_segments for colors.
+        
+        # 0. Analyze Colors to Process
+        active_colors = set()
+        if not getattr(self.mw, 'halcon_path_template', None):
+             self.mw.log("[Batch] Computing Halcon template to determine colors...")
+             try:
+                 self.mw._compute_halcon_template()
+             except Exception as e:
+                 self.mw.log(f"[Batch] Warning: Template computation failed ({e}). Defaulting to Color 0.")
+
+        template_segments = getattr(self.mw, 'halcon_path_template', [])
+        if template_segments:
+             for seg in template_segments:
+                 if hasattr(seg, 'color'): 
+                     active_colors.add(seg.color)
+        
+        sorted_colors = sorted(list(active_colors)) if active_colors else [0]
+        if not sorted_colors: sorted_colors = [0]
+        
+        total_ops = total_molds * len(sorted_colors)
+        ops_finished = 0
         RESOLUTION = 1000
-        global_total_steps = total_molds * RESOLUTION
+        global_total_steps = total_ops * RESOLUTION
 
         mode_names = {
-            'real': "真实批量点胶",
-            'camera_dry': "相机批量空跑",
-            'nozzle_dry': "针头批量空跑"
+            'real': "真实批量(颜色优先)",
+            'camera_dry': "相机批量(颜色优先)",
+            'nozzle_dry': "针头批量(颜色优先)"
         }
         title = mode_names.get(self.mode, "未知模式")
 
-        self.log_signal.emit(f"🚀 开始【{title}】：{rows}x{cols}，共 {total_molds} 个")
+        self.log_signal.emit(f"🚀 开始【{title}】：{rows}x{cols}，共 {len(sorted_colors)} 种颜色")
         
-        # 0. 开启十字光标 (方便观察)
-        # 注意：主界面使用的是 show_center_crosshair
         self.mw.show_center_crosshair = True
-        self.mw.render_current_frame() # 立即刷新
+        self.mw.render_current_frame() 
 
-        # 1. 确保 Z 轴抬起 (根据模式选择安全高度)
+        # Vision Cache: Stores (r, c) -> (paths_groups, current_x, current_y)
+        vision_cache = {}
+
+        # 1. 确保 Z 轴抬起
         if self.mode == 'camera_dry':
             safe_z = float(self.cfg['cam_safe_z_cavity'])
         else:
@@ -78,153 +103,177 @@ class BatchWorker(QThread):
         self.mw.machine.move_to(z=safe_z, speed=self.mw.feedrate_z)
         self.log_signal.emit(f"🔼 抬升至安全高度 Z={safe_z}")
 
-        for r in range(rows):
-            for c in range(cols):
-                if not self.running:
-                    self.finished_signal.emit(False, "用户停止")
-                    return
-
-                # 检查暂停
-                while self.paused:
+        # --- Outer Loop: Colors ---
+        for color_idx in sorted_colors:
+            color_name = ["红色(A1)", "绿色(A2)", "蓝色(A3)", "黄色(A4)"][color_idx] if 0 <= color_idx < 4 else f"Color {color_idx}"
+            self.log_signal.emit(f"🎨 正在处理颜色: {color_name} ...")
+            
+            # --- Inner Loop: Grid ---
+            for r in range(rows):
+                for c in range(cols):
                     if not self.running:
                         self.finished_signal.emit(False, "用户停止")
                         return
-                    self.msleep(100)
 
-                # count += 1 # 移除旧计数
-                # self.progress_signal.emit(count, total) # 移除旧的进度更新
-                
-                # 更新当前模具的起始进度
-                current_base_progress = molds_finished * RESOLUTION
-                self.progress_signal.emit(current_base_progress, global_total_steps)
-                
-                # --- 1. 计算目标坐标 (相机位置) ---
-                target_x = start_x + c * space_x
-                target_y = start_y + r * space_y
-                
-                self.log_signal.emit(f"📍 [{molds_finished + 1}/{total_molds}] 移动到 (R{r}, C{c}): X{target_x:.2f}, Y{target_y:.2f}")
-                
-                # --- 2. 移动相机到位 ---
-                self.mw.machine.move_to(x=target_x, y=target_y, speed=self.mw.feedrate_xy)
-                
-                # [关键修复] 移动到【相机工作高度】进行识别
-                # 用户反馈：安全高度太高导致 Halcon 无法识别，必须去工作高度
-                cam_work_z = float(self.cfg.get('cam_work_z', 0.0))
-                self.log_signal.emit(f"📉 正在下降到相机工作高度 Z={cam_work_z:.2f} ...")
-                self.mw.machine.move_to(z=cam_work_z, speed=self.mw.feedrate_z)
+                    while self.paused:
+                        if not self.running: return
+                        self.msleep(100)
 
-                self.mw.machine.wait_until_idle()
-                
-                # 等待相机稳定
-                time.sleep(0.5) 
+                    current_base_progress = ops_finished * RESOLUTION
+                    self.progress_signal.emit(current_base_progress, global_total_steps)
 
-                # --- 3. 拍照 & 识别 ---
-                if self.mw.last_frame is None:
-                    self.log_signal.emit("❌ 无法获取图像，跳过")
-                    # 恢复安全高度防止撞车
-                    self._safe_lift_z()
-                    molds_finished += 1
-                    continue
-
-                img = self.mw.last_frame.copy()
-                img = cv2.flip(img, -1) # 保持和主界面一致的翻转
-                
-                if len(img.shape) == 3:
-                     gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                else:
-                     gray_img = img
-
-                self.log_signal.emit("👀 正在识别模具...")
-                # 使用统一视觉接口 (支持 Halcon / OpenCV)
-                paths_groups, _ = self.mw.get_vision_result(gray_img)
-                
-                if not paths_groups:
-                    self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})，跳过")
-                    self._safe_lift_z()
-                    molds_finished += 1
-                    continue
-                
-                # Do NOT flatten groups. Keep structure: List[List[Path]]
-                # paths_groups = [Product1_Paths, Product2_Paths, ...]
-                
-                try:
-                    gcode_lines = self.generate_dispense_gcode(paths_groups, target_x, target_y)
+                    # Determine if we have cached data
+                    cache_key = (r, c)
+                    has_cache = cache_key in vision_cache
                     
-                    if not gcode_lines:
-                        self.log_signal.emit("⚠ 生成 G-code 失败，跳过")
+                    target_x = start_x + c * space_x
+                    target_y = start_y + r * space_y
+                    
+                    paths_groups = []
+                    
+                    if not has_cache:
+                        # --- First Pass (Vision) ---
+                        self.log_signal.emit(f"📍 [{ops_finished + 1}/{total_ops}] (R{r}, C{c}) 首次定位 & 识别...")
+                        
+                        # Move Camera
+                        self.mw.machine.move_to(x=target_x, y=target_y, speed=self.mw.feedrate_xy)
+                        
+                        cam_work_z = float(self.cfg.get('cam_work_z', 0.0))
+                        self.mw.machine.move_to(z=cam_work_z, speed=self.mw.feedrate_z)
+                        self.mw.machine.wait_until_idle()
+                        time.sleep(0.5) 
+
+                        if self.mw.last_frame is None:
+                            self.log_signal.emit("❌ 无法获取图像，跳过")
+                            self._safe_lift_z()
+                            ops_finished += 1
+                            continue
+
+                        img = self.mw.last_frame.copy()
+                        img = cv2.flip(img, -1)
+                        if len(img.shape) == 3: gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        else: gray_img = img
+
+                        paths_groups, _ = self.mw.get_vision_result(gray_img)
+                        
+                        if not paths_groups:
+                            self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})")
+                            vision_cache[cache_key] = None # Mark as processed but empty
+                        else:
+                            # Store in cache
+                            vision_cache[cache_key] = (paths_groups, target_x, target_y)
+                            
+                        # Lift after vision
                         self._safe_lift_z()
-                        molds_finished += 1
+                        
+                    else:
+                        # --- Subsequent Passes (Use Cache) ---
+                        cached_data = vision_cache[cache_key]
+                        if cached_data is None:
+                            # Previous vision failed or empty
+                            ops_finished += 1
+                            continue
+                            
+                        paths_groups, cached_x, cached_y = cached_data
+                        # Move directly to dispense area (XY)
+                        # Note: dispense gcode uses relative offsets from `current_x/y` passed to it.
+                        # We must simulate being at `target_x, target_y` OR pass them correctly.
+                        # `generate_dispense_gcode` uses `current_x` inputs as base.
+                        # So we just need to be physically safe (Z up) to move XY.
+                        # We don't necessarily need to move to `target_x` physically unless generated G-code is relative?
+                        # Generated G-code is ABSOLUTE.
+                        # `generate_dispense_gcode` calculates `target_mach_x = current_x + dx ...`
+                        # So we don't need to physically be at target_x before generating.
+                        # BUT we might want to move near there to minimize travel time inside G-code execution?
+                        # Actually G-code handles the travel.
+                        pass
+
+                    if not paths_groups and has_cache:
+                         paths_groups, _, _ = vision_cache[cache_key] # Retrieve if valid
+                    
+                    if not paths_groups:
+                        ops_finished += 1
                         continue
 
-                    # 发送完整 G-code 到界面显示
-                    full_gcode_str = "\n".join(gcode_lines)
-                    self.gcode_signal.emit(full_gcode_str)
+                    # Filter paths for CURRENT COLOR
+                    # paths_groups is List[List[Path]]. Usually 1 product per vision result unless multi-mold in one view.
+                    # Flatten or iterate?
+                    # The `generate_dispense_gcode` expects `paths_groups`.
+                    # We can filter IN PLACE or pass color to generator.
+                    # Better: Filter here.
+                    
+                    filtered_groups = []
+                    has_work = False
+                    for prod_paths in paths_groups:
+                        prod_filtered = []
+                        for p in prod_paths:
+                            p_color = getattr(p, 'color', 0)
+                            if p_color == color_idx:
+                                prod_filtered.append(p)
+                        if prod_filtered:
+                            filtered_groups.append(prod_filtered)
+                            has_work = True
+                    
+                    if not has_work:
+                        # No paths for this color in this mold
+                        ops_finished += 1
+                        continue
 
-                    # --- 5. 执行点胶 ---
-                    self.log_signal.emit(f"💉 开始执行 (R{r}, C{c})...")
-                    
-                    # 逐行发送
-                    total_lines = len(gcode_lines)
-                    self.progress_signal.emit(0, total_lines) # 初始化进度条
-                    
-                    for i, line in enumerate(gcode_lines):
-                        # 发送当前行信号 (用于高亮)
-                        self.current_line_signal.emit(line)
-                        self.current_index_signal.emit(i)
+                    self.log_signal.emit(f"💉 (R{r}, C{c}) {color_name} 出胶...")
+
+                    try:
+                        # Generate G-code ONLY for this color
+                        gcode_lines = self.generate_dispense_gcode(filtered_groups, target_x, target_y)
                         
-                        # 更新进度条 (全局行粒度)
-                        # 当前进度 = 已完成模具进度 + 当前模具内进度
-                        current_mold_progress = int((i + 1) / total_lines * RESOLUTION)
-                        global_current = (molds_finished * RESOLUTION) + current_mold_progress
-                        self.progress_signal.emit(global_current, global_total_steps)
-                        # 1. 检查停止
-                        if not self.running:
-                            self.finished_signal.emit(False, "用户停止")
-                            return
+                        if gcode_lines:
+                             # Send G-code, Execute...
+                            full_gcode_str = "\n".join(gcode_lines)
+                            self.gcode_signal.emit(full_gcode_str)
 
-                        # 2. 检查暂停 (立即生效)
-                        while self.paused:
-                            if not self.running:
-                                self.finished_signal.emit(False, "用户停止")
-                                return
-                            self.msleep(100)
+                            total_lines = len(gcode_lines)
+                            self.progress_signal.emit(0, total_lines) 
+                            
+                            for i, line in enumerate(gcode_lines):
+                                self.current_line_signal.emit(line)
+                                self.current_index_signal.emit(i)
+                                
+                                current_mold_progress = int((i + 1) / total_lines * RESOLUTION)
+                                global_current = (ops_finished * RESOLUTION) + current_mold_progress
+                                self.progress_signal.emit(global_current, global_total_steps)
+                                
+                                if not self.running: return
+                                while self.paused: 
+                                    if not self.running: return
+                                    self.msleep(100)
 
-                        self.mw.machine._post_gcode(line)
-                    
-                    self.mw.machine.wait_until_idle()
-                    self.log_signal.emit("✅ 单个完成")
-                    
-                    # 关键修复：单个完成后，确保 Z 轴抬升到【移动安全高度】
-                    self._safe_lift_z()
-                    self.mw.machine.wait_until_idle()
+                                self.mw.machine._post_gcode(line)
+                            
+                            self.mw.machine.wait_until_idle()
+                            # Lift after dispense (already handled in generate? check safe lift)
+                            # self._safe_lift_z() # generate_dispense_gcode ends with safe lift
+                    except Exception as e:
+                        self.log_signal.emit(f"❌ 执行出错: {e}")
+                        self._safe_lift_z()
 
-                except Exception as e:
-                    self.log_signal.emit(f"❌ 执行出错: {e}")
-                    self._safe_lift_z()
-                
-                molds_finished += 1
+                    ops_finished += 1
+            
+            # End of Grid Loop (One Color Finished)
+            # Maybe return to Safe Z or Origin?
+            self._safe_lift_z()
+            self.log_signal.emit(f"✅ {color_name} 批次完成")
 
         # 结束 - 返回起始点
-        self.log_signal.emit("🔙 正在返回起始点...")
-        
-        # 更新进度条到 100%
+        self.log_signal.emit("🔙 全部完成，返回起始点...")
         self.progress_signal.emit(global_total_steps, global_total_steps)
         
-        # 1. 确保 Z 在最高安全位
         if self.mode == 'camera_dry':
             final_safe_z = float(self.cfg['cam_safe_z_product'])
         else:
             final_safe_z = float(self.cfg['nozzle_safe_z_product'])
         self.mw.machine.move_to(z=final_safe_z, speed=self.mw.feedrate_z)
-        
-        # 2. 移动回起始 XY
         self.mw.machine.move_to(x=start_x, y=start_y, speed=self.mw.feedrate_xy)
         self.mw.machine.wait_until_idle()
-
-        # 3. 恢复起始 Z (用户要求)
-        self.log_signal.emit(f"🔙 恢复起始高度 Z={start_z:.2f}")
         self.mw.machine.move_to(z=start_z, speed=self.mw.feedrate_z)
-        self.mw.machine.wait_until_idle()
 
         self.finished_signal.emit(True, f"{title}完成")
 
@@ -275,6 +324,9 @@ class BatchWorker(QThread):
         # 初始抬升到产品安全高度 (最高)
         lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
 
+        # [Fix] Initialize state
+        active_color_valve = None
+
         for prod_idx, product_paths in enumerate(paths_groups):
             lines.append(f"; --- Product {prod_idx + 1} ---")
             
@@ -286,7 +338,10 @@ class BatchWorker(QThread):
                     seg_type = path_obj.type
                     seg_color = path_obj.color
                     # color_name = path_obj.get_color_name()
-                    dwell_ms = path_obj.dwell_ms
+                    
+                    # [MOD] Prioritize individual dwell, fallback to 100ms default
+                    val = getattr(path_obj, 'dwell_ms', 0)
+                    dwell_ms = val if val > 0 else 100
                 else:
                     # 旧格式 (List or Array)
                     path_points = path_obj
@@ -299,22 +354,50 @@ class BatchWorker(QThread):
                 
                 # Prepare Valve Commands
                 # Default to A1 if no color info
+                # Prepare Valve Commands
+                # Default to A1 if no color info
                 valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
-                current_valve = valve_macros[seg_color] if 0 <= seg_color < 4 else "A1_VALVE"
+                target_valve = valve_macros[seg_color] if 0 <= seg_color < 4 else "A1_VALVE"
+
+                # --- Valve State Logic ---
+                # Check if we need to switch color valve
+                if active_color_valve != target_valve:
+                    # Close previous if open
+                    if active_color_valve is not None:
+                         # [MOD] Simulation Check
+                        is_sim = self.cfg.get('disable_valves', False)
+                        if not is_sim:
+                             lines.append(f"SET_PIN PIN={active_color_valve} VALUE=0")
+                        else:
+                             lines.append(f"; [Tag] {active_color_valve} (OFF) - Switch Color")
+                        
+                        if self.mode == 'real':
+                             pass
+                    
+                    # Open new
+                    # [MOD] Simulation Check
+                    is_sim = self.cfg.get('disable_valves', False)
+                    if not is_sim:
+                        lines.append(f"SET_PIN PIN={target_valve} VALUE=1")
+                    else:
+                         lines.append(f"; [Tag] {target_valve} (ON)")
+                    
+                    active_color_valve = target_valve
                 
-                # ON Sequence: Color -> A -> B
-                on_cmds = [current_valve, "VALVE_A_CTRL", "VALVE_B_CTRL"]
-                # OFF Sequence: B -> A -> Color
-                off_cmds = ["VALVE_B_CTRL", "VALVE_A_CTRL", current_valve]
+                # Master Valve A Control (Always toggle per segment)
+                master_pin = "VALVE_A_CTRL"
 
                 # Helper to append commands
-                def append_valve_cmds(cmds, is_on):
-                    if self.mode == 'real':
-                        for c in cmds: lines.append(c)
+                def append_master_cmd(is_on):
+                    val = 1 if is_on else 0
+                    action = "ON" if is_on else "OFF"
+                    # [MOD] Simulation Check
+                    is_sim = self.cfg.get('disable_valves', False)
+                    
+                    if not is_sim:
+                        lines.append(f"SET_PIN PIN={master_pin} VALUE={val}")
                     else:
-                        # Dry Run: Show as comment
-                        action = "ON" if is_on else "OFF"
-                        lines.append(f"; [Tag] {' + '.join(cmds)} ({action})")
+                        lines.append(f"; [Tag] {master_pin} ({action})")
 
                 first_pt = True
                 for (px, py) in path_points:
@@ -337,8 +420,8 @@ class BatchWorker(QThread):
                         
                         # 3. 开阀逻辑 (如果需要出胶)
                         if valve_on:
-                            lines.append(f"; Open Valves for Color {seg_color}")
-                            append_valve_cmds(on_cmds, True)
+                            lines.append(f"; Open Master Valve A")
+                            append_master_cmd(True)
                                 
                         # 4. 点胶延时 (如果是 Dot)
                         if seg_type == 'dot' and dwell_ms > 0:
@@ -351,16 +434,21 @@ class BatchWorker(QThread):
                 
                 # 一条路径段结束：关阀
                 if valve_on:
-                    lines.append(f"; Close Valves for Color {seg_color}")
-                    append_valve_cmds(off_cmds, False)
+                    lines.append(f"; Close Master Valve A")
+                    append_master_cmd(False)
                 
                 # 抬升逻辑：
                 # 每一段结束后抬起点，防止刮擦 (用户建议：每段操作独立)
                 # 或者，如果是连续线段（end point == next start point），可以优化。
                 # 但当前逻辑是按照 "Segment List" 处理，为了安全，段与段之间抬起。
                 lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
-                
-                # 抬升逻辑：
+        
+        # End of Processing: Close Color Valve if open
+        if active_color_valve is not None:
+            lines.append(f"; [Tag] {active_color_valve} (OFF) - End Batch Item")
+            if self.mode == 'real':
+                lines.append(active_color_valve)
+            active_color_valve = None
 
         # 最后确保在最高安全高度
         lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
@@ -513,11 +601,14 @@ class BatchRunDialog(QDialog):
         self.log_box.setReadOnly(True)
         layout.addWidget(self.log_box)
 
+        # --- 3.1 模拟设置 (New) ---
+        self.chk_simulate = QCheckBox("模拟出胶 (关闭阀门)")
+        self.chk_simulate.setChecked(True) # Default Checked
+        self.chk_simulate.setStyleSheet("color: #F59E0B; font-weight: bold;")
+        layout.addWidget(self.chk_simulate)
+
         # --- 3.5 进度条 ---
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
@@ -584,7 +675,7 @@ class BatchRunDialog(QDialog):
         x, y, z = self.mw.machine.get_position()
         self.spn_start_x.setValue(x)
         self.spn_start_y.setValue(y)
-        self.spn_start_z.setValue(z) # 新增 Z
+        self.spn_start_z.setValue(z) 
         self.log(f"已示教起始点: X{x:.2f}, Y{y:.2f}, Z{z:.2f}")
         # 立即保存
         self.save_settings(silent=True)
@@ -593,7 +684,7 @@ class BatchRunDialog(QDialog):
         return {
             'start_x': self.spn_start_x.value(),
             'start_y': self.spn_start_y.value(),
-            'start_z': self.spn_start_z.value(), # 新增 Z
+            'start_z': self.spn_start_z.value(), 
             'rows': self.spn_rows.value(),
             'cols': self.spn_cols.value(),
             'space_x': self.spn_space_x.value(),
@@ -605,6 +696,8 @@ class BatchRunDialog(QDialog):
             'nozzle_safe_z_cavity': self.spn_nozzle_safe_cavity.value(),
             'nozzle_safe_z_product': self.spn_nozzle_safe_product.value(),
             'nozzle_work_z': self.spn_nozzle_work.value(),
+            # [NEW] Simulation
+            'disable_valves': self.chk_simulate.isChecked()
         }
 
     def on_start(self, mode):

@@ -220,10 +220,17 @@ class BatchWorker(QThread):
                         continue
 
                     self.log_signal.emit(f"💉 (R{r}, C{c}) {color_name} 出胶...")
+                    
+                    # [DEBUG]
+                    debug_colors = []
+                    for fg in filtered_groups:
+                        for p in fg:
+                            debug_colors.append(getattr(p, 'color', 'N/A'))
+                    self.log_signal.emit(f"[DEBUG] CIdx={color_idx} R{r}C{c} | Filtered Colors: {debug_colors}")
 
                     try:
                         # Generate G-code ONLY for this color
-                        gcode_lines = self.generate_dispense_gcode(filtered_groups, target_x, target_y)
+                        gcode_lines = self.generate_dispense_gcode(filtered_groups, target_x, target_y, target_color=color_idx)
                         
                         if gcode_lines:
                              # Send G-code, Execute...
@@ -286,10 +293,11 @@ class BatchWorker(QThread):
         self.mw.machine.move_to(z=safe_z_move, speed=self.mw.feedrate_z)
 
 
-    def generate_dispense_gcode(self, paths_groups, current_x, current_y):
+    def generate_dispense_gcode(self, paths_groups, current_x, current_y, target_color=None):
         """
         根据识别到的像素路径组，生成绝对坐标 G-code
         paths_groups: List[List[Path]]，每个内部List代表一个产品的多条路径
+        target_color: strictly filter for this color index if provided (Int)
         """
         M = self.mw.cam2mach_matrix
         if M is None:
@@ -347,7 +355,14 @@ class BatchWorker(QThread):
                     path_points = path_obj
                     seg_type = 'line' if len(path_points) > 1 else 'dot'
                     seg_color = 0
+                    seg_color = 0
                     dwell_ms = 100 # Default
+
+                # [CRITICAL] Double-check Color (Redundancy)
+                if target_color is not None:
+                     if int(seg_color) != int(target_color):
+                         continue
+
 
                 # Color/Valve Change Comments
                 lines.append(f"; Segment {seg_idx+1}: Type={seg_type}, Color={seg_color}, Dwell={dwell_ms}ms")

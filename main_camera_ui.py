@@ -748,6 +748,9 @@ class MainWindow(QWidget):
         self.vision_offset_x = 0.0
         self.vision_offset_y = 0.0
         
+        # [New] Color Supply Delay (Synced with Batch/Dry Run)
+        self.color_delay = 500
+        
         # Halcon Model Reference (Dynamic)
         self.model_ref_row = 0.0
         self.model_ref_col = 0.0
@@ -3570,6 +3573,9 @@ class MainWindow(QWidget):
                     # === ⭐ 对刀基准 ===
                     'z_base': self.z_base,
                     
+                    # === ⭐ 供料延时 ===
+                    'color_delay': getattr(self, 'color_delay', 500),
+                    
                     # === Halcon 模型信息 ===
                     'model_file': f"{name}.shm",
                     'model_row': origin_row,
@@ -3638,6 +3644,9 @@ class MainWindow(QWidget):
             
             # === ⭐ 对刀基准 ===
             'z_base': self.z_base,
+            
+            # === ⭐ 供料延时 ===
+            'color_delay': getattr(self, 'color_delay', 500),
             
             # === Halcon 模式 ===
             'use_halcon': self.chk_use_halcon.isChecked() if hasattr(self, 'chk_use_halcon') else False,
@@ -3887,6 +3896,10 @@ class MainWindow(QWidget):
         
         if 'nozzle_offset_z' in config:
             self.nozzle_offset_z = config['nozzle_offset_z']
+        
+        # === ⭐ 供料延时 ===
+        if 'color_delay' in config:
+            self.color_delay = config['color_delay']
         
         # === ⭐ 对刀基准 ===
         if 'z_base' in config:
@@ -4210,7 +4223,8 @@ class MainWindow(QWidget):
             'speed_xy': int(self.feedrate_xy),
             'speed_z': int(self.feedrate_z),
             'dwell_ms': self.dwell_ms,
-            'line_dwell_ms': self.line_dwell_ms
+            'line_dwell_ms': self.line_dwell_ms,
+            'color_delay': getattr(self, 'color_delay', 500)
         }
         
         def save_cam_params(dialog):
@@ -4236,6 +4250,7 @@ class MainWindow(QWidget):
             # Save dwell times
             self.dwell_ms = dialog.dwell_ms
             self.line_dwell_ms = dialog.line_dwell_ms
+            self.color_delay = dialog.color_delay
 
             self.save_app_settings()
 
@@ -4271,14 +4286,14 @@ class MainWindow(QWidget):
             'speed_xy': int(self.feedrate_xy),
             'speed_z': int(self.feedrate_z),
             'dwell_ms': self.dwell_ms,
-            'line_dwell_ms': self.line_dwell_ms
+            'line_dwell_ms': self.line_dwell_ms,
+            'color_delay': getattr(self, 'color_delay', 500)
         }
 
         def save_nozzle_params(dialog):
             # 更新主界面控件，控件会自动更新变量
             self.spn_safe_z_cavity.setValue(dialog.safe_z_cavity)
             self.spn_safe_z_product.setValue(dialog.safe_z_product)
-            self.spn_work_z.setValue(dialog.work_z)
             self.spn_work_z.setValue(dialog.work_z)
                         
             # 速度参数是共享的，同步更新变量和 UI 滑块
@@ -4299,6 +4314,7 @@ class MainWindow(QWidget):
             # Save dwell times
             self.dwell_ms = dialog.dwell_ms
             self.line_dwell_ms = dialog.line_dwell_ms
+            self.color_delay = dialog.color_delay
 
             self.save_app_settings()
 
@@ -4974,19 +4990,36 @@ class MainWindow(QWidget):
                 else:
                     print(f"[Halcon] Loading paths from global config: {path_dir}")
                 
-                # Poly
-                poly_path = os.path.join(path_dir, "disp_poly_cell0.npy")
-                if os.path.exists(poly_path):
-                    raw = np.load(poly_path, allow_pickle=True)
-                    if isinstance(raw, np.ndarray):
-                        if raw.dtype == object: 
-                            segments.extend([s.astype(np.float32) for s in raw if s is not None])
-                        elif raw.ndim == 2:
-                            segments.append(raw.astype(np.float32))
-                    elif isinstance(raw, list):
-                        segments.extend([np.array(s, dtype=np.float32) for s in raw])
+                # [FIX] Priority: Load multicolor_path.json FIRST (has color info)
+                multicolor_path = os.path.join(path_dir, "multicolor_path.json")
+                if os.path.exists(multicolor_path):
+                    print(f"[Halcon] Loading MULTICOLOR paths from: {multicolor_path}")
+                    try:
+                        with open(multicolor_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        from core.path_segment import PathSegment
+                        for seg_dict in data.get('segments', []):
+                            seg_obj = PathSegment.from_dict(seg_dict)
+                            segments.append(seg_obj)
+                        print(f"[Halcon] Loaded {len(segments)} PathSegment objects with color info")
+                    except Exception as e:
+                        print(f"[Halcon] Failed to load multicolor_path.json: {e}")
+                        segments = []  # Reset on error
                 else:
-                     print(f"[Halcon] Poly file not found: {poly_path}")
+                    # Fallback: Load legacy .npy files (NO COLOR)
+                    print(f"[Halcon] No multicolor_path.json found, loading legacy .npy files")
+                    poly_path = os.path.join(path_dir, "disp_poly_cell0.npy")
+                    if os.path.exists(poly_path):
+                        raw = np.load(poly_path, allow_pickle=True)
+                        if isinstance(raw, np.ndarray):
+                            if raw.dtype == object: 
+                                segments.extend([s.astype(np.float32) for s in raw if s is not None])
+                            elif raw.ndim == 2:
+                                segments.append(raw.astype(np.float32))
+                        elif isinstance(raw, list):
+                            segments.extend([np.array(s, dtype=np.float32) for s in raw])
+                    else:
+                        print(f"[Halcon] Poly file not found: {poly_path}")
                 
                 # Dots
                 dots_path = os.path.join(path_dir, "disp_dots_cell0.npy")

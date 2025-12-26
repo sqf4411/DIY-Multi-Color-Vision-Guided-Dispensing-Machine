@@ -109,7 +109,7 @@ class DryRunDialog(QDialog):
         param_layout.addWidget(QLabel("供料延时 (ms):"), 4, 0)
         self.spn_color_delay = QSpinBox()
         self.spn_color_delay.setRange(0, 5000)
-        self.spn_color_delay.setValue(self.color_delay)
+        self.spn_color_delay.setValue(int(self.color_delay))
         self.spn_color_delay.valueChanged.connect(self.on_param_changed)
         param_layout.addWidget(self.spn_color_delay, 4, 1)
 
@@ -182,139 +182,152 @@ class DryRunDialog(QDialog):
         # Start with Product Safe Z
         gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
 
+        # [NEW] Color-First Logic
+        all_colors = set()
         for prod_idx, prod_segments in enumerate(self.products):
-            # Check if product is selected
             if not self.chk_products[prod_idx].isChecked():
                 continue
-
-            gcode_lines.append(f"; --- Product {prod_idx + 1} ---")
+            for seg in prod_segments:
+                seg_color = getattr(seg, 'color', 0) if hasattr(seg, 'color') else 0
+                all_colors.add(seg_color)
+        
+        sorted_colors = sorted(list(all_colors)) if all_colors else [0]
+        active_color_valve = None
+        
+        for color_idx in sorted_colors:
+            gcode_lines.append(f"; ===== Color {color_idx+1} =====")
             
-            # [Fix] Initialize state
-            active_color_valve = None
+            for prod_idx, prod_segments in enumerate(self.products):
+                if not self.chk_products[prod_idx].isChecked():
+                    continue
 
-            # [MOD] Sort segments by color for continuous dispensing
-            # Assuming prod_segments is a list of PathSegment objects or lists
-            def get_seg_color(p):
-                return getattr(p, 'color', 0) if hasattr(p, 'color') else 0
-            
-            sorted_segments = sorted(prod_segments, key=get_seg_color)
-
-            for seg_idx, p_px in enumerate(sorted_segments):
-
-                # 1. Convert pixels to mm
-                # [FIX] Handle PathSegment objects
-                if hasattr(p_px, 'points'):
-                    path_array = np.array(p_px.points)
-                else:
-                    path_array = p_px
+                gcode_lines.append(f"; --- Product {prod_idx + 1} (Color {color_idx+1}) ---")
                 
-                delta_px = path_array - np.array([self.center_x, self.center_y])
-                delta_mm_x = delta_px[:, 0] * self.m[0, 0] + delta_px[:, 1] * self.m[0, 1]
-                delta_mm_y = delta_px[:, 0] * self.m[1, 0] + delta_px[:, 1] * self.m[1, 1]
-
-                abs_x = self.origin_x + delta_mm_x
-                abs_y = self.origin_y + delta_mm_y
-                path_machine = np.column_stack((abs_x, abs_y))
-
-                if len(path_machine) == 0: continue
-
-                gcode_lines.append(f";   Segment {seg_idx + 1}")
-
-                # [TAG REMOVED] Logic moved to dispense block
-
-                # 2. Move to Start Point
-                start_x, start_y = path_machine[0]
-                start_x += self.nozzle_offset_x
-                start_y += self.nozzle_offset_y
-
-                # Move XY first (at current Z, which should be safe)
-                gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{self.speed_xy}")
+                color_segments = [seg for seg in prod_segments 
+                                  if getattr(seg, 'color', 0) == color_idx]
                 
-                # 3. Down to Work Z
-                gcode_lines.append(f"G0 Z{self.work_z:.2f} F{self.speed_z}")
+                if not color_segments:
+                    continue
 
-                # Check if it is a Dot (1 point) or Line (>1 points)
-                # Prepare Valve Commands
-                # Default to A1 if no color info
-                dwell_ms = getattr(p_px, 'dwell_ms', 0)
-                color_idx = getattr(p_px, 'color', 0)
-                valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
-                target_valve = valve_macros[color_idx] if 0 <= color_idx < 4 else "A1_VALVE"
+                for seg_idx, p_px in enumerate(color_segments):
 
-                # --- Valve State Logic ---
-                # Check if we need to switch color valve
-                if active_color_valve != target_valve:
-                    # Close previous if open
-                    if active_color_valve is not None:
+                    # 1. Convert pixels to mm
+                    # [FIX] Handle PathSegment objects
+                    if hasattr(p_px, 'points'):
+                        path_array = np.array(p_px.points)
+                    else:
+                        path_array = p_px
+                    
+                    delta_px = path_array - np.array([self.center_x, self.center_y])
+                    delta_mm_x = delta_px[:, 0] * self.m[0, 0] + delta_px[:, 1] * self.m[0, 1]
+                    delta_mm_y = delta_px[:, 0] * self.m[1, 0] + delta_px[:, 1] * self.m[1, 1]
+
+                    abs_x = self.origin_x + delta_mm_x
+                    abs_y = self.origin_y + delta_mm_y
+                    path_machine = np.column_stack((abs_x, abs_y))
+
+                    if len(path_machine) == 0: continue
+
+                    gcode_lines.append(f";   Segment {seg_idx + 1}")
+
+                    # [TAG REMOVED] Logic moved to dispense block
+
+                    # 2. Move to Start Point
+                    start_x, start_y = path_machine[0]
+                    start_x += self.nozzle_offset_x
+                    start_y += self.nozzle_offset_y
+
+                    # Move XY first (at current Z, which should be safe)
+                    gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{self.speed_xy}")
+                    
+                    # 3. Down to Work Z
+                    gcode_lines.append(f"G0 Z{self.work_z:.2f} F{self.speed_z}")
+
+                    # Check if it is a Dot (1 point) or Line (>1 points)
+                    # Prepare Valve Commands
+                    # Default to A1 if no color info
+                    dwell_ms = getattr(p_px, 'dwell_ms', 0)
+                    color_idx = getattr(p_px, 'color', 0)
+                    valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
+                    target_valve = valve_macros[color_idx] if 0 <= color_idx < 4 else "A1_VALVE"
+
+                    # --- Valve State Logic ---
+                    # Check if we need to switch color valve
+                    if active_color_valve != target_valve:
+                        # Close previous if open
+                        if active_color_valve is not None:
+                            is_sim = self.chk_simulate.isChecked()
+                            if not is_sim:
+                                gcode_lines.append(f"SET_PIN PIN={active_color_valve} VALUE=0")
+                            else:
+                                gcode_lines.append(f"; [Tag] {active_color_valve} (OFF) - Switch Color")
+                        
+                        # Open new
                         is_sim = self.chk_simulate.isChecked()
                         if not is_sim:
-                             gcode_lines.append(f"SET_PIN PIN={active_color_valve} VALUE=0")
+                            gcode_lines.append(f"SET_PIN PIN={target_valve} VALUE=1")
+                            if self.color_delay > 0:
+                                gcode_lines.append(f"G4 P{self.color_delay}")
                         else:
-                             gcode_lines.append(f"; [Tag] {active_color_valve} (OFF) - Switch Color")
+                            gcode_lines.append(f"; [Tag] {target_valve} (ON)")
+                            if self.color_delay > 0:
+                                gcode_lines.append(f"; [Tag] G4 P{self.color_delay}")
+                        
+                        active_color_valve = target_valve
                     
-                    # Open new
-                    is_sim = self.chk_simulate.isChecked()
-                    if not is_sim:
-                        gcode_lines.append(f"SET_PIN PIN={target_valve} VALUE=1")
-                        if self.color_delay > 0:
-                            gcode_lines.append(f"G4 P{self.color_delay}")
-                    else:
-                        gcode_lines.append(f"; [Tag] {target_valve} (ON)")
-                        if self.color_delay > 0:
-                            gcode_lines.append(f"; [Tag] G4 P{self.color_delay}")
+                    # Master Valve A Control (Always toggle per segment)
+                    master_pin = "VALVE_A_CTRL"
                     
-                    active_color_valve = target_valve
-                
-                # Master Valve A Control (Always toggle per segment)
-                master_pin = "VALVE_A_CTRL"
-                
-                # Helper to append commands
-                def append_master_cmd(is_on):
-                    val = 1 if is_on else 0
-                    action = "ON" if is_on else "OFF"
-                    
-                    # [MOD] Simulation Check
-                    is_sim = self.chk_simulate.isChecked()
-                    
-                    # Allow real output if simulation is unchecked
-                    if not is_sim:
-                        gcode_lines.append(f"SET_PIN PIN={master_pin} VALUE={val}")
-                    else:
-                        gcode_lines.append(f"; [Tag] {master_pin} ({action})")
+                    # Helper to append commands
+                    def append_master_cmd(is_on):
+                        val = 1 if is_on else 0
+                        action = "ON" if is_on else "OFF"
+                        
+                        # [MOD] Simulation Check
+                        is_sim = self.chk_simulate.isChecked()
+                        
+                        # Allow real output if simulation is unchecked
+                        if not is_sim:
+                            gcode_lines.append(f"SET_PIN PIN={master_pin} VALUE={val}")
+                        else:
+                            gcode_lines.append(f"; [Tag] {master_pin} ({action})")
 
-                if len(path_machine) == 1:
-                    # --- Dot Dispensing ---
-                    # [MOD] Prioritize individual segment dwell time
-                    actual_dwell = dwell_ms if dwell_ms > 0 else self.dwell_ms
-                    
-                    if actual_dwell > 0:
+                    if len(path_machine) == 1:
+                        # --- Dot Dispensing ---
+                        # [MOD] Prioritize individual segment dwell time
+                        actual_dwell = dwell_ms if dwell_ms > 0 else self.dwell_ms
+                        
+                        if actual_dwell > 0:
+                            append_master_cmd(True) # Open A
+                            gcode_lines.append(f"G4 P{actual_dwell}")
+                            append_master_cmd(False) # Close A
+                    else:
+                        # --- Line Dispensing ---
+                        if self.line_dwell_ms > 0:
+                            gcode_lines.append(f"G4 P{self.line_dwell_ms}")
+
+                        # 4. Dispense Path
                         append_master_cmd(True) # Open A
-                        gcode_lines.append(f"G4 P{actual_dwell}")
+                        for pt in path_machine[1:]:
+                            pt_x = pt[0] + self.nozzle_offset_x
+                            pt_y = pt[1] + self.nozzle_offset_y
+                            gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{self.speed_xy}")
                         append_master_cmd(False) # Close A
-                else:
-                    # --- Line Dispensing ---
-                    if self.line_dwell_ms > 0:
-                        gcode_lines.append(f"G4 P{self.line_dwell_ms}")
 
-                    # 4. Dispense Path
-                    append_master_cmd(True) # Open A
-                    for pt in path_machine[1:]:
-                        pt_x = pt[0] + self.nozzle_offset_x
-                        pt_y = pt[1] + self.nozzle_offset_y
-                        gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{self.speed_xy}")
-                    append_master_cmd(False) # Close A
-
-                # 5. Lift after segment
-                # If this is the LAST segment of the product, lift to Product Safe Z
-                # Otherwise, lift to Cavity Safe Z
-                if seg_idx == len(prod_segments) - 1:
-                    gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
-                else:
-                    gcode_lines.append(f"G0 Z{self.safe_z_cavity:.2f} F{self.speed_z}")
+                    # 5. Lift after segment
+                    # If this is the LAST segment of the product, lift to Product Safe Z
+                    # Otherwise, lift to Cavity Safe Z
+                    if seg_idx == len(prod_segments) - 1:
+                        gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
+                    else:
+                        gcode_lines.append(f"G0 Z{self.safe_z_cavity:.2f} F{self.speed_z}")
             
-            # End of Product: Close Color Valve if open
+            # End of Color: Close Color Valve after all products of this color
             if active_color_valve is not None:
-                gcode_lines.append(f"; [Tag] {active_color_valve} (OFF) - End Product")
+                gcode_lines.append(f"; [Tag] {active_color_valve} (OFF) - End Color")
+                is_sim = self.chk_simulate.isChecked()
+                if not is_sim:
+                    gcode_lines.append(f"SET_PIN PIN={active_color_valve} VALUE=0")
                 active_color_valve = None
 
         gcode_lines.append(f"; --- Return to Start ---")

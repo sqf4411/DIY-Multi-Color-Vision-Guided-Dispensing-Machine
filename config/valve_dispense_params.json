@@ -1,10 +1,10 @@
 {
   "version": "1.0",
-  "last_updated": "2025-12-19 16:55:48",
+  "last_updated": "2025-12-26 16:20:02",
   "parameters": {
-    "prefeed_time": 0.6,
-    "valve_a_dispense_time": 0.6,
-    "valve_b_dispense_time": 0.6
+    "prefeed_time": 0.1,
+    "valve_a_dispense_time": 0.77,
+    "valve_b_dispense_time": 2.0
   },
-  "notes": "Loaded from product '66666'"
+  "notes": "Loaded from product '7777'"
 }

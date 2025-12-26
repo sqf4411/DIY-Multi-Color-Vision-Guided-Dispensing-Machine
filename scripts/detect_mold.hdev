@@ -64,9 +64,11 @@
 <l>    return ()</l>
 <l>endif</l>
 <c></c>
-<c>* Find Standard Shape Model</c>
+<c>* Find Scaled Shape Model (Robust to Scale/Height variations)</c>
 <c>* MinScore=0.2, NumMatches=0 (All), MaxOverlap=0.5</c>
-<l>find_shape_model (Image, ModelID, rad(0), rad(360), 0.2, 0, 0.5, 'least_squares', 0, 0.9, ResultRow, ResultColumn, ResultAngle, ResultScore)</l>
+<c>* Scale range: 0.9 to 1.1 (Allows +/- 10% height variation)</c>
+<c>* Greediness: 0.5 (Lower = Slower but more robust to blur/noise)</c>
+<l>find_scaled_shape_model (Image, ModelID, rad(0), rad(360), 0.9, 1.1, 0.2, 0, 0.5, 'least_squares', 0, 0.5, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
 <c></c>
 <c>* Cleanup (Halcon handles memory usually, strictly we should clear)</c>
 <l>clear_shape_model (ModelID)</l>

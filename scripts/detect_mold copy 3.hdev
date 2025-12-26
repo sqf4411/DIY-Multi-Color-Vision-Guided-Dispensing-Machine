@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<hdevelop file_version="1.2" halcon_version="20.11">
+<procedure name="main">
+<interface/>
+<body>
+<c>* Main Procedure (Entry Point)</c>
+<l>exit ()</l>
+</body>
+<docu id="main">
+<parameters/>
+</docu>
+</procedure>
+<procedure name="detect_mold">
+<interface>
+  <io>
+    <par name="Image" base_type="iconic" dimension="0"/>
+  </io>
+  <ic>
+    <par name="ModelPath" base_type="ctrl" dimension="0"/>
+  </ic>
+  <oc>
+    <par name="ResultRow" base_type="ctrl" dimension="0"/>
+    <par name="ResultColumn" base_type="ctrl" dimension="0"/>
+    <par name="ResultAngle" base_type="ctrl" dimension="0"/>
+    <par name="ResultScore" base_type="ctrl" dimension="0"/>
+  </oc>
+</interface>
+<body>
+<c>* Initialization</c>
+<l>ResultRow := []</l>
+<l>ResultColumn := []</l>
+<l>ResultAngle := []</l>
+<l>ResultScore := []</l>
+<c></c>
+<c>* Use provided ModelPath</c>
+<l>ModelFile := ModelPath</l>
+<c></c>
+<c>* Check if model exists</c>
+<l>file_exists (ModelFile, FileExists)</l>
+<c></c>
+<l>if (FileExists == 0)</l>
+<c>    * --- TRAINING PHASE ---</c>
+<l>    GoldenImagePath := 'H:/CodeForGithub/DIY-Multi-Color-Vision-Guided-Dispensing-Machine/config/mold2.png'</l>
+<l>    file_exists (GoldenImagePath, ImgExists)</l>
+<l>    if (ImgExists)</l>
+<l>        read_image (TrainImage, GoldenImagePath)</l>
+<c>        </c>
+<c>        * ROI definition</c>
+        <c>        * ROI definition (Updated identifiers from user)</c>
+        <l>        gen_rectangle1 (ModelRegion, 448.829, 936.949, 854.524, 1289.7)</l>
+<l>        reduce_domain (TrainImage, ModelRegion, TemplateImage)</l>
+<c>        </c>
+<c>        * Use Standard Shape Model (Robust)</c>
+<c>        * auto, rad(-90), rad(180), auto, auto, auto, auto, 'use_polarity', auto, auto</c>
+<l>        create_shape_model (TemplateImage, 'auto', rad(0), rad(360), 'auto', 'auto', 'use_polarity', 'auto', 'auto', ModelID)</l>
+<l>        write_shape_model (ModelID, ModelFile)</l>
+<l>    else</l>
+<l>        return ()</l>
+<l>    endif</l>
+<l>else</l>
+<l>    read_shape_model (ModelFile, ModelID)</l>
+<l>endif</l>
+<c></c>
+<c>* --- MATCHING PHASE ---</c>
+<l>count_obj (Image, NumObj)</l>
+<l>if (NumObj == 0)</l>
+<l>    return ()</l>
+<l>endif</l>
+<c></c>
+<c>* Find Standard Shape Model</c>
+<c>* MinScore=0.2, NumMatches=0 (All), MaxOverlap=0.5</c>
+<l>find_shape_model (Image, ModelID, rad(0), rad(360), 0.2, 0, 0.5, 'least_squares', 0, 0.9, ResultRow, ResultColumn, ResultAngle, ResultScore)</l>
+<c></c>
+<c>* Cleanup (Halcon handles memory usually, strictly we should clear)</c>
+<l>clear_shape_model (ModelID)</l>
+<c></c>
+<l>return ()</l>
+</body>
+<docu id="detect_mold">
+<parameters>
+<parameter id="Image"/>
+<parameter id="ResultAngle"/>
+<parameter id="ResultColumn"/>
+<parameter id="ResultRow"/>
+<parameter id="ResultScore"/>
+</parameters>
+</docu>
+</procedure>
+</hdevelop>

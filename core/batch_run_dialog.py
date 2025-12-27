@@ -443,10 +443,9 @@ class BatchWorker(QThread):
                         if valve_on:
                             lines.append(f"; Open Master Valve A")
                             append_master_cmd(True)
-                                
-                        # 4. 点胶延时 (如果是 Dot)
-                        if seg_type == 'dot' and dwell_ms > 0:
-                            lines.append(f"G4 P{dwell_ms}")
+                            # [FIX] 无论点还是线，都先延时等待压力建立
+                            if dwell_ms > 0:
+                                lines.append(f"G4 P{dwell_ms}")
                             
                         first_pt = False
                     else:

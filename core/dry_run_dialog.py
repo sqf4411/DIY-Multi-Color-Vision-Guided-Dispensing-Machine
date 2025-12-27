@@ -303,8 +303,10 @@ class DryRunDialog(QDialog):
                             append_master_cmd(False) # Close A
                     else:
                         # --- Line Dispensing ---
-                        if self.line_dwell_ms > 0:
-                            gcode_lines.append(f"G4 P{self.line_dwell_ms}")
+                        # [FIX] Use segment's dwell_ms if available, fallback to global line_dwell_ms
+                        line_dwell = dwell_ms if dwell_ms > 0 else self.line_dwell_ms
+                        if line_dwell > 0:
+                            gcode_lines.append(f"G4 P{line_dwell}")
 
                         # 4. Dispense Path
                         append_master_cmd(True) # Open A

@@ -38,6 +38,7 @@ class DryRunDialog(QDialog):
         self.dwell_ms = initial_params.get('dwell_ms', 100)      # Dot Dwell
         self.line_dwell_ms = initial_params.get('line_dwell_ms', 0) # Line Start Dwell
         self.color_delay = initial_params.get('color_delay', 500)   # Color Supply Delay
+        self.line_speed_xy = initial_params.get('line_speed_xy', 800)  # Line Dispensing Speed
 
         self.init_ui()
         self.generate_gcode()
@@ -104,6 +105,14 @@ class DryRunDialog(QDialog):
         self.spn_line_dwell.setValue(self.line_dwell_ms)
         self.spn_line_dwell.valueChanged.connect(self.on_param_changed)
         param_layout.addWidget(self.spn_line_dwell, 3, 3)
+
+        # Line Speed
+        param_layout.addWidget(QLabel("画线速度 (mm/min):"), 4, 2)
+        self.spn_line_speed = QSpinBox()
+        self.spn_line_speed.setRange(100, 5000)
+        self.spn_line_speed.setValue(self.line_speed_xy)
+        self.spn_line_speed.valueChanged.connect(self.on_param_changed)
+        param_layout.addWidget(self.spn_line_speed, 4, 3)
 
         # [NEW] Color Delay (Supply Pressure Delay)
         param_layout.addWidget(QLabel("供料延时 (ms):"), 4, 0)
@@ -174,6 +183,7 @@ class DryRunDialog(QDialog):
         self.dwell_ms = self.spn_dwell.value()
         self.line_dwell_ms = self.spn_line_dwell.value()
         self.color_delay = self.spn_color_delay.value()
+        self.line_speed_xy = self.spn_line_speed.value()
         self.generate_gcode()
 
     def generate_gcode(self):
@@ -313,7 +323,13 @@ class DryRunDialog(QDialog):
                         for pt in path_machine[1:]:
                             pt_x = pt[0] + self.nozzle_offset_x
                             pt_y = pt[1] + self.nozzle_offset_y
-                            gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{self.speed_xy}")
+                            # [FIX] Use G1 for controlled speed, and use line_speed_xy
+                            gcode_lines.append(f"G1 X{pt_x:.3f} Y{pt_y:.3f} F{self.line_speed_xy}")
+                        
+                        # [FIX] Add end dwell before closing valve
+                        if line_dwell > 0:
+                            end_dwell = int(line_dwell * 0.5)  # 终点延时为起点的一半
+                            gcode_lines.append(f"G4 P{end_dwell}")
                         append_master_cmd(False) # Close A
 
                     # 5. Lift after segment to Cavity Safe Z

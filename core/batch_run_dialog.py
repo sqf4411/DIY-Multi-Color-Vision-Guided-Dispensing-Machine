@@ -449,8 +449,15 @@ class BatchWorker(QThread):
                             
                         first_pt = False
                     else:
-                        # 移动到后续点
-                        lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
+                        # 移动到后续点 - 使用画线速度
+                        line_speed = self.cfg.get('line_speed_xy', speed_xy)
+                        lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{line_speed}")
+                
+                # [FIX] Add end dwell before closing valve
+                if valve_on and dwell_ms > 0:
+                    end_dwell = int(dwell_ms * 0.5)  # 终点延时为起点的一半
+                    lines.append(f"; End point dwell")
+                    lines.append(f"G4 P{end_dwell}")
                 
                 # 一条路径段结束：关阀
                 if valve_on:
@@ -637,6 +644,16 @@ class BatchRunDialog(QDialog):
         h_color_delay.addStretch()
         layout.addLayout(h_color_delay)
 
+        # [NEW] Line Speed
+        h_line_speed = QHBoxLayout()
+        h_line_speed.addWidget(QLabel("画线速度 (mm/min):"))
+        self.spn_line_speed = QSpinBox()
+        self.spn_line_speed.setRange(100, 5000)
+        self.spn_line_speed.setValue(800)  # Default 800mm/min
+        h_line_speed.addWidget(self.spn_line_speed)
+        h_line_speed.addStretch()
+        layout.addLayout(h_line_speed)
+
         # --- 3.5 进度条 ---
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
@@ -728,7 +745,8 @@ class BatchRunDialog(QDialog):
             'nozzle_work_z': self.spn_nozzle_work.value(),
             # [NEW] Simulation
             'disable_valves': self.chk_simulate.isChecked(),
-            'color_delay': self.spn_color_delay.value()
+            'color_delay': self.spn_color_delay.value(),
+            'line_speed_xy': self.spn_line_speed.value()
         }
 
     def on_start(self, mode):
@@ -924,6 +942,9 @@ class BatchRunDialog(QDialog):
             self.spn_nozzle_safe_product.setValue(get_float('safe_z_product', self.mw.safe_z_product or 0.0))
             self.spn_nozzle_work.setValue(get_float('work_z', self.mw.work_z or 0.0))
             
+            # [NEW] Line speed
+            self.spn_line_speed.setValue(get_int('line_speed_xy', 800))
+            
         except Exception as e:
             self.log(f"❌ 加载配置失败: {e}")
 
@@ -967,6 +988,9 @@ class BatchRunDialog(QDialog):
             self.mw.safe_z_cavity = val_sc
             self.mw.safe_z_product = val_sp
             self.mw.work_z = val_w # 这里虽然 self.mw.work_z 也在 ui 上，但最好保持一致
+
+            # [NEW] Line speed
+            cfg.set('line_speed_xy', self.spn_line_speed.value())
 
             # 3. 持久化
             cfg.save_app_settings()

@@ -236,14 +236,14 @@ class AutoToolSetWorker(QThread):
 
 
             # 4. 第一阶段：粗探 (target_z + 7 -> target_z - 8, step=0.5)
-            # ✅ 安全改进：如果有Z基准，不能低于 Z基准 - 2mm
+            # ✅ 安全改进：如果有Z基准，不能低于 Z基准 - safety_margin
             end_z = self.target_z - 8.0  # 对刀仪下方8mm
             
-            # ⚠️ 安全检查：如果end_z低于Z基准-2mm，说明可能撞刀
+            # ⚠️ 安全检查：如果end_z低于Z基准-safety_margin，说明可能撞刀
             if self.z_base > 0.0:
-                safe_limit = self.z_base - 2.0  # 最多低于Z基准2mm
+                safe_limit = self.z_base - self.safety_margin  # 使用配置的安全余量
                 if end_z < safe_limit:
-                    self.machine.logger(f"⚠️ 安全限制：探测下限调整为 {safe_limit:.1f}mm (Z基准-2mm)")
+                    self.machine.logger(f"⚠️ 安全限制：探测下限调整为 {safe_limit:.1f}mm (Z基准-{self.safety_margin:.1f}mm)")
                     end_z = safe_limit
             
             self.machine.logger(f"🔍 第一阶段粗探 (Z={start_z:.1f}->{end_z:.1f}, step=0.5)...")
@@ -5718,6 +5718,11 @@ class MainWindow(QWidget):
 🔧 针头偏移：
   • X偏移: {config_data['nozzle_offset_x']:.2f} mm
   • Y偏移: {config_data['nozzle_offset_y']:.2f} mm
+
+🎯 对刀仪坐标：
+  • X: {config_data.get('tool_setter_x', 0):.2f} mm
+  • Y: {config_data.get('tool_setter_y', 0):.2f} mm
+  • Z: {config_data.get('tool_setter_z', 0):.2f} mm
 
 💧 出胶参数：
   • 供料提前: {config_data.get('valve_prefeed_time', 0.10):.2f} 秒

@@ -188,15 +188,17 @@ class HalconProductManager:
                 "parameters": {
                     "prefeed_time": config.get("valve_prefeed_time", 0.10),
                     "valve_a_dispense_time": config.get("valve_a_dispense_time", 0.50),
-                    "valve_b_dispense_time": config.get("valve_b_dispense_time", 0.50)
+                    "valve_b_dispense_time": config.get("valve_b_dispense_time", 0.50),
+                    "line_speed_xy": config.get("line_speed_xy", 800)  # [NEW] 画线速度
                 },
                 "notes": f"Loaded from product '{product_name}'"
             }
             
-            print(f"[HalconProductManager] 加载产品 '{product_name}' 的阀门参数:")
+            print(f"[HalconProductManager] 加载产品 '{product_name}' 的点胶参数:")
             print(f"[HalconProductManager]   供料提前: {valve_params['parameters']['prefeed_time']}")
             print(f"[HalconProductManager]   阀A时间: {valve_params['parameters']['valve_a_dispense_time']}")
             print(f"[HalconProductManager]   阀B时间: {valve_params['parameters']['valve_b_dispense_time']}")
+            print(f"[HalconProductManager]   画线速度: {valve_params['parameters']['line_speed_xy']} mm/min")
             
             valve_params_dir = Path("config")
             valve_params_dir.mkdir(exist_ok=True)

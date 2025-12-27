@@ -64,16 +64,19 @@ class ProductManager:
                 config_data["valve_prefeed_time"] = params.get("prefeed_time", 0.10)
                 config_data["valve_a_dispense_time"] = params.get("valve_a_dispense_time", 0.50)
                 config_data["valve_b_dispense_time"] = params.get("valve_b_dispense_time", 0.50)
+                config_data["line_speed_xy"] = params.get("line_speed_xy", 800)  # [NEW] 画线速度
             except Exception as e:
                 print(f"[Warn] Could not load valve params, using defaults: {e}")
                 config_data["valve_prefeed_time"] = 0.10
                 config_data["valve_a_dispense_time"] = 0.50
                 config_data["valve_b_dispense_time"] = 0.50
+                config_data["line_speed_xy"] = 800
         else:
             # Use default values
             config_data["valve_prefeed_time"] = 0.10
             config_data["valve_a_dispense_time"] = 0.50
             config_data["valve_b_dispense_time"] = 0.50
+            config_data["line_speed_xy"] = 800
         
         # 3. Save Config JSON
         config_path = os.path.join(product_dir, "config.json")
@@ -129,15 +132,17 @@ class ProductManager:
             "parameters": {
                 "prefeed_time": config_data.get("valve_prefeed_time", 0.10),
                 "valve_a_dispense_time": config_data.get("valve_a_dispense_time", 0.50),
-                "valve_b_dispense_time": config_data.get("valve_b_dispense_time", 0.50)
+                "valve_b_dispense_time": config_data.get("valve_b_dispense_time", 0.50),
+                "line_speed_xy": config_data.get("line_speed_xy", 800)  # [NEW] 画线速度
             },
             "notes": f"Loaded from product '{name}'"
         }
         
-        print(f"[ProductManager] 加载产品 '{name}' 的阀门参数:")
+        print(f"[ProductManager] 加载产品 '{name}' 的点胶参数:")
         print(f"[ProductManager]   供料提前: {valve_params['parameters']['prefeed_time']}")
         print(f"[ProductManager]   阀A时间: {valve_params['parameters']['valve_a_dispense_time']}")
         print(f"[ProductManager]   阀B时间: {valve_params['parameters']['valve_b_dispense_time']}")
+        print(f"[ProductManager]   画线速度: {valve_params['parameters']['line_speed_xy']} mm/min")
         
         valve_params_dir = Path("config")
         valve_params_dir.mkdir(exist_ok=True)

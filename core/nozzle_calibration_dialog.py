@@ -9,7 +9,7 @@ class NozzleCalibrationDialog(QDialog):
     # args: offset_x, offset_y
     calibration_finished = pyqtSignal(float, float)
 
-    def __init__(self, parent=None, machine=None):
+    def __init__(self, parent=None, machine=None, current_offset_x=0.0, current_offset_y=0.0):
         super().__init__(parent)
         self.machine = machine
         self.setWindowTitle("针头偏移标定")
@@ -22,6 +22,10 @@ class NozzleCalibrationDialog(QDialog):
         self.cam_y = None
         self.nozzle_x = None
         self.nozzle_y = None
+        
+        # ✅ 保存当前偏移值
+        self.current_offset_x = current_offset_x
+        self.current_offset_y = current_offset_y
         
         self.init_ui()
 
@@ -75,10 +79,10 @@ class NozzleCalibrationDialog(QDialog):
         # --- 结果 ---
         grp_res = QGroupBox("标定结果")
         layout_res = QFormLayout()
-        self.lbl_res_x = QLabel("-")
-        self.lbl_res_y = QLabel("-")
-        layout_res.addRow("ΔX (针头-相机):", self.lbl_res_x)
-        layout_res.addRow("ΔY (针头-相机):", self.lbl_res_y)
+        self.lbl_res_x = QLabel(f"{self.current_offset_x:.3f} mm")
+        self.lbl_res_y = QLabel(f"{self.current_offset_y:.3f} mm")
+        layout_res.addRow("ΔX:", self.lbl_res_x)
+        layout_res.addRow("ΔY:", self.lbl_res_y)
         grp_res.setLayout(layout_res)
         layout.addWidget(grp_res)
 

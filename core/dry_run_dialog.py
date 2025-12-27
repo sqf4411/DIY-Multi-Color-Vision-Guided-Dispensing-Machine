@@ -314,13 +314,12 @@ class DryRunDialog(QDialog):
                             gcode_lines.append(f"G0 X{pt_x:.3f} Y{pt_y:.3f} F{self.speed_xy}")
                         append_master_cmd(False) # Close A
 
-                    # 5. Lift after segment
-                    # If this is the LAST segment of the product, lift to Product Safe Z
-                    # Otherwise, lift to Cavity Safe Z
-                    if seg_idx == len(prod_segments) - 1:
-                        gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
-                    else:
-                        gcode_lines.append(f"G0 Z{self.safe_z_cavity:.2f} F{self.speed_z}")
+                    # 5. Lift after segment to Cavity Safe Z
+                    gcode_lines.append(f"G0 Z{self.safe_z_cavity:.2f} F{self.speed_z}")
+                
+                # ✅ Product完成：升到产品安全Z
+                if color_segments:
+                    gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
             
             # End of Color: Close Color Valve after all products of this color
             if active_color_valve is not None:

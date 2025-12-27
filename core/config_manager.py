@@ -40,7 +40,10 @@ class ConfigManager:
         "cam_work_z": 0.0,
         # Dispensing dwell times
         "dwell_ms": 100,           # Point dispensing dwell (ms)
-        "line_dwell_ms": 0         # Line start dwell (ms)
+        "line_dwell_ms": 0,        # Line start dwell (ms)
+        # Tool setter coordinates
+        "tool_setter_x": None,
+        "tool_setter_y": None
     }
 
     def __init__(self):

@@ -458,11 +458,11 @@ class BatchWorker(QThread):
                     lines.append(f"; Close Master Valve A")
                     append_master_cmd(False)
                 
-                # 抬升逻辑：
-                # 每一段结束后抬起点，防止刮擦 (用户建议：每段操作独立)
-                # 或者，如果是连续线段（end point == next start point），可以优化。
-                # 但当前逻辑是按照 "Segment List" 处理，为了安全，段与段之间抬起。
-                lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
+                # ✅ 段结束：抬到腔内安全Z
+                lines.append(f"G1 Z{safe_z_cavity:.2f} F{speed_z}")
+            
+            # ✅ Product完成：升到产品安全Z
+            lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
         
         # End of Processing: Close Color Valve if open
         if active_color_valve is not None:

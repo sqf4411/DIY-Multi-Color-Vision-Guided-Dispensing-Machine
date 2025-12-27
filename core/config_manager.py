@@ -43,7 +43,9 @@ class ConfigManager:
         "line_dwell_ms": 0,        # Line start dwell (ms)
         # Tool setter coordinates
         "tool_setter_x": None,
-        "tool_setter_y": None
+        "tool_setter_y": None,
+        "tool_setter_z": None,
+        "safety_margin": 2.0
     }
 
     def __init__(self):

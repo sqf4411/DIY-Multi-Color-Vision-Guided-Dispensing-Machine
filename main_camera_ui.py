@@ -9,12 +9,7 @@ import cv2
 import numpy as np
 from core.machine_client import MachineClient
 
-# ====== Attempt to silence OpenCV internal logs via API ======
-# try:
-#     cv2.utils.logging.setLogLevel(0) # 0 = Silent
-# except AttributeError:
-#     pass
-# =========================================================
+
 
 def add_mvs_dll_path():
     dll_dir = os.getenv("MVS_DLL_DIR")
@@ -41,8 +36,6 @@ from PyQt5.QtWidgets import (
 )
 
 
-
-
 from PyQt5.QtGui import QImage, QPixmap
 
 # 你的检测函数
@@ -51,7 +44,6 @@ from core.dry_run_dialog import DryRunDialog, DryRunControlDialog
 from core.batch_run_dialog import BatchRunDialog
 from core.valve_control_dialog import ValveControlDialog
 
-from core.machine_client import MachineClient
 from core.config_manager import ConfigManager
 from core.camera_manager import CameraManager
 from core.halcon_manager import HalconManager
@@ -62,11 +54,7 @@ from core.path_editor_wrapper import edit_path_halcon_mode
 from core.touch_spinbox import TouchSpinBox, apply_touch_support
 from core.touch_numpad import TouchNumberPad
 
-# MvImport dependency removed from UI (managed by CameraManager)
-# from MvImport.MvCameraControl_class import *
 
-# ================== 线程：相机取流 (已移除，使用 CameraManager) ==================
-# class CameraThread(QThread): ... removed ...
 
 # ================== 线程：执行耗时的归位操作 ==================
 class HomeWorker(QThread):
@@ -143,12 +131,7 @@ class USBCameraWorker(QThread):
                     # QImage.Format_RGB888
                     qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
                     self.frame_signal.emit(qimg)
-                    
-                    # Debug: print dot every 10 frames to avoid spam but confirm liveness
-                    # self.frame_count = getattr(self, 'frame_count', 0) + 1
-                    # if self.frame_count % 10 == 0:
-                    #     sys.stdout.write('.')
-                    #     sys.stdout.flush()
+
                 except Exception as e:
                      print(f"[USBCamera] Error processing frame: {e}")
             
@@ -220,16 +203,18 @@ class PollingWorker(QThread):
         self.running = False
         self.wait()
 
-# ================== 线程：自动对刀 ==================
 class AutoToolSetWorker(QThread):
     finished_signal = pyqtSignal(bool, float, str) # success, new_z_base, msg
 
-    def __init__(self, machine_client, safe_z, target_x, target_y):
+    def __init__(self, machine_client, safe_z, target_x, target_y, target_z=None, z_base=0.0, safety_margin=2.0):
         super().__init__()
         self.machine = machine_client
         self.safe_z = safe_z
         self.target_x = target_x
         self.target_y = target_y
+        self.target_z = target_z if target_z is not None else 63.0  # 默认对刀仪Z高度
+        self.z_base = z_base  # ✅ 新增：上次对刀的Z基准，用于安全检查
+        self.safety_margin = safety_margin  # ✅ 新增：安全余量
 
     def run(self):
         try:
@@ -242,21 +227,31 @@ class AutoToolSetWorker(QThread):
             self.machine.wait_until_idle()
             time.sleep(0.5)
 
-            # 3. 快速下降到 Z=125 (接近对刀仪，节省时间)
-            # 用户提示对刀仪在 116 左右，我们从 125 开始探，留 9mm 余量防止针头变长
-            self.machine.logger(f"🚀 快速下降到 Z=125.0...")
-            self.machine.move_z_absolute(125.0, 600)
+            # 3. 快速下降到对刀仪上方 (对刀仪Z + 7mm余量)
+            start_z = self.target_z + 7.0
+            self.machine.logger(f"🚀 快速下降到 Z={start_z:.1f} (对刀仪估计在 Z={self.target_z:.1f})...")
+            self.machine.move_z_absolute(start_z, 600)
             self.machine.wait_until_idle()
             time.sleep(0.5)
 
-            # 4. 第一阶段：粗探 (Z=125 -> 115, step=0.5)
-            # 步长 0.5mm，下限 115.0mm (用户对刀仪在 116，行程 1mm，所以 115 是极限)
-            self.machine.logger(f"🔍 第一阶段粗探 (Z=125->115, step=0.5)...")
+
+            # 4. 第一阶段：粗探 (target_z + 7 -> target_z - 8, step=0.5)
+            # ✅ 安全改进：如果有Z基准，不能低于 Z基准 - 2mm
+            end_z = self.target_z - 8.0  # 对刀仪下方8mm
+            
+            # ⚠️ 安全检查：如果end_z低于Z基准-2mm，说明可能撞刀
+            if self.z_base > 0.0:
+                safe_limit = self.z_base - 2.0  # 最多低于Z基准2mm
+                if end_z < safe_limit:
+                    self.machine.logger(f"⚠️ 安全限制：探测下限调整为 {safe_limit:.1f}mm (Z基准-2mm)")
+                    end_z = safe_limit
+            
+            self.machine.logger(f"🔍 第一阶段粗探 (Z={start_z:.1f}->{end_z:.1f}, step=0.5)...")
             trigger_z = None
-            current_z = 125.0
+            current_z = start_z
             found = False
             
-            while current_z > 115.0:
+            while current_z > end_z:
                 status = self.machine.query_probe_status()
                 if status == 'triggered':
                     found = True
@@ -269,10 +264,11 @@ class AutoToolSetWorker(QThread):
                 self.machine.wait_until_idle()
 
             if not found:
-                self.machine.logger(f"❌ 粗探失败：已达 Z=115.0mm 仍未触发！")
+                self.machine.logger(f"❌ 粗探失败：已达 Z={end_z:.1f}mm 仍未触发！")
+                self.machine.logger(f"⚠️ 可能原因：XY位置偏移，未对准对刀仪")
                 # 失败后立即抬起 Z，防止误操作
                 self.machine.move_z_absolute(self.safe_z, 600)
-                self.finished_signal.emit(False, 0.0, "粗探未检测到信号 (已归位)")
+                self.finished_signal.emit(False, 0.0, "粗探未检测到信号 (已归位)\n⚠️ 请检查XY位置是否对准对刀仪")
                 return
 
             # 5. 准备精探：抬起 3mm (优化：从 5mm 改为 3mm)
@@ -474,12 +470,9 @@ class ImageLabel(QLabel):
             super().mouseReleaseEvent(event)
 
 
-# ====== ✅ 必须添加：定义设置文件名常量 ======
-import json # 确保 json 库已经导入
-import os   # 确保 os 库已经导入
-# 这个文件将用于保存速度、加速度等应用参数
+# 应用设置文件路径
 SETTINGS_FILE = "config/app_settings.json"
-# ==========================================
+
 
 # ====== 可折叠分组框类 ======
 class CollapsibleBox(QWidget):
@@ -850,6 +843,8 @@ class MainWindow(QWidget):
         # 对刀仪坐标 (XY)
         self.tool_setter_x = None
         self.tool_setter_y = None
+        self.tool_setter_z = None  # ✅ 新增：对刀仪Z坐标
+        self.safety_margin = 2.0   # ✅ 新增：对刀安全余量（默认2mm）
         
         # 对刀模式：False=正常, True=手动找对刀点
         self.manual_tool_set_mode = False
@@ -4679,6 +4674,7 @@ class MainWindow(QWidget):
             mx, my, mz = self.machine.get_position()
             self.tool_setter_x = mx
             self.tool_setter_y = my
+            self.tool_setter_z = mz  # ✅ 新增：保存Z坐标
             
             # 保存设置
             self.save_app_settings()
@@ -4689,14 +4685,14 @@ class MainWindow(QWidget):
             self.btn_auto_tool_set.setStyleSheet("background-color: #2563EB; font-weight: bold;")
             
             QMessageBox.information(self, "位置已保存", 
-                                    f"对刀仪坐标已保存为:\nX: {mx:.2f}\nY: {my:.2f}\n\n现在可以执行自动对刀了。")
+                                    f"对刀仪坐标已保存为:\nX: {mx:.2f}\nY: {my:.2f}\nZ: {mz:.2f}\n\n现在可以执行自动对刀了。")
             return
 
         # --- 情况 B: 尚未设置对刀仪坐标 ---
-        if self.tool_setter_x is None or self.tool_setter_y is None:
+        if self.tool_setter_x is None or self.tool_setter_y is None or self.tool_setter_z is None:
             reply = QMessageBox.question(
                 self, "未设置对刀仪",
-                "尚未记录对刀仪的 XY 坐标。\n\n"
+                "尚未记录对刀仪的 XYZ 坐标。\n\n"
                 "是否进入【手动找点模式】？\n"
                 "进入后，请移动针头到对刀仪正上方，然后再次点击按钮确认。",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
@@ -4708,12 +4704,21 @@ class MainWindow(QWidget):
                 self.log("👉 进入手动找点模式：请移动到对刀仪上方，并观察状态灯。")
             return
 
-        # --- 情况 C: 已有坐标，执行自动对刀 ---
-        # 修改：允许用户选择“重新标定位置”
+        # --- 情况 C: 已有坐标，执行自动对刀或重新标定 ---
+        # 创建对话框显示当前坐标
+        from PyQt5.QtWidgets import QInputDialog
         box = QMessageBox(self)
         box.setWindowTitle("确认对刀")
-        box.setText(f"已保存对刀仪坐标 (X{self.tool_setter_x:.1f}, Y{self.tool_setter_y:.1f})。\n\n"
+        
+        z_display = f"{self.tool_setter_z:.1f}" if self.tool_setter_z is not None else "未设置"
+        z_base_info = f"\n当前Z基准: {self.z_base:.3f} mm" if self.z_base > 0 else ""
+        
+        box.setText(f"已保存对刀仪坐标:\n"
+                    f"X: {self.tool_setter_x:.1f}\n"
+                    f"Y: {self.tool_setter_y:.1f}\n"
+                    f"Z: {z_display} (探测起点){z_base_info}\n\n"
                     "请选择操作：")
+        
         btn_auto = box.addButton("开始自动对刀", QMessageBox.YesRole)
         btn_manual = box.addButton("重新标定位置", QMessageBox.NoRole)
         btn_cancel = box.addButton("取消", QMessageBox.RejectRole)
@@ -4721,11 +4726,105 @@ class MainWindow(QWidget):
         box.exec_()
         
         if box.clickedButton() == btn_manual:
-            # 进入手动模式
-            self.manual_tool_set_mode = True
-            self.btn_auto_tool_set.setText("确认对刀仪位置 (点击保存)")
-            self.btn_auto_tool_set.setStyleSheet("background-color: #F59E0B; color: black; font-weight: bold;") 
-            self.log("👉 进入手动找点模式：请移动到对刀仪上方，并观察状态灯。")
+            # 打开详细设置对话框
+            from PyQt5.QtWidgets import QDialog, QVBoxLayout, QGridLayout, QLabel, QDialogButtonBox, QPushButton
+            from core.touch_spinbox import TouchSpinBox
+            
+            dialog = QDialog(self)
+            dialog.setWindowTitle("重新标定对刀仪位置")
+            dialog.resize(380, 280)
+            
+            layout = QVBoxLayout()
+            grid = QGridLayout()
+            
+            # XYZ输入框
+            spin_x = TouchSpinBox()
+            spin_x.setRange(-999, 999)
+            spin_x.setDecimals(2)
+            spin_x.setValue(self.tool_setter_x if self.tool_setter_x else 0)
+            spin_x.setSuffix(" mm")
+            
+            spin_y = TouchSpinBox()
+            spin_y.setRange(-999, 999)
+            spin_y.setDecimals(2)
+            spin_y.setValue(self.tool_setter_y if self.tool_setter_y else 0)
+            spin_y.setSuffix(" mm")
+            
+            spin_z = TouchSpinBox()
+            spin_z.setRange(-999, 999)
+            spin_z.setDecimals(2)
+            spin_z.setValue(self.tool_setter_z if self.tool_setter_z else 63.0)
+            spin_z.setSuffix(" mm")
+            spin_z.setStyleSheet("background-color: #E0F2FE; font-weight: bold;")  # ✅ 淡蓝色背景，更清晰
+            
+            grid.addWidget(QLabel("X:"), 0, 0)
+            grid.addWidget(spin_x, 0, 1)
+            grid.addWidget(QLabel("Y:"), 1, 0)
+            grid.addWidget(spin_y, 1, 1)
+            grid.addWidget(QLabel("Z:"), 2, 0)
+            grid.addWidget(spin_z, 2, 1)
+            
+            layout.addLayout(grid)
+            
+            # 当前位置提示
+            mx, my, mz = self.machine.get_position()
+            info = QLabel(f"💡 当前位置: X={mx:.2f}, Y={my:.2f}, Z={mz:.2f}")
+            info.setStyleSheet("color: #9CA3AF; padding: 5px;")
+            layout.addWidget(info)
+            
+            # ✅ 新增：安全余量设置
+            safety_layout = QGridLayout()
+            safety_label = QLabel("安全余量:")
+            safety_label.setStyleSheet("color: #F59E0B; font-weight: bold;")
+            safety_label.setToolTip("探测下限 = Z基准 - 安全余量\n建议值: 2.0mm\n最大值: 5.0mm")
+            
+            spin_safety = TouchSpinBox()
+            spin_safety.setRange(0.5, 5.0)  # 最小0.5mm，最大5mm
+            spin_safety.setDecimals(1)
+            spin_safety.setValue(2.0)  # 默认2mm
+            spin_safety.setSuffix(" mm")
+            spin_safety.setStyleSheet("background-color: #FEF3C7;")
+            
+            safety_info = QLabel("⚠️ 防撞保护：探测不会低于Z基准减去此值")
+            safety_info.setStyleSheet("color: #6B7280; font-size: 11px;")
+            
+            safety_layout.addWidget(safety_label, 0, 0)
+            safety_layout.addWidget(spin_safety, 0, 1)
+            layout.addLayout(safety_layout)
+            layout.addWidget(safety_info)
+            
+            # 使用当前位置按钮
+            btn_use_current = QPushButton("📍 使用当前位置")
+            btn_use_current.clicked.connect(lambda: (
+                spin_x.setValue(mx),
+                spin_y.setValue(my),
+                spin_z.setValue(mz)
+            ))
+            layout.addWidget(btn_use_current)
+            
+            # 对话框按钮
+            buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+            layout.addWidget(buttons)
+            
+            dialog.setLayout(layout)
+            
+            if dialog.exec_() == QDialog.Accepted:
+                # ✅ 验证安全余量
+                safety_margin = spin_safety.value()
+                if safety_margin > 5.0:
+                    QMessageBox.warning(self, "参数错误", "⚠️ 安全余量不能超过 5.0mm！\n请重新设置。")
+                    return
+                
+                self.tool_setter_x = spin_x.value()
+                self.tool_setter_y = spin_y.value()
+                self.tool_setter_z = spin_z.value()
+                self.safety_margin = safety_margin  # ✅ 保存安全余量
+                
+                self.save_app_settings()
+                self.log(f"✅ 对刀仪位置已更新: X={self.tool_setter_x:.2f}, Y={self.tool_setter_y:.2f}, Z={self.tool_setter_z:.2f}")
+                self.log(f"🛡️ 安全余量: {self.safety_margin:.1f}mm (探测下限 ≥ Z基准-{self.safety_margin:.1f})")
             return
             
         elif box.clickedButton() == btn_auto:
@@ -4738,8 +4837,17 @@ class MainWindow(QWidget):
         self.log("🚀 开始自动对刀...")
         self.btn_auto_tool_set.setEnabled(False)
         
-        # 启动后台线程
-        self.tool_worker = AutoToolSetWorker(self.machine, self.safe_z_product, self.tool_setter_x, self.tool_setter_y)
+        # ✅ 修改：传入 tool_setter_z, z_base 和 safety_margin
+        target_z = self.tool_setter_z if self.tool_setter_z is not None else 63.0  # 默认63
+        self.tool_worker = AutoToolSetWorker(
+            self.machine, 
+            self.safe_z_product, 
+            self.tool_setter_x, 
+            self.tool_setter_y,
+            target_z,              # 对刀仪Z位置
+            self.z_base,           # Z基准（用于安全限制）
+            self.safety_margin     # ✅ 新增：安全余量（可配置）
+        )
         self.tool_worker.finished_signal.connect(self.on_auto_tool_set_finished)
         self.tool_worker.start()
 
@@ -5516,6 +5624,16 @@ class MainWindow(QWidget):
                 if 'z_base' in config:
                     self.z_base = config['z_base']
                 
+                # ✅ 新增：加载对刀仪坐标
+                if 'tool_setter_x' in config:
+                    self.tool_setter_x = config['tool_setter_x']
+                
+                if 'tool_setter_y' in config:
+                    self.tool_setter_y = config['tool_setter_y']
+                
+                if 'tool_setter_z' in config:
+                    self.tool_setter_z = config['tool_setter_z']
+                
                 self.log(f"✅ 已加载配方参数: 曝光={config.get('exposure', '?')}, XY速度={int(self.feedrate_xy)}, Z={self.safe_z_product:.1f}")
             
             # 清除缓存
@@ -5558,6 +5676,10 @@ class MainWindow(QWidget):
             'nozzle_offset_x': self.nozzle_offset_x,
             'nozzle_offset_y': self.nozzle_offset_y,
             'z_base': self.z_base,
+            # ✅ 新增：对刀仪坐标
+            'tool_setter_x': self.tool_setter_x,
+            'tool_setter_y': self.tool_setter_y,
+            'tool_setter_z': self.tool_setter_z,
         }
         
         # 更新HalconProductManager的路径

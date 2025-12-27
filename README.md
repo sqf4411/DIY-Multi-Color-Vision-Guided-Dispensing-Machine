@@ -125,17 +125,31 @@ python main_camera_ui.py
 
 ```
 DIY-Multi-Color-Vision-Guided-Dispensing-Machine/
-├── 📄 main_camera_ui.py          # 主程序入口
+├── 📄 main_camera_ui.py          # 主程序入口 (已优化)
 ├── 📂 core/                       # 核心模块
 │   ├── camera_manager.py         # 相机管理
 │   ├── machine_client.py         # 运动控制
-│   ├── halcon_manager.py         # Halcon识别
+│   ├── halcon_manager.py         # Halcon识别引擎
+│   ├── halcon_product_manager.py # Halcon产品管理
 │   ├── mold_detector.py          # OpenCV检测
-│   ├── path_editor.py            # 路径编辑
-│   ├── multicolor_path_editor.py # 多色编辑器
+│   ├── product_manager.py        # 产品配方管理
+│   ├── path_editor_wrapper.py    # 路径编辑封装
+│   ├── multicolor_path_editor.py # 多色路径编辑器
 │   ├── dry_run_dialog.py         # 空跑模拟
 │   ├── batch_run_dialog.py       # 批量运行
-│   └── config_manager.py         # 配置管理
+│   ├── valve_control_dialog.py   # 气阀控制
+│   ├── config_manager.py         # 配置管理
+│   └── ...                       # 其他辅助模块
+├── 📂 tests/                      # 测试文件 (已整理)
+│   ├── test_halcon_*.py          # Halcon相关测试
+│   ├── test_machine_client.py    # 机器客户端测试
+│   └── test_touch_numpad.py      # 触摸键盘测试
+├── 📂 scripts/                    # 脚本工具
+│   ├── detect_mold.hdev          # Halcon脚本
+│   └── utils/                    # 辅助工具 (已整理)
+│       ├── diagnose_path.py      # 路径诊断
+│       ├── fix_halcon_*.py       # Halcon修复工具
+│       └── repair_ui.py          # UI修复工具
 ├── 📂 produces/                   # 产品配方
 │   └── {配方名}/
 │       ├── reference.png         # 训练图片
@@ -145,11 +159,13 @@ DIY-Multi-Color-Vision-Guided-Dispensing-Machine/
 ├── 📂 config/                     # 全局配置
 │   ├── params.json               # 系统参数
 │   └── app_settings.json         # 应用设置
-├── 📂 scripts/                    # 辅助脚本
-│   └── detect_mold.hdev          # Halcon脚本
-└── 📂 docs/                       # 文档
+├── 📂 mobile_ui/                  # 移动端监控
+│   └── mobile_monitor_dialog.py  # 移动监控对话框
+└── 📂 docs/                       # 文档 (已整理)
     ├── complete_guide.md         # 完整指南
-    └── coordinate_system_manual.md # 坐标系统
+    ├── coordinate_system_manual.md # 坐标系统
+    ├── HALCON_OPTIMIZATION_LOG.md  # Halcon优化日志
+    └── HALCON_SCRIPT_EXPLAINED.md  # Halcon脚本说明
 ```
 
 ### 核心模块说明
@@ -157,12 +173,17 @@ DIY-Multi-Color-Vision-Guided-Dispensing-Machine/
 | 模块 | 功能 | 关键类/函数 |
 |------|------|------------|
 | `camera_manager.py` | 相机连接与取流 | `CameraManager` |
-| `machine_client.py` | Klipper通信 | `MachineClient` |
+| `machine_client.py` | Klipper通信与运动控制 | `MachineClient` |
 | `halcon_manager.py` | Halcon识别引擎 | `HalconManager` |
-| `path_editor.py` | 路径可视化编辑 | `PathEditor` |
+| `halcon_product_manager.py` | Halcon产品逻辑管理 | `HalconProductManager` |
+| `product_manager.py` | 产品配方管理 | `ProductManager` |
+| `mold_detector.py` | OpenCV模具检测 | `detect_mold_and_cells` |
+| `path_editor_wrapper.py` | 路径编辑封装 | `edit_path_halcon_mode` |
 | `multicolor_path_editor.py` | 多色路径规划 | `MultiColorPathEditor` |
 | `dry_run_dialog.py` | G代码生成与模拟 | `DryRunDialog` |
 | `batch_run_dialog.py` | 批量生产控制 | `BatchRunDialog` |
+| `valve_control_dialog.py` | 气阀控制对话框 | `ValveControlDialog` |
+| `config_manager.py` | 配置文件管理 | `ConfigManager` |
 
 ---
 
@@ -171,6 +192,10 @@ DIY-Multi-Color-Vision-Guided-Dispensing-Machine/
 ### 新手入门
 - 📖 [完整项目指南](docs/complete_guide.md) - 从零开始学习整个项目
 - 🗺️ [坐标系统详解](docs/coordinate_system_manual.md) - 理解4种坐标系转换
+
+### Halcon相关
+- 🔧 [Halcon优化日志](docs/HALCON_OPTIMIZATION_LOG.md) - 识别精度优化历程
+- 📜 [Halcon脚本说明](docs/HALCON_SCRIPT_EXPLAINED.md) - 检测脚本详解
 
 ### 进阶开发
 - 🔧 API参考手册（见complete_guide.md第7章）

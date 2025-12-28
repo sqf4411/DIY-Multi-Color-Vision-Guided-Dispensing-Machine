@@ -30,5 +30,6 @@
     "batch_rows": 1,
     "batch_cols": 1,
     "batch_space_x": 0.0,
-    "batch_space_y": 0.0
+    "batch_space_y": 0.0,
+    "vision_optimal_z": 164.0
 }

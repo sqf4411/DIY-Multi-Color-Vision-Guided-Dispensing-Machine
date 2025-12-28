@@ -280,9 +280,15 @@ class BatchWorker(QThread):
         self.mw.machine.move_to(z=final_safe_z, speed=self.mw.feedrate_z)
         self.mw.machine.move_to(x=start_x, y=start_y, speed=self.mw.feedrate_xy)
         self.mw.machine.wait_until_idle()
-        self.mw.machine.move_to(z=start_z, speed=self.mw.feedrate_z)
+        
+        # ====== ✅ 修改：返回到视觉最佳高度，而不是起始Z ======
+        vision_z = getattr(self.mw, 'vision_optimal_z', start_z)
+        self.log_signal.emit(f"📷 返回视觉最佳高度 Z={vision_z:.2f}")
+        self.mw.machine.move_to(z=vision_z, speed=self.mw.feedrate_z)
+        # ====================================================
 
         self.finished_signal.emit(True, f"{title}完成")
+
 
     def _safe_lift_z(self):
         """辅助函数：抬升到移动安全高度"""

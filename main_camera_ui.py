@@ -859,6 +859,10 @@ class MainWindow(QWidget):
         self.cam_safe_z_cavity = 213.0
         self.cam_safe_z_product = 215.0
         self.cam_work_z = 211.0 # 相机通常比针头高，避免撞到
+        
+        # ====== ✅ 新增：视觉最佳识别高度 ======
+        self.vision_optimal_z = 164.0  # 用户反馈Z=164时Halcon识别最佳
+        self.vision_btn_last_click_time = 0  # 用于双击检测
         # =======================================
         
         # 对刀基准 (上次对刀时的 Z 坐标) - 全局硬件配置
@@ -1422,6 +1426,28 @@ class MainWindow(QWidget):
         grid.addWidget(self.btn_x_plus, 1, 2)
         grid.addWidget(self.btn_y_minus, 2, 1)
 
+        # ====== ✅ 新增：视觉高度快捷按钮（中心位置）======
+        self.btn_vision_height = QPushButton(f"camera{int(self.vision_optimal_z)}")
+        self.btn_vision_height.setStyleSheet("""
+            QPushButton {
+                background-color: #8B5CF6; /* 紫色 */
+                color: white;
+                font-weight: bold;
+                font-size: 12px;
+                min-height: 30px;
+            }
+            QPushButton:hover {
+                background-color: #7C3AED;
+            }
+            QPushButton:pressed {
+                background-color: #6D28D9;
+            }
+        """)
+        self.btn_vision_height.setToolTip("单击: 移动到视觉位\n双击: 修改高度")
+        self.btn_vision_height.clicked.connect(self.on_vision_height_clicked)
+        grid.addWidget(self.btn_vision_height, 1, 1)  # 中心位置
+        # ===============================================
+
         self.btn_z_plus = QPushButton("Z+")
         self.btn_z_minus = QPushButton("Z-")
         grid.addWidget(self.btn_z_plus, 0, 3)
@@ -1435,6 +1461,7 @@ class MainWindow(QWidget):
         grid.addWidget(self.btn_home_x,   1, 4)
         grid.addWidget(self.btn_home_y,   2, 4)
         grid.addWidget(self.btn_home_z, 1, 3)
+
 
         motion_layout.addLayout(grid)
 
@@ -2120,7 +2147,66 @@ class MainWindow(QWidget):
         # 不要在这里销毁线程对象，否则会报 "QThread: Destroyed while thread is still running"
         # self.home_worker = None
 
+    # ================== ✅ 新增：视觉高度快捷按钮槽函数 ==================
+    def on_vision_height_clicked(self):
+        """视觉高度按钮点击处理（单击/双击检测）"""
+        import time
+        current_time = time.time()
+        time_since_last_click = current_time - self.vision_btn_last_click_time
+        
+        # 双击检测（500ms内）
+        if time_since_last_click < 0.5:
+            # 双击：打开设置对话框
+            self.on_set_vision_height()
+            self.vision_btn_last_click_time = 0  # 重置，避免三击误触
+        else:
+            # 单击：延迟执行，等待可能的双击
+            QTimer.singleShot(300, self.execute_goto_vision_height)
+            self.vision_btn_last_click_time = current_time
+
+    def execute_goto_vision_height(self):
+        """执行跳转到视觉高度（延迟调用，避免双击时执行）"""
+        import time
+        current_time = time.time()
+        if current_time - self.vision_btn_last_click_time < 0.4:
+            return  # 如果是双击的一部分，不执行
+        
+        target_z = self.vision_optimal_z
+        self.log(f"🎯 正在移动到视觉最佳高度 Z={target_z}...")
+        try:
+            self.machine.move_to(z=target_z, speed=self.feedrate_z)
+            self.machine.wait_until_idle()
+            x, y, z = self.machine.get_position()
+            self.update_xyz_display(x, y, z)
+            self.log(f"✅ 已到达视觉位 Z={z:.2f}")
+        except Exception as e:
+            self.log(f"❌ 移动失败: {e}")
+
+    def on_set_vision_height(self):
+        """设置视觉最佳高度（双击触发）"""
+        from PyQt5.QtWidgets import QInputDialog
+        
+        new_value, ok = QInputDialog.getDouble(
+            self, 
+            "设置视觉最佳高度", 
+            "请输入相机识别最佳高度 (mm):\n\n提示: 手动调整到最清晰位置后，输入当前Z值",
+            value=self.vision_optimal_z,
+            min=0.0,
+            max=300.0,
+            decimals=2
+        )
+        
+        if ok:
+            self.vision_optimal_z = new_value
+            # 更新按钮显示
+            self.btn_vision_height.setText(f"cmera{int(new_value)}")
+            self.log(f"✅ 视觉最佳高度已设置为 Z={new_value:.2f}")
+            # 立即保存到配置
+            self.save_app_settings()
+    # ==================================================================
+
     # ================== 触摸模式相关 ==================
+
     
     def toggle_touch_mode(self, enabled):
         """切换触摸模式"""
@@ -2651,7 +2737,15 @@ class MainWindow(QWidget):
                 self.spn_vision_offset_y.setValue(self.vision_offset_y)
                 self.spn_vision_offset_y.blockSignals(False)
             
-            self.log(f"✅ 已加载应用参数 (速度XY={int(self.feedrate_xy)}, 偏移X={self.nozzle_offset_x:.2f}, Y={self.nozzle_offset_y:.2f})")
+            # ====== ✅ 新增：加载视觉最佳高度 ======
+            if 'vision_optimal_z' in config:
+                self.vision_optimal_z = float(config['vision_optimal_z'])
+                if hasattr(self, 'btn_vision_height'):
+                    self.btn_vision_height.setText(f"📷{int(self.vision_optimal_z)}")
+            # =========================================
+            
+            self.log(f"✅ 已加载应用参数 (速度XY={int(self.feedrate_xy)}, 偏移X={self.nozzle_offset_x:.2f}, Y={self.nozzle_offset_y:.2f}, 视觉高度={self.vision_optimal_z:.1f})")
+
             
         except Exception as e:
             self.log(f"❌ 加载应用参数失败: {e}")
@@ -2687,12 +2781,17 @@ class MainWindow(QWidget):
             self.config.set('vision_offset_x', self.vision_offset_x)
             self.config.set('vision_offset_y', self.vision_offset_y)
             
+            # ====== ✅ 新增：保存视觉最佳高度 ======
+            self.config.set('vision_optimal_z', self.vision_optimal_z)
+            # =========================================
+            
             # Dispensing Dwell Times
             self.config.set('dwell_ms', self.dwell_ms)
             self.config.set('line_dwell_ms', self.line_dwell_ms)
             
             # Trigger ConfigManager to write to file
             self.config.save_app_settings()
+
             
         except Exception as e:
             self.log(f"❌ 保存应用设置失败: {e}")

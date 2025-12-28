@@ -1,5 +1,6 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, 
-                             QLabel, QDoubleSpinBox, QPushButton, QGroupBox, QMessageBox)
+                             QLabel, QDoubleSpinBox, QPushButton, QGroupBox, QMessageBox,
+                             QTabWidget, QWidget, QRadioButton, QButtonGroup)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 import json
@@ -51,6 +52,18 @@ class ValveControlDialog(QDialog):
         apply_touch_support(self)
     
     def init_ui(self):
+        main_layout = QVBoxLayout()
+        self.tabs = QTabWidget()
+        # Tab 1: 气动
+        self.tabs.addTab(self.init_pneumatic_tab(), "气动/电磁阀")
+        # Tab 2: 螺杆/步进电机
+        self.tabs.addTab(self.init_syringe_tab(), "螺杆/步进电机")
+        
+        main_layout.addWidget(self.tabs)
+        self.setLayout(main_layout)
+
+    def init_pneumatic_tab(self):
+        widget = QWidget()
         layout = QVBoxLayout()
         layout.setSpacing(15)
         
@@ -294,7 +307,8 @@ class ValveControlDialog(QDialog):
         btn_all_off.clicked.connect(self.all_valves_off)
         layout.addWidget(btn_all_off)
         
-        self.setLayout(layout)
+        widget.setLayout(layout)
+        return widget
     
     # ========== 测试方法 ==========
     
@@ -534,3 +548,230 @@ class ValveControlDialog(QDialog):
                 traceback.print_exc()
         else:
             print(f"[ValveControl] ⚠️ 参数文件不存在，使用默认值")
+
+    # ========== 螺杆/步进电机控制 (Syringe) ==========
+    
+    def init_syringe_tab(self):
+        """初始化螺杆注射器控制标签页"""
+        self.current_e_pos = 0.0
+        
+        widget = QWidget()
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        
+        # 1. 状态与点动控制
+        jog_group = QGroupBox("🎮 手动点动 (E轴/挤出机)")
+        jog_layout = QVBoxLayout()
+        
+        # 状态显示
+        status_layout = QHBoxLayout()
+        status_layout.addWidget(QLabel("当前位置:"))
+        self.lbl_syringe_pos = QLabel("未知") # 暂不知道如何获取实时E值，除非M114
+        self.lbl_syringe_pos.setStyleSheet("font-weight: bold; color: #3B82F6;")
+        status_layout.addWidget(self.lbl_syringe_pos)
+        
+        btn_reset_pos = QPushButton("归零 (G92 E0)")
+        btn_reset_pos.clicked.connect(self.on_syringe_zero)
+        status_layout.addWidget(btn_reset_pos)
+        status_layout.addStretch()
+        jog_layout.addLayout(status_layout)
+        
+        # 步长选择
+        step_layout = QHBoxLayout()
+        step_layout.addWidget(QLabel("点动步长:"))
+        self.bg_step = QButtonGroup(self)
+        self.steps = [0.01, 0.1, 1.0, 5.0, 10.0]
+        self.step_key = 1.0
+        
+        for val in self.steps:
+            rb = QRadioButton(f"{val}mm")
+            if val == 1.0: rb.setChecked(True)
+            rb.toggled.connect(lambda c, v=val: self.set_syringe_step(v) if c else None)
+            step_layout.addWidget(rb)
+            self.bg_step.addButton(rb)
+            
+        jog_layout.addLayout(step_layout)
+        
+        # 速度设置
+        speed_layout = QHBoxLayout()
+        speed_layout.addWidget(QLabel("点动速度 (mm/min):"))
+        self.spn_syringe_speed = QDoubleSpinBox()
+        self.spn_syringe_speed.setRange(1, 3000)
+        self.spn_syringe_speed.setValue(300) # 默认 5mm/s
+        self.spn_syringe_speed.setSingleStep(10)
+        speed_layout.addWidget(self.spn_syringe_speed)
+        speed_layout.addStretch()
+        jog_layout.addLayout(speed_layout)
+        
+        # 点动按钮
+        move_layout = QHBoxLayout()
+        btn_retract = QPushButton("⬅️ 回抽 (Retract)")
+        btn_retract.setMinimumHeight(60)
+        btn_retract.clicked.connect(lambda: self.on_syringe_move(-1))
+        
+        btn_extrude = QPushButton("➡️ 挤出 (Extrude)")
+        btn_extrude.setMinimumHeight(60)
+        btn_extrude.setStyleSheet("background-color: #10B981; color: white; font-weight: bold;")
+        btn_extrude.clicked.connect(lambda: self.on_syringe_move(1))
+        
+        move_layout.addWidget(btn_retract)
+        move_layout.addWidget(btn_extrude)
+        jog_layout.addLayout(move_layout)
+        
+        jog_group.setLayout(jog_layout)
+        layout.addWidget(jog_group)
+
+        # 2. 定量出胶测试
+        test_group = QGroupBox("🧪 定量出胶测试 (推射 + 回抽)")
+        test_layout = QVBoxLayout()
+        
+        grid = QGridLayout()
+        
+        # 出胶量
+        grid.addWidget(QLabel("出胶行程 (mm):"), 0, 0)
+        self.spn_test_dist = QDoubleSpinBox()
+        self.spn_test_dist.setRange(0.01, 50.0)
+        self.spn_test_dist.setValue(2.0)
+        grid.addWidget(self.spn_test_dist, 0, 1)
+        
+        # 出胶速度
+        grid.addWidget(QLabel("出胶速度 (mm/min):"), 0, 2)
+        self.spn_test_speed = QDoubleSpinBox()
+        self.spn_test_speed.setRange(1, 3000)
+        self.spn_test_speed.setValue(100)
+        grid.addWidget(self.spn_test_speed, 0, 3)
+        
+        # 回抽量
+        grid.addWidget(QLabel("回抽行程 (mm):"), 1, 0)
+        self.spn_test_retract = QDoubleSpinBox()
+        self.spn_test_retract.setRange(0.0, 20.0)
+        self.spn_test_retract.setValue(1.0)
+        grid.addWidget(self.spn_test_retract, 1, 1)
+        
+        # 回抽速度
+        grid.addWidget(QLabel("回抽速度 (mm/min):"), 1, 2)
+        self.spn_test_ret_speed = QDoubleSpinBox()
+        self.spn_test_ret_speed.setRange(1, 3000)
+        self.spn_test_ret_speed.setValue(500)
+        grid.addWidget(self.spn_test_ret_speed, 1, 3)
+        
+        test_layout.addLayout(grid)
+        
+        btn_test = QPushButton("▶️ 执行出胶测试")
+        btn_test.setMinimumHeight(60)
+        btn_test.setStyleSheet("background-color: #8B5CF6; color: white; font-weight: bold; font-size: 14px;")
+        btn_test.clicked.connect(self.on_syringe_test)
+        test_layout.addWidget(btn_test)
+        
+        # 进度条/状态
+        self.lbl_syringe_status = QLabel("就绪")
+        self.lbl_syringe_status.setAlignment(Qt.AlignCenter)
+        test_layout.addWidget(self.lbl_syringe_status)
+        
+        test_group.setLayout(test_layout)
+        layout.addWidget(test_group)
+        
+        # 3. 参数限制
+        limit_group = QGroupBox("⚠️ 限制设置")
+        limit_layout = QHBoxLayout()
+        limit_layout.addWidget(QLabel("最大行程 (mm):"))
+        self.spn_max_stroke = QDoubleSpinBox()
+        self.spn_max_stroke.setValue(80.0)
+        limit_layout.addWidget(self.spn_max_stroke)
+        limit_layout.addStretch()
+        
+        limit_group.setLayout(limit_layout)
+        layout.addWidget(limit_group)
+
+        # 提示
+        lbl_info = QLabel("提示: 滚珠丝杆模组(1204+42步进)需在Klipper中配置为 [extruder]。\n请确保已解除冷挤出限制 (min_extrude_temp: 0)。")
+        lbl_info.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(lbl_info)
+        
+        layout.addStretch()
+        
+        widget.setLayout(layout)
+        return widget
+
+    def set_syringe_step(self, val):
+        self.step_key = val
+        
+    def on_syringe_zero(self):
+        if self.machine:
+            try:
+                self.machine.gcode("G92 E0")
+                self.current_e_pos = 0.0
+                self.lbl_syringe_pos.setText(f"{self.current_e_pos:.2f}")
+                QMessageBox.information(self, "成功", "已重置 E 轴位置为 0")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", str(e))
+
+    def on_syringe_move(self, direction):
+        # M83 相对模式
+        speed = self.spn_syringe_speed.value()
+        dist = self.step_key * direction
+        
+        # 1. 软限位检查
+        if not hasattr(self, 'current_e_pos'):
+            self.current_e_pos = 0.0
+            
+        next_pos = self.current_e_pos + dist
+        max_stroke = self.spn_max_stroke.value()
+        
+        # 允许回抽到负数吗？通常不允许，设为0 (或者由用户决定，这里先做上限提示)
+        if next_pos > max_stroke:
+            QMessageBox.warning(self, "限位警告", f"目标位置 {next_pos:.2f} 超过最大行程 {max_stroke}mm")
+            return
+            
+        cmd = [
+            "M83",              # 相对挤出模式
+            f"G1 E{dist:.3f} F{speed}" 
+        ]
+        
+        if self.machine:
+            try:
+                for c in cmd:
+                    self.machine.gcode(c)
+                
+                self.current_e_pos = next_pos
+                self.lbl_syringe_pos.setText(f"{self.current_e_pos:.2f}")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"发送指令失败: {e}")
+
+    def on_syringe_test(self):
+        # 参数
+        dist = self.spn_test_dist.value()
+        speed = self.spn_test_speed.value()
+        retract = self.spn_test_retract.value()
+        ret_speed = self.spn_test_ret_speed.value()
+        
+        # 检查行程
+        if not hasattr(self, 'current_e_pos'):
+            self.current_e_pos = 0.0
+        
+        max_stroke = self.spn_max_stroke.value()
+        if self.current_e_pos + dist > max_stroke:
+             QMessageBox.warning(self, "限位警告", f"测试出胶将超过最大行程！\n当前:{self.current_e_pos} + 出胶:{dist} > {max_stroke}")
+             return
+        
+        cmds = [
+            "M83",
+            f"G1 E{dist:.3f} F{speed}",       # 挤出
+            "G4 P500",                        # 停顿 0.5s
+            f"G1 E-{retract:.3f} F{ret_speed}" # 回抽
+        ]
+        
+        if self.machine:
+            try:
+                self.lbl_syringe_status.setText("正在执行...")
+                for c in cmds:
+                    self.machine.gcode(c)
+                
+                # 更新位置
+                self.current_e_pos = self.current_e_pos + dist - retract
+                self.lbl_syringe_pos.setText(f"{self.current_e_pos:.2f}")
+                self.lbl_syringe_status.setText(f"执行完成: 挤出{dist}mm, 回抽{retract}mm")
+            except Exception as e:
+                self.lbl_syringe_status.setText("错误")
+                QMessageBox.critical(self, "错误", f"执行失败: {e}")
+

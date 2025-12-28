@@ -2738,11 +2738,12 @@ class MainWindow(QWidget):
                 self.spn_vision_offset_y.blockSignals(False)
             
             # ====== ✅ 新增：加载视觉最佳高度 ======
-            if 'vision_optimal_z' in config:
-                self.vision_optimal_z = float(config['vision_optimal_z'])
+            if 'vision_optimal_z' in self.config.app_settings:
+                self.vision_optimal_z = float(self.config.app_settings['vision_optimal_z'])
                 if hasattr(self, 'btn_vision_height'):
-                    self.btn_vision_height.setText(f"📷{int(self.vision_optimal_z)}")
+                    self.btn_vision_height.setText(f"camera{int(self.vision_optimal_z)}")
             # =========================================
+
             
             self.log(f"✅ 已加载应用参数 (速度XY={int(self.feedrate_xy)}, 偏移X={self.nozzle_offset_x:.2f}, Y={self.nozzle_offset_y:.2f}, 视觉高度={self.vision_optimal_z:.1f})")
 

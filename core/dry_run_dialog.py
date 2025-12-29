@@ -318,6 +318,7 @@ class DryRunDialog(QDialog):
                         if line_dwell > 0:
                             gcode_lines.append(f"G4 P{line_dwell}")
 
+
                         # 4. Dispense Path
                         append_master_cmd(True) # Open A
                         for pt in path_machine[1:]:

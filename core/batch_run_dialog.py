@@ -461,9 +461,8 @@ class BatchWorker(QThread):
                 
                 # [FIX] Add end dwell before closing valve
                 if valve_on and dwell_ms > 0:
-                    end_dwell = int(dwell_ms * 0.5)  # 终点延时为起点的一半
                     lines.append(f"; End point dwell")
-                    lines.append(f"G4 P{end_dwell}")
+                    lines.append(f"G4 P{dwell_ms}")  # 终点延时与起点相同
                 
                 # 一条路径段结束：关阀
                 if valve_on:

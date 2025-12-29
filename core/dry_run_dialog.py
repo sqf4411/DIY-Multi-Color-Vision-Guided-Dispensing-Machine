@@ -313,24 +313,26 @@ class DryRunDialog(QDialog):
                             append_master_cmd(False) # Close A
                     else:
                         # --- Line Dispensing ---
-                        # [FIX] Use segment's dwell_ms if available, fallback to global line_dwell_ms
+                        # 1. 先开阀
+                        append_master_cmd(True) # Open A
+                        
+                        # 2. 延时等待供料建压
                         line_dwell = dwell_ms if dwell_ms > 0 else self.line_dwell_ms
                         if line_dwell > 0:
                             gcode_lines.append(f"G4 P{line_dwell}")
 
-
-                        # 4. Dispense Path
-                        append_master_cmd(True) # Open A
+                        # 3. 沿路径移动出胶
                         for pt in path_machine[1:]:
                             pt_x = pt[0] + self.nozzle_offset_x
                             pt_y = pt[1] + self.nozzle_offset_y
                             # [FIX] Use G1 for controlled speed, and use line_speed_xy
                             gcode_lines.append(f"G1 X{pt_x:.3f} Y{pt_y:.3f} F{self.line_speed_xy}")
                         
-                        # [FIX] Add end dwell before closing valve
+                        # 4. 终点延时（与起点相同）
                         if line_dwell > 0:
-                            end_dwell = int(line_dwell * 0.5)  # 终点延时为起点的一半
-                            gcode_lines.append(f"G4 P{end_dwell}")
+                            gcode_lines.append(f"G4 P{line_dwell}")
+                        
+                        # 5. 关阀
                         append_master_cmd(False) # Close A
 
                     # 5. Lift after segment to Cavity Safe Z

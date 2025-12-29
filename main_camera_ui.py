@@ -254,15 +254,15 @@ class AutoToolSetWorker(QThread):
 
 
             # 4. 第一阶段：粗探 (target_z + 7 -> target_z - 8, step=0.5)
-            # ✨ 安全改进：如果有Z基准，不能低于 Z基准 - safety_margin
+            # ✨ 安全改进：探测下限应基于对刀仪位置，而非旧的Z基准
             end_z = self.target_z - 8.0  # 对刀仪下方 8mm
             
-            # ⚠️ 安全检查：如果end_z低于Z基准-safety_margin，说明可能撞刀
-            if self.z_base > 0.0:
-                safe_limit = self.z_base - self.safety_margin  # 使用配置的安全余量
-                if end_z < safe_limit:
-                    self.machine.logger(f"⚠️ 安全限制：探测下限调整为 {safe_limit:.1f}mm (Z基准-{self.safety_margin:.1f}mm)")
-                    end_z = safe_limit
+            # ⚠️ 安全检查：探测下限 = 对刀仪位置 - 安全余量
+            # 这样无论针头长短，都能正确探测而不会撞刀
+            safe_limit = self.target_z - self.safety_margin
+            if end_z < safe_limit:
+                self.machine.logger(f"⚠️ 安全限制：探测下限调整为 {safe_limit:.1f}mm (对刀仪-{self.safety_margin:.1f}mm)")
+                end_z = safe_limit
             
             self.machine.logger(f"🔍 第一阶段粗探 (Z={start_z:.1f}->{end_z:.1f}, step=0.5)...")
             trigger_z = None
@@ -270,16 +270,21 @@ class AutoToolSetWorker(QThread):
             found = False
             
             while current_z > end_z:
+                # 先移动到下一个位置
+                current_z -= 0.5  # 步长 0.5mm
+                self.machine.move_z_absolute(current_z, 600)
+                self.machine.wait_until_idle()
+                time.sleep(0.1)  # 等待信号稳定
+                
+                # 再检测当前位置的探针状态
                 status = self.machine.query_probe_status()
+                self.machine.logger(f"  Z={current_z:.2f} | 探针={status}")  # 调试输出
+                
                 if status == 'triggered':
                     found = True
                     trigger_z = current_z
                     self.machine.logger(f"✅ 粗探触发于 Z={current_z:.2f}")
                     break
-                
-                current_z -= 0.5  # 步长 0.5mm
-                self.machine.move_z_absolute(current_z, 600)
-                self.machine.wait_until_idle()
 
             if not found:
                 self.machine.logger(f"❌ 粗探失败：已达 Z={end_z:.1f}mm 仍未触发！")
@@ -308,16 +313,19 @@ class AutoToolSetWorker(QThread):
                 hit = False
                 
                 while curr_z > limit_z:
+                    # 先移动
+                    curr_z -= 0.1
+                    self.machine.move_z_absolute(curr_z, 300) # 慢速 F300
+                    self.machine.wait_until_idle()
+                    time.sleep(0.05)  # 等待信号稳定
+                    
+                    # 再检测
                     status = self.machine.query_probe_status()
                     if status == 'triggered':
                         hit = True
                         results.append(curr_z)
                         self.machine.logger(f"✅ 第 {i+1} 次结果: {curr_z:.3f}")
                         break
-                    
-                    curr_z -= 0.1
-                    self.machine.move_z_absolute(curr_z, 300) # 慢速 F300
-                    self.machine.wait_until_idle()
                 
                 if not hit:
                     self.finished_signal.emit(False, 0.0, f"精探第 {i+1} 次失败")
@@ -863,6 +871,7 @@ class MainWindow(QWidget):
         # ====== ✅ 新增：视觉最佳识别高度 ======
         self.vision_optimal_z = 164.0  # 用户反馈Z=164时Halcon识别最佳
         self.vision_btn_last_click_time = 0  # 用于双击检测
+        self.vision_btn_is_double_click = False  # 用于标记是否为双击
         # =======================================
         
         # 对刀基准 (上次对刀时的 Z 坐标) - 全局硬件配置
@@ -2159,17 +2168,18 @@ class MainWindow(QWidget):
             # 双击：打开设置对话框
             self.on_set_vision_height()
             self.vision_btn_last_click_time = 0  # 重置，避免三击误触
+            self.vision_btn_is_double_click = True  # 标记为双击
         else:
             # 单击：延迟执行，等待可能的双击
-            QTimer.singleShot(300, self.execute_goto_vision_height)
+            self.vision_btn_is_double_click = False  # 标记为单击
+            QTimer.singleShot(500, self.execute_goto_vision_height)  # 延迟需要大于双击检测时间
             self.vision_btn_last_click_time = current_time
 
     def execute_goto_vision_height(self):
         """执行跳转到视觉高度（延迟调用，避免双击时执行）"""
-        import time
-        current_time = time.time()
-        if current_time - self.vision_btn_last_click_time < 0.4:
-            return  # 如果是双击的一部分，不执行
+        # 检查是否是双击的一部分
+        if getattr(self, 'vision_btn_is_double_click', False):
+            return  # 如果是双击，不执行移动
         
         target_z = self.vision_optimal_z
         self.log(f"🎯 正在移动到视觉最佳高度 Z={target_z}...")

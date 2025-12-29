@@ -54,6 +54,31 @@ class ValveControlDialog(QDialog):
     def init_ui(self):
         main_layout = QVBoxLayout()
         self.tabs = QTabWidget()
+        
+        # ✅ 设置标签页样式 - 修复白色文字在白色背景上看不见的问题
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #444;
+                background: #2D3748;
+            }
+            QTabBar::tab {
+                background: #4A5568;
+                color: white;
+                padding: 10px 20px;
+                margin-right: 2px;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                font-weight: bold;
+            }
+            QTabBar::tab:selected {
+                background: #2D3748;
+                color: #10B981;
+            }
+            QTabBar::tab:hover {
+                background: #374151;
+            }
+        """)
+        
         # Tab 1: 气动
         self.tabs.addTab(self.init_pneumatic_tab(), "气动/电磁阀")
         # Tab 2: 螺杆/步进电机

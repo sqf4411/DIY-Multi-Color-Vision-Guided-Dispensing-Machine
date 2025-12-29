@@ -1,21 +1,22 @@
 {
   "vision_offset_x": 0.0,
   "vision_offset_y": 0.0,
-  "exposure": 4.7,
+  "exposure": 3.9,
   "gain": 5.6,
   "gamma": 1.6,
   "feedrate_xy": 1000,
   "feedrate_z": 300,
   "accel": 452.0,
   "jog_step_mm": 1.0,
-  "safe_z_cavity": 67.0,
-  "safe_z_product": 78.0,
-  "work_z": 64.0,
+  "safe_z_cavity": 59.0,
+  "safe_z_product": 70.0,
+  "work_z": 57.5,
   "model_row": 0,
   "model_col": 0,
   "product_name": "7777",
   "model_file": "7777.shm",
   "valve_prefeed_time": 0.1,
   "valve_a_dispense_time": 0.77,
-  "valve_b_dispense_time": 2.0
+  "valve_b_dispense_time": 2.0,
+  "line_speed_xy": 800
 }

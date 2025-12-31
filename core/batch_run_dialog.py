@@ -173,8 +173,9 @@ class BatchWorker(QThread):
                             self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})")
                             vision_cache[cache_key] = None # Mark as processed but empty
                         else:
-                            # Store in cache
-                            vision_cache[cache_key] = (paths_groups, target_x, target_y)
+                            # Store in cache (including product name for mixed mode)
+                            current_product = getattr(self.mw.halcon_product_manager, 'current_product', None)
+                            vision_cache[cache_key] = (paths_groups, target_x, target_y, current_product)
                             
 
                         # [NEW] Mixed Mode Logic: Detect Product First
@@ -209,8 +210,9 @@ class BatchWorker(QThread):
                             self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})")
                             vision_cache[cache_key] = None # Mark as processed but empty
                         else:
-                            # Store in cache
-                            vision_cache[cache_key] = (paths_groups, target_x, target_y)
+                            # Store in cache (including product name for mixed mode)
+                            current_product = getattr(self.mw.halcon_product_manager, 'current_product', None)
+                            vision_cache[cache_key] = (paths_groups, target_x, target_y, current_product)
                             
                         # Lift after vision
                         self._safe_lift_z()
@@ -222,28 +224,41 @@ class BatchWorker(QThread):
                             # Previous vision failed or empty
                             ops_finished += 1
                             continue
-                            
-                        paths_groups, cached_x, cached_y = cached_data
-                        # Move directly to dispense area (XY)
-                        # Note: dispense gcode uses relative offsets from `current_x/y` passed to it.
-                        # We must simulate being at `target_x, target_y` OR pass them correctly.
-                        # `generate_dispense_gcode` uses `current_x` inputs as base.
-                        # So we just need to be physically safe (Z up) to move XY.
-                        # We don't necessarily need to move to `target_x` physically unless generated G-code is relative?
-                        # Generated G-code is ABSOLUTE.
-                        # `generate_dispense_gcode` calculates `target_mach_x = current_x + dx ...`
-                        # So we don't need to physically be at target_x before generating.
-                        # BUT we might want to move near there to minimize travel time inside G-code execution?
-                        # Actually G-code handles the travel.
-                        pass
+                        
+                        # Unpack cache (now includes product name)
+                        if len(cached_data) == 4:
+                            paths_groups, cached_x, cached_y, cached_product = cached_data
+                        else:
+                            # Backward compatibility (old cache format)
+                            paths_groups, cached_x, cached_y = cached_data
+                            cached_product = None
                         
                         # [FIX] Update current_x/y to cached coordinates
-                        # generate_dispense_gcode uses these as the base specific to this mold position.
                         current_x = cached_x
                         current_y = cached_y
+                        
+                        # [NEW] In Mixed Mode, reload product and update path visualization
+                        is_mixed = self.cfg.get('mixed_mode', False)
+                        if is_mixed and cached_product:
+                            # Check if we need to switch products
+                            current_loaded = getattr(self.mw.halcon_product_manager, 'current_product', None)
+                            if current_loaded != cached_product:
+                                # Load cached product
+                                ok, msg = self.mw.halcon_product_manager.load_product(cached_product)
+                                if ok:
+                                    self.mw._compute_halcon_template()
+                                    
+                            # Always update path visualization when returning to a position
+                            # Use cached paths_groups for visualization
+                            if paths_groups:
+                                self.path_update_signal.emit(paths_groups)
 
                     if not paths_groups and has_cache:
-                         paths_groups, _, _ = vision_cache[cache_key] # Retrieve if valid
+                         cached_data = vision_cache[cache_key]
+                         if cached_data:
+                             # Handle both old (3-tuple) and new (4-tuple) cache formats
+                             if len(cached_data) >= 3:
+                                 paths_groups = cached_data[0]  # paths_groups is always first element
                     
                     if not paths_groups:
                         ops_finished += 1
@@ -942,6 +957,10 @@ class BatchRunDialog(QDialog):
         self.mw.show_center_crosshair = False
         self.mw.btn_show_crosshair.setText("显示中心")
         self.mw.log("⏹ 批量运行结束：关闭中心十字")
+        
+        # [NEW] 清除路径显示（批量运行结束，已回到原点）
+        self.mw.dry_run_paths_to_draw = []
+        self.mw.render_current_frame()
         if success:
             QMessageBox.information(self, "完成", msg)
         else:

@@ -28,8 +28,8 @@
     "batch_start_y": 93.62,
     "batch_start_z": 166.0,
     "batch_rows": 1,
-    "batch_cols": 2,
-    "batch_space_x": 71.0,
+    "batch_cols": 3,
+    "batch_space_x": 72.0,
     "batch_space_y": 0.0,
     "vision_optimal_z": 164.0,
     "line_speed_xy": 800

@@ -4700,8 +4700,38 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, "无图像", "请先启动相机！")
             return
             
+        # [NEW] Visualization: Show paths on camera (like Dry Run)
+        try:
+            # 1. Detect paths on current frame
+            img_disp = self.last_frame.copy()
+            img_disp = cv2.flip(img_disp, -1)
+            
+            # Use same detection logic as Dry Run
+            if len(img_disp.shape) == 3:
+                 gray = cv2.cvtColor(img_disp, cv2.COLOR_BGR2GRAY)
+            else:
+                 gray = img_disp
+
+            paths_px, _ = self.get_vision_result(gray)
+            
+            # 2. Set paths to draw overlaid
+            if paths_px:
+                self.dry_run_paths_to_draw = paths_px
+                # Also show crosshair for better alignment
+                self.show_crosshair = True
+                self.render_current_frame()
+                
+        except Exception as e:
+            # Non-blocking error (just no preview)
+            print(f"[WARN] Batch preview failed: {e}")
+
         dlg = BatchRunDialog(self)
         dlg.exec_()
+        
+        # 3. Cleanup after dialog closes
+        self.dry_run_paths_to_draw = []
+        self.show_crosshair = False
+        self.render_current_frame()
 
     def on_test_valve(self):
         """

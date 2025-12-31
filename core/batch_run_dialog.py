@@ -24,6 +24,7 @@ class BatchWorker(QThread):
     gcode_signal = pyqtSignal(str)          # 新增：发送生成的完整 G-code
     current_line_signal = pyqtSignal(str)   # 新增：发送当前执行的 G-code 行
     current_index_signal = pyqtSignal(int)  # 新增：发送当前执行的 G-code 行号 (用于准确高亮)
+    path_update_signal = pyqtSignal(list)   # 新增：发送当前产品的路径数据用于实时显示
 
     def __init__(self, main_window, grid_config, mode='real'):
         super().__init__()
@@ -190,6 +191,12 @@ class BatchWorker(QThread):
                                 if ok:
                                     # 重要：更新主界面模板缓存，否则后续识别会用旧模板
                                     self.mw._compute_halcon_template()
+                                    
+                                    # [NEW] 发送路径更新信号，动态显示当前产品的路径
+                                    # 重新识别获取当前产品的路径
+                                    paths_px_preview, _ = self.mw.get_vision_result(gray_img)
+                                    if paths_px_preview:
+                                        self.path_update_signal.emit(paths_px_preview)
                                 else:
                                     self.log_signal.emit(f"❌ 加载产品失败: {msg}")
                             else:
@@ -859,6 +866,7 @@ class BatchRunDialog(QDialog):
         self.worker.finished_signal.connect(self.on_finished)
         self.worker.gcode_signal.connect(self.update_gcode_display)
         self.worker.current_index_signal.connect(self.highlight_current_line)
+        self.worker.path_update_signal.connect(self.mw.on_batch_path_update)  # [NEW] Dynamic path visualization
         
         # 关闭实时识别 (防止卡顿和Z轴变化导致的误识别)
         self.mw.live_detect = False

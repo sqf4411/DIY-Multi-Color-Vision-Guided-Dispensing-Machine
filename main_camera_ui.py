@@ -4588,6 +4588,15 @@ class MainWindow(QWidget):
             self.log("❌ 空跑异常中止。")
             return
 
+    def on_batch_path_update(self, paths_px):
+        """
+        批量运行期间更新路径显示
+        当识别到新产品时，动态更新画面上的路径预览
+        """
+        if paths_px:
+            self.dry_run_paths_to_draw = paths_px
+            self.render_current_frame()
+
 
     def on_real_run(self):
         """

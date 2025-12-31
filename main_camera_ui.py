@@ -632,6 +632,7 @@ class MainWindow(QWidget):
         self.halcon_manager = HalconManager()
         self.product_manager = ProductManager()  # 产品管理器
         self.halcon_product_manager = HalconProductManager(self.halcon_manager, self.product_manager)  # Halcon产品逻辑
+        self.halcon_product_manager.mw = self # [FIX] Inject MainWindow reference for UI updates
         self.current_product = None  # 当前加载的产品名称
         self.camera_manager.get_frame_signal().connect(self.update_image) if self.camera_manager.get_frame_signal() else None
         # Load Config
@@ -2184,11 +2185,9 @@ class MainWindow(QWidget):
         target_z = self.vision_optimal_z
         self.log(f"🎯 正在移动到视觉最佳高度 Z={target_z}...")
         try:
+            # 发送指令即可，不要等待空闲，否则界面会卡死
             self.machine.move_to(z=target_z, speed=self.feedrate_z)
-            self.machine.wait_until_idle()
-            x, y, z = self.machine.get_position()
-            self.update_xyz_display(x, y, z)
-            self.log(f"✅ 已到达视觉位 Z={z:.2f}")
+            self.log(f"🚀 移动指令已发送: Z={target_z}")
         except Exception as e:
             self.log(f"❌ 移动失败: {e}")
 
@@ -2209,7 +2208,7 @@ class MainWindow(QWidget):
         if ok:
             self.vision_optimal_z = new_value
             # 更新按钮显示
-            self.btn_vision_height.setText(f"cmera{int(new_value)}")
+            self.btn_vision_height.setText(f"camera{int(new_value)}")
             self.log(f"✅ 视觉最佳高度已设置为 Z={new_value:.2f}")
             # 立即保存到配置
             self.save_app_settings()
@@ -4198,7 +4197,7 @@ class MainWindow(QWidget):
 
             # 假设软限位是 0 ~ 300 (根据实际机器调整)
             LIMIT_MIN = 0.0
-            LIMIT_MAX = 300.0
+            LIMIT_MAX = 460.0
 
             if not (LIMIT_MIN <= target_x <= LIMIT_MAX and LIMIT_MIN <= target_y <= LIMIT_MAX):
                 self.log(f"⛔ 目标超程！({target_x:.2f}, {target_y:.2f}) 超出范围 [{LIMIT_MIN}, {LIMIT_MAX}]，已取消移动。")

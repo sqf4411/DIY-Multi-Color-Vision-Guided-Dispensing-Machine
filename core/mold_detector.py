@@ -371,7 +371,7 @@ def detect_mold_and_cells(gray: np.ndarray):
                             cv2.line(color_img, tuple(pts[i]), tuple(pts[i + 1]), (0, 255, 0), 5, cv2.LINE_AA)
 
             # Draw Dots (Radius 10, Green)
-            if _PATH_DOTS is not None:
+            if _PATH_DOTS is not None and len(_PATH_DOTS) > 0:
                 pts_gold = _PATH_DOTS + offset
                 pts_w = pts_gold.reshape(-1, 1, 2)
                 res_o = cv2.perspectiveTransform(pts_w, Minv_cur)
@@ -471,7 +471,7 @@ def get_calculated_paths(gray: np.ndarray):
                     product_paths.append(res_o.reshape(-1, 2))  # (N, 2)
 
             # --- C. Generate Dot Paths ---
-            if _PATH_DOTS is not None:
+            if _PATH_DOTS is not None and len(_PATH_DOTS) > 0:
                 pts_gold = _PATH_DOTS + offset
                 pts_w = pts_gold.reshape(-1, 1, 2)
                 res_o = cv2.perspectiveTransform(pts_w, Minv_cur)
@@ -584,7 +584,7 @@ def get_paths_and_image(gray: np.ndarray):
                     pts = res_o.reshape(-1, 2).astype(np.int32)
                     cv2.polylines(color_img, [pts], False, (0, 255, 0), 2, cv2.LINE_AA)
 
-            if _PATH_DOTS is not None:
+            if _PATH_DOTS is not None and len(_PATH_DOTS) > 0:
                 pts_gold = _PATH_DOTS + offset
                 pts_w = pts_gold.reshape(-1, 1, 2)
                 res_o = cv2.perspectiveTransform(pts_w, Minv_cur)

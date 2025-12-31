@@ -58,18 +58,26 @@ class BatchWorker(QThread):
         
         # 0. Analyze Colors to Process
         active_colors = set()
-        if not getattr(self.mw, 'halcon_path_template', None):
-             self.mw.log("[Batch] Computing Halcon template to determine colors...")
-             try:
-                 self.mw._compute_halcon_template()
-             except Exception as e:
-                 self.mw.log(f"[Batch] Warning: Template computation failed ({e}). Defaulting to Color 0.")
+        is_mixed = self.cfg.get('mixed_mode', False)
+        
+        if is_mixed:
+            # Mixed Mode: Assume all colors (0-3) available
+            active_colors = {0, 1, 2, 3}
+            self.mw.log(f"[Batch] Mixed Mode Enabled: Using all color channels [0, 1, 2, 3]")
+        else:
+            # Standard Mode: Check current loaded template
+            if not getattr(self.mw, 'halcon_path_template', None):
+                 self.mw.log("[Batch] Computing Halcon template to determine colors...")
+                 try:
+                     self.mw._compute_halcon_template()
+                 except Exception as e:
+                     self.mw.log(f"[Batch] Warning: Template computation failed ({e}). Defaulting to Color 0.")
 
-        template_segments = getattr(self.mw, 'halcon_path_template', [])
-        if template_segments:
-             for seg in template_segments:
-                 if hasattr(seg, 'color'): 
-                     active_colors.add(seg.color)
+            template_segments = getattr(self.mw, 'halcon_path_template', [])
+            if template_segments:
+                 for seg in template_segments:
+                     if hasattr(seg, 'color'): 
+                         active_colors.add(seg.color)
         
         sorted_colors = sorted(list(active_colors)) if active_colors else [0]
         if not sorted_colors: sorted_colors = [0]
@@ -135,6 +143,10 @@ class BatchWorker(QThread):
                         # --- First Pass (Vision) ---
                         self.log_signal.emit(f"📍 [{ops_finished + 1}/{total_ops}] (R{r}, C{c}) 首次定位 & 识别...")
                         
+                        # [FIX] Set current_x/y for this iteration
+                        current_x = target_x
+                        current_y = target_y
+                        
                         # Move Camera
                         self.mw.machine.move_to(x=target_x, y=target_y, speed=self.mw.feedrate_xy)
                         
@@ -154,6 +166,36 @@ class BatchWorker(QThread):
                         if len(img.shape) == 3: gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                         else: gray_img = img
 
+                        paths_groups, _ = self.mw.get_vision_result(gray_img)
+                        
+                        if not paths_groups:
+                            self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})")
+                            vision_cache[cache_key] = None # Mark as processed but empty
+                        else:
+                            # Store in cache
+                            vision_cache[cache_key] = (paths_groups, target_x, target_y)
+                            
+
+                        # [NEW] Mixed Mode Logic: Detect Product First
+                        is_mixed = self.cfg.get('mixed_mode', False)
+                        if is_mixed:
+                            self.log_signal.emit(f"🔍 [混合模式] 正在识别最佳产品...")
+                            all_prods = self.mw.product_manager.list_products()
+                            best_prod, score = self.mw.halcon_product_manager.find_best_match_product(gray_img, all_prods)
+                            
+                            if best_prod and score > 0.4: # Lower threshold to 0.4
+                                self.log_signal.emit(f"✅ (R{r}C{c}) 识别到产品 [{best_prod}] (Score: {score:.2f})")
+                                # 加载该产品
+                                ok, msg = self.mw.halcon_product_manager.load_product(best_prod)
+                                if ok:
+                                    # 重要：更新主界面模板缓存，否则后续识别会用旧模板
+                                    self.mw._compute_halcon_template()
+                                else:
+                                    self.log_signal.emit(f"❌ 加载产品失败: {msg}")
+                            else:
+                                self.log_signal.emit(f"⚠️ (R{r}C{c}) 未能识别已知产品 (Best: {best_prod}, Score: {score:.2f})")
+                                # 可能会继续用当前产品尝试，或者跳过
+                        
                         paths_groups, _ = self.mw.get_vision_result(gray_img)
                         
                         if not paths_groups:
@@ -187,6 +229,11 @@ class BatchWorker(QThread):
                         # BUT we might want to move near there to minimize travel time inside G-code execution?
                         # Actually G-code handles the travel.
                         pass
+                        
+                        # [FIX] Update current_x/y to cached coordinates
+                        # generate_dispense_gcode uses these as the base specific to this mold position.
+                        current_x = cached_x
+                        current_y = cached_y
 
                     if not paths_groups and has_cache:
                          paths_groups, _, _ = vision_cache[cache_key] # Retrieve if valid
@@ -230,7 +277,8 @@ class BatchWorker(QThread):
 
                     try:
                         # Generate G-code ONLY for this color
-                        gcode_lines = self.generate_dispense_gcode(filtered_groups, target_x, target_y, target_color=color_idx)
+                        # [FIX] Use current_x / current_y (which are updated from cache or current target)
+                        gcode_lines = self.generate_dispense_gcode(filtered_groups, current_x, current_y, target_color=color_idx)
                         
                         if gcode_lines:
                              # Send G-code, Execute...
@@ -639,6 +687,13 @@ class BatchRunDialog(QDialog):
         self.chk_simulate.setStyleSheet("color: #F59E0B; font-weight: bold;")
         layout.addWidget(self.chk_simulate)
 
+        # --- 3.2 混合模式 (New) ---
+        self.chk_mixed_mode = QCheckBox("启用混合模式 (Mixed Mode - Detect All Products)")
+        self.chk_mixed_mode.setChecked(False)
+        self.chk_mixed_mode.setStyleSheet("color: #3B82F6; font-weight: bold;")
+        self.chk_mixed_mode.setToolTip("开启后，每个位置都会尝试匹配所有已训练的产品，\n并自动加载最佳匹配的产品路径。")
+        layout.addWidget(self.chk_mixed_mode)
+
         # [NEW] Color Supply Delay
         h_color_delay = QHBoxLayout()
         h_color_delay.addWidget(QLabel("供料延时 (ms):"))
@@ -750,6 +805,7 @@ class BatchRunDialog(QDialog):
             'nozzle_work_z': self.spn_nozzle_work.value(),
             # [NEW] Simulation
             'disable_valves': self.chk_simulate.isChecked(),
+            'mixed_mode': self.chk_mixed_mode.isChecked(),
             'color_delay': self.spn_color_delay.value(),
             'line_speed_xy': self.spn_line_speed.value()
         }

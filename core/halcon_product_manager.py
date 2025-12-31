@@ -255,19 +255,27 @@ class HalconProductManager:
             print(f"[HalconProductManager]   阀B时间: {valve_params['parameters']['valve_b_dispense_time']}")
             print(f"[HalconProductManager]   画线速度: {valve_params['parameters']['line_speed_xy']} mm/min")
             
-            valve_params_dir = Path("config")
-            valve_params_dir.mkdir(exist_ok=True)
-            valve_params_file = valve_params_dir / "valve_dispense_params.json"
+            # [CRITICAL Fix for Mixed Mode]
+            # Ensure MainWindow state is consistent with the loaded product.
+            # BatchWorker calls self.mw._compute_halcon_template() which relies on:
+            #   self.mw.current_segments (Priority 1)
+            #   self.mw.polys / self.mw.dots (Priority 2)
+            # If we don't update them here, MainWindow keeps the OLD product's paths (e.g. 7777),
+            # causing 'path leakage'.
             
-            print(f"[HalconProductManager] 写入参数文件: {valve_params_file.absolute()}")
-            
-            try:
-                with open(valve_params_file, 'w', encoding='utf-8') as f:
-                    json.dump(valve_params, f, indent=2, ensure_ascii=False)
-                print(f"[HalconProductManager] ✅ 已应用产品'{product_name}'的阀门参数到全局配置")
-            except Exception as e:
-                print(f"[HalconProductManager] ⚠️ 保存阀门参数失败: {e}")
-            
+            if hasattr(self, 'mw') and self.mw:
+                 # Update Priority 1: Multicolor Segments
+                 if self.current_segments:
+                     self.mw.current_segments = self.current_segments
+                     
+                 # Update Priority 2: Legacy Lists (converted in Step 3 above)
+                 self.mw.polys = self.current_paths.get('polys', [])
+                 self.mw.dots = self.current_paths.get('dots', [])
+                 
+                 # Optional: Clear cached template to force re-computation
+                 if hasattr(self.mw, 'halcon_path_template'):
+                     self.mw.halcon_path_template = None
+
             # 5. 设置当前产品
             self.current_product = product_name
             
@@ -310,6 +318,54 @@ class HalconProductManager:
             
         except Exception as e:
             return False, f"保存产品失败: {e}"
+
+    def find_best_match_product(self, image_np: np.ndarray, candidate_products: List[str]) -> Tuple[Optional[str], float]:
+        """
+        在给定的候选产品列表中寻找最佳匹配。
+        返回 (best_product_name, best_score)。如果没有匹配或分数过低，返回 (None, 0.0)。
+        """
+        best_score = -1.0
+        best_product = None
+        
+        # 备份当前模型路径，以便恢复
+        original_model = self.halcon.current_model_path
+        
+        try:
+            for prod in candidate_products:
+                # 获取路径
+                prod_dir = self.products.get_product_path(prod)
+                model_file = f'{prod}.shm'
+                # 尝试读取 config 确认文件名 (可选)
+                config = self.products.load_product_config(prod)
+                if config: 
+                    model_file = config.get('model_file', model_file)
+                
+                model_path = os.path.join(prod_dir, model_file)
+                if not os.path.exists(model_path):
+                    continue
+                    
+                # 加载模型
+                if not self.halcon.set_model_path(model_path):
+                    continue
+                    
+                # 运行检测
+                result = self.halcon.process_image(image_np)
+                if result and result.get('success') and result.get('matches'):
+                    # 取最高分
+                    max_score = max([m['score'] for m in result['matches']])
+                    print(f"[BestMatch] Candidate '{prod}' Score: {max_score:.2f}")
+                    if max_score > best_score:
+                        best_score = max_score
+                        best_product = prod
+                else:
+                    print(f"[BestMatch] Candidate '{prod}' Score: 0.00 (No Match)")
+                        
+            return best_product, best_score
+            
+        finally:
+            # 恢复之前的模型
+            if original_model and os.path.exists(original_model):
+                self.halcon.set_model_path(original_model)
     
     # ========== 路径管理 ==========
     

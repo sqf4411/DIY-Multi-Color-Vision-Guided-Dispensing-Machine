@@ -1,0 +1,22 @@
+{
+  "vision_offset_x": 0.0,
+  "vision_offset_y": 0.0,
+  "exposure": 4.4,
+  "gain": 5.3,
+  "gamma": 4.0,
+  "feedrate_xy": 1000,
+  "feedrate_z": 300,
+  "accel": 452.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 59.0,
+  "safe_z_product": 70.0,
+  "work_z": 57.5,
+  "model_row": 650.5,
+  "model_col": 1187.0,
+  "product_name": "8888",
+  "model_file": "8888.shm",
+  "valve_prefeed_time": 0.1,
+  "valve_a_dispense_time": 0.77,
+  "valve_b_dispense_time": 2.0,
+  "line_speed_xy": 800
+}

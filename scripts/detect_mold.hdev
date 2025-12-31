@@ -15,6 +15,9 @@
   <io>
     <par name="Image" base_type="iconic" dimension="0"/>
   </io>
+  <ic>
+    <par name="ModelPath" base_type="ctrl" dimension="0"/>
+  </ic>
   <oc>
     <par name="ResultRow" base_type="ctrl" dimension="0"/>
     <par name="ResultColumn" base_type="ctrl" dimension="0"/>
@@ -29,8 +32,8 @@
 <l>ResultAngle := []</l>
 <l>ResultScore := []</l>
 <c></c>
-<c>* Define Model File Path (Absolute)</c>
-<l>ModelFile := 'H:/CodeForGithub/DIY-Multi-Color-Vision-Guided-Dispensing-Machine/config/mold_model.shm'</l>
+<c>* Use Model File Path from Input Parameter (Dynamic per Product)</c>
+<l>ModelFile := ModelPath</l>
 <c></c>
 <c>* Check if model exists</c>
 <l>file_exists (ModelFile, FileExists)</l>
@@ -65,10 +68,10 @@
 <l>endif</l>
 <c></c>
 <c>* Find Scaled Shape Model (Robust to Scale/Height variations)</c>
-<c>* MinScore=0.2, NumMatches=0 (All), MaxOverlap=0.5</c>
+<c>* MinScore=0.1 (降低阈值以检测暗区产品), NumMatches=0 (All), MaxOverlap=0.5</c>
 <c>* Scale range: 0.9 to 1.1 (Allows +/- 10% height variation)</c>
-<c>* Greediness: 0.5 (Lower = Slower but more robust to blur/noise)</c>
-<l>find_scaled_shape_model (Image, ModelID, rad(0), rad(360), 0.9, 1.1, 0.2, 0, 0.5, 'least_squares', 0, 0.5, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
+<c>* Greediness: 0.8 (更宽容，更快)</c>
+<l>find_scaled_shape_model (Image, ModelID, rad(0), rad(360), 0.9, 1.1, 0.1, 0, 0.5, 'least_squares', 0, 0.8, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
 <c></c>
 <c>* Cleanup (Halcon handles memory usually, strictly we should clear)</c>
 <l>clear_shape_model (ModelID)</l>

@@ -5359,35 +5359,35 @@ class MainWindow(QWidget):
             # Minv: Warped (dst) -> Raw (rect)
             Minv = cv2.getPerspectiveTransform(dst_pts, rect_pts)
             
-            # D. Project and Offset
-            # Alternative: Run Match on this specific image to get ACTUAL frame of reference
-            # This is more robust than parsing ROI, as it accounts for specific matching logic.
+            # D. Use saved model origin instead of re-matching!
+            # Re-matching may find a different product than the training sample
             roi_center = None
-            if self.halcon_manager and self.halcon_manager.is_initialized:
-                 print("[Halcon] Running match on reference image to find Origin...")
-                 res = self.halcon_manager.process_image(gray_gold)
-                 if res and res.get('success') and res.get('matches'):
-                     # Use the top match as reference
-                     top_match = res['matches'][0]
-                     roi_center = np.array([top_match['col'], top_match['row']])
-                     print(f"[Halcon] Found Ref Origin via Match: {roi_center}")
-                 else:
-                     print("[Halcon] Match failed on reference image. Fallback to ROI.")
             
-            # Fallback parsing...
-            # (Omitting complex script parsing for brevity if not strictly needed, but keeping logic if it was there)
-            # Actually, let's keep the fallback logic or default to hardcoded if match fails, 
-            # to be safe and consistent with previous code.
+            # 优先使用保存的model_row/col（ROI训练后的正确origin）
+            if hasattr(self, 'model_ref_row') and hasattr(self, 'model_ref_col'):
+                if self.model_ref_row != 0 or self.model_ref_col != 0:
+                    roi_center = np.array([self.model_ref_col, self.model_ref_row])  # (col, row) = (X, Y)
+                    print(f"[Halcon] ✅ Using saved model origin: col={self.model_ref_col:.2f}, row={self.model_ref_row:.2f}")
             
+            # 如果没有保存的origin，才尝试匹配（兼容旧数据）
             if roi_center is None:
-                # Try simple Hardcoded fallback first as per original code's "WARN" block
+                if self.halcon_manager and self.halcon_manager.is_initialized:
+                     print("[Halcon] ⚠️ No saved origin, running match on reference.png...")
+                     res = self.halcon_manager.process_image(gray_gold)
+                     if res and res.get('success') and res.get('matches'):
+                         top_match = res['matches'][0]
+                         roi_center = np.array([top_match['col'], top_match['row']])
+                         print(f"[Halcon] Found Ref Origin via Match: {roi_center}")
+                     else:
+                         print("[Halcon] Match failed on reference image.")
+            
+            # 最后fallback到硬编码值
+            if roi_center is None:
                 print("[Halcon] WARN: Using fallback HARDCODED center (1113, 651).")
                 roi_center = np.array([1113.3245, 651.6765]) 
             
             self.halcon_ref_center = roi_center
             ref_center = self.halcon_ref_center
-            
-            self.halcon_ref_center = roi_center
             ref_center = self.halcon_ref_center
             
             final_template = []
@@ -5410,7 +5410,9 @@ class MainWindow(QWidget):
                     pts_raw = cv2.perspectiveTransform(pts_w, Minv).reshape(-1, 2)
                     
                     # Subtract ROI Center -> Relative
+                    print(f"[DEBUG Path Edit] Converting path to relative: ref_center={ref_center}, sample_point_before={pts_raw[0] if len(pts_raw)>0 else 'N/A'}")
                     pts_rel = pts_raw - ref_center
+                    print(f"[DEBUG Path Edit] Sample_point_after={pts_rel[0] if len(pts_rel)>0 else 'N/A'}")
                     
                     # Create NEW Segment with transformed points
                     # (Keep color, dwell, type)

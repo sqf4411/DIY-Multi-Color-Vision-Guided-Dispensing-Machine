@@ -130,11 +130,16 @@ class HalconManager:
             if self.current_model_path and os.path.exists(self.current_model_path):
                 # 传入绝对路径
                 abs_model_path = os.path.abspath(self.current_model_path)
+                print(f"[HalconManager] 🔍 使用模型: {abs_model_path}")  # 调试日志
                 try:
                     proc_call.set_input_control_param_by_name("ModelPath", abs_model_path)
-                except Exception:
+                    print(f"[HalconManager] ✅ ModelPath参数传递成功")  # 调试日志
+                except Exception as e:
                     # 脚本可能没定义这个参数，忽略警告（兼容旧脚本）
+                    print(f"[HalconManager] ⚠️ ModelPath参数传递失败: {e}")  # 调试日志
                     pass
+            else:
+                print(f"[HalconManager] ⚠️ 未设置模型路径或文件不存在: {self.current_model_path}")  # 调试日志
             
             # 执行
             proc_call.execute()
@@ -182,11 +187,12 @@ class HalconManager:
             print(f"[HalconManager] 执行 HDev 过程失败: {e}")
             return None
 
-    def train_model(self, image_path, output_model_path):
+    def train_model(self, image_path, output_model_path, roi=None):
         """
         训练形状模板并保存 (.shm)
         :param image_path: 训练图片路径 (PNG/JPG)
         :param output_model_path: 保存路径 (.shm)
+        :param roi: (row1, col1, row2, col2) in Halcon format, or None for full image
         """
         global ha
         if ha is None:
@@ -194,62 +200,47 @@ class HalconManager:
 
         try:
             print(f"[HalconManager] 开始训练模型: {image_path}")
+            if roi:
+                print(f"[HalconManager] 使用ROI: {roi}")
             
             # 1. Read Image
             image = ha.read_image(image_path)
             
-            # 2. Create Shape Model (Auto params)
-            # create_shape_model(Image : : NumLevels, AngleStart, AngleExtent, AngleStep, Optimization, Metric, Contrast, MinContrast : ModelID)
-            # Python API order usually matches.
-            # Using 'auto' for generic usage.
-            # Angle: 0 to 360 (0 to 6.28 rad)
+            # 2. Apply ROI if provided
+            if roi:
+                row1, col1, row2, col2 = roi
+                # 创建ROI区域
+                model_region = ha.gen_rectangle1(row1, col1, row2, col2)
+                # 裁剪图像到ROI
+                template_image = ha.reduce_domain(image, model_region)
+                print(f"[HalconManager] ROI区域创建成功: Row[{row1}-{row2}], Col[{col1}-{col2}]")
+            else:
+                template_image = image
+            
+            # 3. Create Shape Model
+            # 调整参数以提高对光照差异的鲁棒性
             model_id = ha.create_shape_model(
-                image, 
-                'auto',             # NumLevels
-                0.0,                # AngleStart
-                6.29,               # AngleExtent (2*Pi approx, covers 360)
-                'auto',             # AngleStep
-                'auto',             # Optimization
-                'use_polarity',     # Metric
-                'auto',             # Contrast
-                'auto'              # MinContrast
+                template_image, 
+                'auto',                      # NumLevels
+                0.0,                         # AngleStart
+                6.29,                        # AngleExtent (360°)
+                'auto',                      # AngleStep
+                'auto',                      # Optimization
+                'ignore_global_polarity',    # Metric - 忽略全局明暗差异！
+                'auto',                      # Contrast
+                20                           # MinContrast - 降低最小对比度
             )
             
-            # 3. Get Model Origin (The reference point for matches)
-            # get_shape_model_origin(ModelID : : : Row, Column)
+            # 4. Get Model Origin
             origin_row, origin_col = ha.get_shape_model_origin(model_id)
             
-            # The origin returned is relative to the "center of gravity" usually?
-            # Actually, create_shape_model by default sets the origin to the center of gravity of the ROI.
-            # But we need to know where that is in the ORIGINAL image to align our paths.
-            # Wait, Halcon matching returns result (Row, Col) which corresponds to where this Origin is found.
-            # So if we have a path defined relative to the Image Center, we need to shift it.
+            # 5. Calculate center of gravity
+            area, row_g, col_g = ha.area_center(template_image)
             
-            # Actually, we need the coordinates of the Origin in the Training Image.
-            # If we trained on the WHOLE image, the origin is usually its center of gravity.
-            # But Halcon documentation says:
-            # "The point of reference is the center of gravity of the region of the image."
-            # So we need to calculate the center of gravity of the Image domain.
-            
-            # For simplicity, if we assume the user provides a cropped image or full image,
-            # we need to return this "Reference Point" so we can subtract it from our Path Points.
-            
-            # However, `get_shape_model_origin` returns the offset from the region center?
-            # Let's simplify: We need the (Row, Col) in the Image that corresponds to (0,0) in the Model.
-            # By default, Model (0,0) = Center of Gravity of ROI.
-            # So we need the Center of Gravity of the ROI in image coordinates.
-            
-            area, row_g, col_g = ha.area_center(image)
-            # Model Origin (relative to center of gravity)
-            # Actually, create_shape_model sets the origin at (RowG, ColG).
-            # So the match result (Row, Col) will be the position of (RowG, ColG) in the new image.
-            
-            # We return (row_g, col_g) as the "Reference Point" for this model.
-            
-            # 4. Write Model
+            # 6. Write Model
             ha.write_shape_model(model_id, output_model_path)
             
-            # 5. Cleanup
+            # 7. Cleanup
             ha.clear_shape_model(model_id)
             
             print(f"[HalconManager] 模型已保存: {output_model_path}, Origin: ({row_g}, {col_g})")
@@ -258,6 +249,8 @@ class HalconManager:
         except Exception as e:
             msg = f"Training failed: {e}"
             print(f"[HalconManager] {msg}")
+            import traceback
+            traceback.print_exc()
             return False, msg
 
     def _numpy_to_himage(self, image_np):

@@ -42,7 +42,7 @@ class HalconProductManager:
         训练新产品模型
         
         Args:
-            image_path: 训练图像路径
+            image_path: 训练图像路径（captures中的原图）
             product_name: 产品名称
             config_data: 初始配置数据
             
@@ -55,44 +55,99 @@ class HalconProductManager:
             os.makedirs(product_dir, exist_ok=True)
             
             # 2. 保存训练图片（翻转为正向）
-            # 必须翻转，因为路径编辑器使用正向warp图，Halcon必须使用相同方向
             dest_img_path = os.path.join(product_dir, 'reference.png')
             raw_img = cv2.imread(image_path)
-            if raw_img is not None:
-                # 翻转180度，与路径编辑器的warp图方向一致
-                upright_img = cv2.flip(raw_img, -1)
-                cv2.imwrite(dest_img_path, upright_img)
-            else:
+            if raw_img is None:
                 return False, f"无法读取图像: {image_path}"
             
-            # 3. 训练Halcon模型
+            # 翻转180度，与路径编辑器的warp图方向一致
+            upright_img = cv2.flip(raw_img, -1)
+            cv2.imwrite(dest_img_path, upright_img)
+            
+            # 3. 使用OpenCV检测模具外框
+            from core.mold_detector import detect_mold_and_cells
+            
+            print(f"[HalconProductManager] 检测模具边界...")
+            gray = cv2.cvtColor(upright_img, cv2.COLOR_BGR2GRAY)
+            _, big_box, _, _ = detect_mold_and_cells(gray)
+            
+            if big_box is None:
+                print(f"[HalconProductManager] ⚠️ 未检测到模具边界，使用整张图")
+                mold_boundary = None
+            else:
+                # big_box是4个角点 (x,y)
+                x_coords = big_box[:, 0]
+                y_coords = big_box[:, 1]
+                mold_boundary = {
+                    'x': int(x_coords.min()),
+                    'y': int(y_coords.min()),
+                    'width': int(x_coords.max() - x_coords.min()),
+                    'height': int(y_coords.max() - y_coords.min())
+                }
+                print(f"[HalconProductManager] ✅ 检测到模具边界: {mold_boundary}")
+            
+            # 4. 弹出ROI选择对话框（在模具边界内选择）
+            from core.simple_roi_dialog import SimpleROIDialog
+            from PyQt5.QtWidgets import QDialog
+            
+            print(f"[HalconProductManager] 弹出ROI选择对话框（请框选单个产品）...")
+            dlg = SimpleROIDialog(dest_img_path, mold_boundary)
+            if dlg.exec_() == QDialog.Accepted:
+                roi_rect = dlg.get_roi_rect()  # QRect格式
+                if roi_rect is None:
+                    return False, "未选择有效的ROI区域"
+                print(f"[HalconProductManager] ROI选择成功: ({roi_rect.x()}, {roi_rect.y()}, {roi_rect.width()}, {roi_rect.height()})")
+            else:
+                return False, "用户取消ROI选择"
+            
+            # 5. 裁剪ROI区域并保存
+            x, y, w, h = roi_rect.x(), roi_rect.y(), roi_rect.width(), roi_rect.height()
+            roi_image = upright_img[y:y+h, x:x+w]
+            roi_img_path = os.path.join(product_dir, 'roi_template.png')
+            cv2.imwrite(roi_img_path, roi_image)
+            print(f"[HalconProductManager] ✅ ROI图像已保存: {roi_img_path}, 尺寸: {w}x{h}")
+            
+            # 6. 用裁剪后的ROI图像训练模型（不需要roi参数了！）
             model_path = os.path.join(product_dir, f'{product_name}.shm')
-            result = self.halcon.train_model(dest_img_path, model_path)
+            result = self.halcon.train_model(roi_img_path, model_path, roi=None)
             
             # 解析训练结果
             if isinstance(result, dict):
                 success = True
-                origin_row = result.get('origin_row', 0)
-                origin_col = result.get('origin_col', 0)
+                # origin是相对于裁剪图的坐标，需要转换到reference.png坐标
+                origin_row_in_roi = result.get('origin_row', h / 2)
+                origin_col_in_roi = result.get('origin_col', w / 2)
+                
+                # 转换到reference.png的坐标：ROI左上角 + origin在裁剪图中的位置
+                origin_row = y + origin_row_in_roi
+                origin_col = x + origin_col_in_roi
+                
+                print(f"[HalconProductManager] 模型Origin在ROI中: ({origin_row_in_roi:.2f}, {origin_col_in_roi:.2f})")
+                print(f"[HalconProductManager] 模型Origin在reference.png中: ({origin_row:.2f}, {origin_col:.2f})")
+                
             elif isinstance(result, tuple):
                 success, msg = result
-                origin_row, origin_col = 0, 0
+                # 默认使用ROI中心转换到reference.png坐标
+                origin_row, origin_col = y + h/2, x + w/2
                 if not success:
                     return False, msg
             else:
                 success = result
-                origin_row, origin_col = 0, 0
+                origin_row, origin_col = y + h/2, x + w/2
             
             if not success:
                 return False, "模型训练失败"
             
-            # 4. 更新配置
+            # 7. 更新配置（保存ROI信息用于记录）
             config_data['model_file'] = f'{product_name}.shm'
             config_data['model_row'] = origin_row
             config_data['model_col'] = origin_col
             config_data['product_name'] = product_name
+            config_data['roi_in_reference'] = {
+                'x': x, 'y': y, 'width': w, 'height': h
+            }  # 记录ROI在reference.png中的位置
             
-            # 5. 保存配置（路径为空）
+            # 8. 保存配置（路径为空）
             success, msg = self.products.save_product(
                 product_name,
                 config_data=config_data,
@@ -103,16 +158,16 @@ class HalconProductManager:
             if not success:
                 return False, f"保存配置失败: {msg}"
             
-            # 6. 加载新产品
+            # 9. 加载新产品
             self.current_product = product_name
             self.current_paths = {'dots': [], 'polys': []}
             self.model_ref_row = origin_row
             self.model_ref_col = origin_col
             
-            # 7. 加载模型
+            # 10. 加载模型
             self.halcon.set_model_path(model_path)
             
-            return True, f"产品 '{product_name}' 创建成功"
+            return True, f"产品 '{product_name}' 创建成功（使用ROI训练）"
             
         except Exception as e:
             import traceback
@@ -404,8 +459,9 @@ class HalconProductManager:
                 pts = np.array(seg.points, dtype=np.float32)
                 if len(pts) == 0: continue
                 
-                # 2.1 居中（相对于ROI参考点）
-                pts_centered = pts - np.array([ref_col, ref_row])
+                # 保存的路径已经是相对坐标（在路径编辑时相对化了）
+                # 所以这里直接使用，不需要再减origin
+                pts_centered = pts  # 已经相对于origin
                 
                 # 2.2 旋转
                 cos_a = np.cos(angle)

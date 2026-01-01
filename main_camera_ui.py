@@ -224,15 +224,15 @@ class PollingWorker(QThread):
 class AutoToolSetWorker(QThread):
     finished_signal = pyqtSignal(bool, float, str) # success, new_z_base, msg
 
-    def __init__(self, machine_client, safe_z, target_x, target_y, target_z=None, z_base=0.0, safety_margin=2.0):
+    def __init__(self, machine_client, safe_z, target_x, target_y, rough_z=None, z_base=0.0, safety_margin=2.0):
         super().__init__()
         self.machine = machine_client
         self.safe_z = safe_z
         self.target_x = target_x
         self.target_y = target_y
-        self.target_z = target_z if target_z is not None else 63.0  # 默认对刀仪Z高度
-        self.z_base = z_base  # ✨ 新增：上次对刀的Z基准，用于安全检查
-        self.safety_margin = safety_margin  # ✨ 新增：安全余量
+        self.rough_z = rough_z if rough_z is not None else 63.0  # 粗略Z（手动触发的Z坐标）
+        self.z_base = z_base  # 上次对刀的精确Z基准
+        self.safety_margin = safety_margin  # 安全余量
 
     def run(self):
         try:
@@ -245,23 +245,22 @@ class AutoToolSetWorker(QThread):
             self.machine.wait_until_idle()
             time.sleep(0.5)
 
-            # 3. 快速下降到对刀仪上方 (对刀仪Z + 7mm余量)
-            start_z = self.target_z + 7.0
-            self.machine.logger(f"🚀 快速下降到 Z={start_z:.1f} (对刀仪估计在 Z={self.target_z:.1f})...")
+            # 3. 快速下降到对刀仪上方 (对刀仪粗略Z + 7mm余量)
+            start_z = self.rough_z + 7.0
+            self.machine.logger(f"🚀 快速下降到 Z={start_z:.1f} (粗略Z={self.rough_z:.1f})...")
             self.machine.move_z_absolute(start_z, 600)
             self.machine.wait_until_idle()
             time.sleep(0.5)
 
 
-            # 4. 第一阶段：粗探 (target_z + 7 -> target_z - 8, step=0.5)
-            # ✨ 安全改进：探测下限应基于对刀仪位置，而非旧的Z基准
-            end_z = self.target_z - 8.0  # 对刀仪下方 8mm
+            # 4. 第一阶段：粗探 (rough_z + 7 -> rough_z - 2, step=0.5)
+            # ✨ 安全改进：使用粗略Z-2mm作为安全下限
+            end_z = self.rough_z - 2.0  # 粗略Z下方 2mm（安全余量）
             
-            # ⚠️ 安全检查：探测下限 = 对刀仪位置 - 安全余量
-            # 这样无论针头长短，都能正确探测而不会撞刀
-            safe_limit = self.target_z - self.safety_margin
+            # ⚠️ 安全检查：确保不会探测过深
+            safe_limit = self.rough_z - self.safety_margin
             if end_z < safe_limit:
-                self.machine.logger(f"⚠️ 安全限制：探测下限调整为 {safe_limit:.1f}mm (对刀仪-{self.safety_margin:.1f}mm)")
+                self.machine.logger(f"⚠️ 安全限制：探测下限调整为 {safe_limit:.1f}mm (粗略Z-{self.safety_margin:.1f}mm)")
                 end_z = safe_limit
             
             self.machine.logger(f"🔍 第一阶段粗探 (Z={start_z:.1f}->{end_z:.1f}, step=0.5)...")
@@ -2693,6 +2692,14 @@ class MainWindow(QWidget):
             # Load Z Base (tool setting reference)
             self.z_base = self.config.get('z_base', 0.0)
 
+
+            # [FIX] Load Tool Setter Coordinates (对刀仪坐标) - Previously missing!
+            self.tool_setter_x = self.config.get('tool_setter_x', None)
+            self.tool_setter_y = self.config.get('tool_setter_y', None)
+            self.tool_setter_z = self.config.get('tool_setter_z', None)
+            self.safety_margin = self.config.get('safety_margin', 2.0)
+
+
             # Load Camera Dry Run Params (相机空跑参数)
             self.cam_safe_z_cavity = self.config.get('cam_safe_z_cavity', 213.0)
             self.cam_safe_z_product = self.config.get('cam_safe_z_product', 215.0)
@@ -4854,16 +4861,25 @@ class MainWindow(QWidget):
 
         # --- 情况 A: 正在手动找点模式，用户点击按钮表示“确认位置” ---
         if self.manual_tool_set_mode:
-            # 获取当前坐标
-            mx, my, mz = self.machine.get_position()
-            self.tool_setter_x = mx
-            self.tool_setter_y = my
-            self.tool_setter_z = mz  # ✨ 新增：保存Z坐标
+            # [NEW] 检查探针状态 - 必须已触发
+            status = self.machine.query_probe_status()
+            if status != 'triggered':
+                QMessageBox.warning(self, "未触发对刀仪", 
+                    "⚠️ 请先下降针头触发对刀仪（绿灯→红灯），然后点击保存。\n\n"
+                    f"当前探针状态: {status}")
+                return
             
-            # 保存到全局配置
-            self.config_mgr.set('tool_setter_x', mx)
-            self.config_mgr.set('tool_setter_y', my)
-            self.config_mgr.set('tool_setter_z', mz)
+            # 获取触发时的坐标
+            mx, my, mz = self.machine.get_position()
+            # 四舍五入到3位小数
+            self.tool_setter_x = round(mx, 3)
+            self.tool_setter_y = round(my, 3)
+            self.tool_setter_z = round(mz, 3)  # 粗略Z（手动触发的Z坐标）
+            
+            # 保存到全局配置（已四舍五入）
+            self.config_mgr.set('tool_setter_x', self.tool_setter_x)
+            self.config_mgr.set('tool_setter_y', self.tool_setter_y)
+            self.config_mgr.set('tool_setter_z', self.tool_setter_z)
             self.config_mgr.save_app_settings()
             
             # 退出手动模式
@@ -4871,38 +4887,58 @@ class MainWindow(QWidget):
             self.btn_auto_tool_set.setText("一键对刀")
             self.btn_auto_tool_set.setStyleSheet("background-color: #2563EB; font-weight: bold;")
             
-            QMessageBox.information(self, "位置已保存", 
-                                    f"对刀仪坐标已保存到全局配置:\nX: {mx:.2f}\nY: {my:.2f}\nZ: {mz:.2f}")
-            return
+            self.log(f"✅ 对刀仪位置已保存: X={mx:.2f}, Y={my:.2f}, 粗略Z={mz:.2f}")
+            
+            # [NEW] 询问是否立即执行精确对刀
+            reply = QMessageBox.question(self, "保存成功",
+                f"对刀仪位置已保存：\n\n"
+                f"📍 XY位置: ({mx:.2f}, {my:.2f})\n"
+                f"📏 粗略 Z: {mz:.2f} mm\n\n"
+                f"是否立即执行精确对刀？\n"
+                f"（精确对刀将测量准确的Z基准值）",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            
+            if reply == QMessageBox.Yes:
+                # 继续执行自动对刀流程（跳过情况B，直接到情况C）
+                pass  # Fall through to auto tool setting logic below
+            else:
+                return
 
         # --- 情况 B: 尚未设置对刀仪坐标 ---
         if self.tool_setter_x is None or self.tool_setter_y is None:
             reply = QMessageBox.question(
                 self, "未设置对刀仪",
-                "尚未记录对刀仪的 XY 坐标。\n\n"
-                "是否进入【手动找点模式】？\n"
-                "进入后，请移动针头到对刀仪正上方，然后再次点击按钮确认。",
+                "尚未记录对刀仪的位置。\n\n"
+                "是否进入【手动设置模式】？\n\n"
+                "进入后，请：\n"
+                "1. 手动移动针头到对刀仪上方\n"
+                "2. 下降触发对刀仪（绿灯→红灯）\n"
+                "3. 点击按钮保存位置",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
             )
             if reply == QMessageBox.Yes:
                 self.manual_tool_set_mode = True
-                self.btn_auto_tool_set.setText("确认对刀仪位置 (点击保存)")
+                self.btn_auto_tool_set.setText("确认对刀仪位置（触发后保存）")
                 self.btn_auto_tool_set.setStyleSheet("background-color: #F59E0B; color: black; font-weight: bold;") # 橙色
-                self.log("👉 进入手动找点模式：请移动到对刀仪上方，并观察状态灯。")
+                self.log("👉 进入手动设置模式：请触发对刀仪后点击保存。")
             return
 
         # --- 情况 C: 已有坐标，执行自动对刀 ---
         # 修改：允许用户选择“重新标定位置”
         box = QMessageBox(self)
-        box.setWindowTitle("确认对刀")
+        box.setWindowTitle("一键对刀")
         
-        z_display = f"{self.tool_setter_z:.1f}" if self.tool_setter_z is not None else "未设置"
-        z_base_info = f"\n当前Z基准: {self.z_base:.3f} mm" if self.z_base > 0 else ""
+        rough_z_display = f"{self.tool_setter_z:.2f}" if self.tool_setter_z is not None else "未设置"
+        precise_z_display = f"{self.z_base:.3f}" if self.z_base > 0 else "未校准"
 
-        box.setText(f"已保存对刀仪坐标 (X{self.tool_setter_x:.1f}, Y{self.tool_setter_y:.1f}, Z{z_display})。\n"
-                    f"{z_base_info}\n\n"
-                    "请选择操作：")
-        btn_auto = box.addButton("开始自动对刀", QMessageBox.YesRole)
+        box.setText(
+            f"已记录对刀仪信息：\n\n"
+            f"📍 位置 (XY): ({self.tool_setter_x:.2f}, {self.tool_setter_y:.2f})\n"
+            f"📏 粗略 Z: {rough_z_display} mm\n"
+            f"🎯 精确 Z 基准: {precise_z_display} mm\n\n"
+            f"请选择操作："
+        )
+        btn_auto = box.addButton("开始自动对刀（重测精确Z）", QMessageBox.YesRole)
         btn_manual = box.addButton("重新标定位置", QMessageBox.NoRole)
         btn_cancel = box.addButton("取消", QMessageBox.RejectRole)
         
@@ -5018,8 +5054,8 @@ class MainWindow(QWidget):
             # 取消
             return
 
-        target_z = self.tool_setter_z if self.tool_setter_z is not None else 63.0
-        self.log(f"🚀 开始自动对刀... (目标Z={target_z})")
+        rough_z = self.tool_setter_z if self.tool_setter_z is not None else 63.0
+        self.log(f"🚀 开始自动对刀... (粗略Z={rough_z:.2f}, 将测量精确Z)")
         self.btn_auto_tool_set.setEnabled(False)
         
         # 启动后台线程
@@ -5028,7 +5064,7 @@ class MainWindow(QWidget):
             self.safe_z_product, 
             self.tool_setter_x, 
             self.tool_setter_y,
-            target_z,
+            rough_z,  # 粗略Z（手动触发的Z坐标）
             self.z_base,
             self.safety_margin
         )
@@ -5068,6 +5104,20 @@ class MainWindow(QWidget):
             
             # 保存到全局配置
             self.config_mgr.set('z_base', self.z_base)
+            
+            # [FIX] Also save tool_setter coordinates (used during auto tool setting but not persisted)
+            if self.tool_setter_x is not None and self.tool_setter_y is not None:
+                # 四舍五入到3位小数
+                self.config_mgr.set('tool_setter_x', round(self.tool_setter_x, 3))
+                self.config_mgr.set('tool_setter_y', round(self.tool_setter_y, 3))
+                if self.tool_setter_z is not None:
+                    self.config_mgr.set('tool_setter_z', round(self.tool_setter_z, 3))
+                if hasattr(self, 'safety_margin'):
+                    self.config_mgr.set('safety_margin', self.safety_margin)
+                self.log(f"✅ 对刀仪坐标已保存: X={self.tool_setter_x:.2f}, Y={self.tool_setter_y:.2f}, Z={self.tool_setter_z:.2f}")
+            else:
+                self.log("⚠️ 对刀仪坐标为空，未保存 (请先设置对刀仪位置)")
+            
             self.config_mgr.save_app_settings()
 
     # ================== 其它 ==================

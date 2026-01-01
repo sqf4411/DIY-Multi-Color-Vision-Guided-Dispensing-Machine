@@ -10,7 +10,7 @@
   "jog_step_mm": 1.0,
   "safe_z_cavity": 59.0,
   "safe_z_product": 70.0,
-  "work_z": 57.5,
+  "work_z": 100.0,
   "model_row": 681.0,
   "model_col": 1181.0,
   "product_name": "7777",

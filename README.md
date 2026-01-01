@@ -48,7 +48,8 @@
 - Klipper固件集成
 - WebSocket实时通信
 - 8点坐标标定
-- Z轴自动对刀
+- Z轴自动对刀 (Auto-Probe)
+- 机械/视觉坐标关联锁定
 
 </td>
 </tr>
@@ -294,6 +295,12 @@ DIY-Multi-Color-Vision-Guided-Dispensing-Machine/
 - 工艺参数
 
 一键切换，互不干扰。
+
+### 5. 触摸屏原生支持
+针对工业触摸屏优化：
+- 内置虚拟数字键盘
+- 大尺寸控件设计
+- 可以在无键鼠环境下全功能操作
 
 ---
 

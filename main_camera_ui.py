@@ -806,7 +806,7 @@ class MainWindow(QWidget):
 
 
         # ==== 配置管理器（全局硬件配置）====
-        self.config_mgr = ConfigManager()
+        self.config_mgr = self.config # [Fix] Use same instance as self.config
 
         # ==== 运动 / 坐标相关 ====
         self.machine = MachineClient()
@@ -829,13 +829,15 @@ class MainWindow(QWidget):
         # ======================================
 
         # 针头相对「相机参考点」的 XY 偏移量（mm）- 全局硬件配置
-        self.nozzle_offset_x = self.config_mgr.get('nozzle_offset_x', 0.0)
-        self.nozzle_offset_y = self.config_mgr.get('nozzle_offset_y', 0.0)
+        # (Moved to load_app_settings)
+        self.nozzle_offset_x = 0.0
+        self.nozzle_offset_y = 0.0
         self.nozzle_offset_z = 0.0
 
         # ====== ✅ 新增：相机空跑专用高度 (独立于针头) ======
-        self.cam_safe_z_cavity = 10.0
-        self.cam_safe_z_product = 30.0
+        # (Moved to load_app_settings)
+        self.cam_safe_z_cavity = 0.0
+        self.cam_safe_z_product = 0.0
         self.cam_work_z = 0.0
         # =================================================
 
@@ -875,13 +877,13 @@ class MainWindow(QWidget):
         # =======================================
         
         # 对刀基准 (上次对刀时的 Z 坐标) - 全局硬件配置
-        self.z_base = self.config_mgr.get('z_base', 0.0)
+        self.z_base = 0.0
         
         # 对刀仪坐标 (XY) - 全局硬件配置
-        self.tool_setter_x = self.config_mgr.get('tool_setter_x')
-        self.tool_setter_y = self.config_mgr.get('tool_setter_y')
-        self.tool_setter_z = self.config_mgr.get('tool_setter_z')
-        self.safety_margin = self.config_mgr.get('safety_margin', 2.0)
+        self.tool_setter_x = None
+        self.tool_setter_y = None
+        self.tool_setter_z = None
+        self.safety_margin = 2.0
         
         # 对刀模式：False=正常, True=手动找对刀点
         self.manual_tool_set_mode = False
@@ -2789,6 +2791,16 @@ class MainWindow(QWidget):
             self.config.set('nozzle_offset_z', self.nozzle_offset_z)
             
             self.config.set('z_base', self.z_base)
+            
+            # [FIX] Save Tool Setter Coordinates in global settings
+            if self.tool_setter_x is not None:
+                self.config.set('tool_setter_x', self.tool_setter_x)
+            if self.tool_setter_y is not None:
+                self.config.set('tool_setter_y', self.tool_setter_y)
+            if self.tool_setter_z is not None:
+                self.config.set('tool_setter_z', self.tool_setter_z)
+            if hasattr(self, 'safety_margin'):
+                 self.config.set('safety_margin', self.safety_margin)
             
             # Camera Dry Run Params
             self.config.set('cam_safe_z_cavity', self.cam_safe_z_cavity)

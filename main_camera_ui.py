@@ -61,6 +61,7 @@ from core.halcon_product_manager import HalconProductManager
 from core.path_editor_wrapper import edit_path_halcon_mode
 from core.touch_spinbox import TouchSpinBox, apply_touch_support
 from core.touch_numpad import TouchNumberPad
+from core.progress_dialog import ProcessingDialog # [NEW]
 
 # MvImport dependency removed from UI (managed by CameraManager)
 # from MvImport.MvCameraControl_class import *
@@ -603,7 +604,12 @@ class LaserMeasureWorker(QThread):
                     if val is not None:
                         # 计算深度
                         # 如果 k=0 (避免除零), depth=0
-                        depth = (val - self.ref_val) / self.k if abs(self.k) > 1e-6 else 0.0
+                        # [FIX] Formula Inverted.
+                        # Higher Val = Further Distance = Lower Z.
+                        # So Depth (Z-Delta) should be Negative when Val > Ref.
+                        # Old: (Val - Ref) / K  => Positive when Val > Ref. Wrong.
+                        # New: (Ref - Val) / K  => Negative when Val > Ref. Correct.
+                        depth = (self.ref_val - val) / self.k if abs(self.k) > 1e-6 else 0.0
                         samples.append(depth)
                     time.sleep(0.05)
                 
@@ -2279,7 +2285,22 @@ class MainWindow(QWidget):
         self.laser_worker.log_signal.connect(self.log)
         self.laser_worker.result_signal.connect(self.on_laser_measure_result)
         self.laser_worker.finished_signal.connect(self.on_laser_measure_finished)
+        
+        # [NEW] Progress Dialog
+        self.progress_dlg = ProcessingDialog("激光测高中", self)
+        self.progress_dlg.update_status(f"准备测量 {len(points_to_measure)} 个点...")
+        
+        # Connect Worker -> Dialog
+        self.laser_worker.progress_signal.connect(self.progress_dlg.update_progress)
+        self.laser_worker.log_signal.connect(self.progress_dlg.update_status) # Sync status text
+        
+        # Connect Dialog -> Worker
+        self.progress_dlg.pause_signal.connect(self.laser_worker.pause)
+        self.progress_dlg.resume_signal.connect(self.laser_worker.resume)
+        self.progress_dlg.stop_signal.connect(self.laser_worker.stop)
+        
         self.laser_worker.start()
+        self.progress_dlg.show()
 
     # ================== 激光传感器读取 helper ==================
     def _read_hgc_dist(self):
@@ -2478,6 +2499,11 @@ class MainWindow(QWidget):
 
     def on_laser_measure_finished(self, success, msg):
         self.btn_laser_measure.setEnabled(True)
+        # [NEW] Close Dialog
+        if hasattr(self, 'progress_dlg') and self.progress_dlg:
+            self.progress_dlg.force_close()
+            self.progress_dlg = None
+        
         if success:
             # [NEW] Save measured data to product config
             try:
@@ -2494,6 +2520,9 @@ class MainWindow(QWidget):
                             # Convert map to list for JSON
                             # self.laser_depth_map = {(x,y): depth}
                             points_list = []
+                            total_depth = 0.0
+                            count = 0
+                            
                             if hasattr(self, 'laser_depth_map'):
                                 for (x, y), depth in self.laser_depth_map.items():
                                     points_list.append({
@@ -2501,10 +2530,21 @@ class MainWindow(QWidget):
                                         "y": y,
                                         "depth": depth
                                     })
+                                    total_depth += depth
+                                    count += 1
+                            
+                            avg_depth = total_depth / count if count > 0 else 0.0
+                            avg_z = self.z_base + avg_depth
+                            
+                            # [UI Update] Show Average
+                            if hasattr(self, 'lbl_laser_depth'):
+                                self.lbl_laser_depth.setText(f"均Z:{avg_z:.2f} (均深:{avg_depth:.2f})")
                             
                             config["laser_data"] = {
                                 "timestamp": time.time(),
-                                "points": points_list
+                                "points": points_list,
+                                "avg_depth": avg_depth,
+                                "avg_z": avg_z
                             }
                             
                             # Make sure to keep machine coordinates if they check/uncheck things
@@ -2513,7 +2553,7 @@ class MainWindow(QWidget):
                             with open(config_path, 'w', encoding='utf-8') as f:
                                 json.dump(config, f, indent=4)
                                 
-                            self.log(f"💾 激光数据已保存: {len(points_list)} 个点")
+                            self.log(f"💾 激光数据已保存: {count} 个点 (均深: {avg_depth:.3f})")
 
             except Exception as e:
                 self.log(f"❌ 保存激光数据失败: {e}")
@@ -5286,8 +5326,9 @@ class MainWindow(QWidget):
                                 tmp_cfg = json.load(f)
                                 if "laser_data" in tmp_cfg:
                                     laser_data_points = tmp_cfg["laser_data"].get("points", [])
+                                    self.log(f"🔎 [DryRun] 从配方加载了 {len(laser_data_points)} 个测高点")
             except Exception as e:
-                print(f"Error loading laser data: {e}")
+                self.log(f"❌ 加载激光数据失败: {e}")
 
             # Assuming self.config_mgr exists. If not, use self.z_base directly if checked.
             # Usually z_base is loaded into self.z_base.
@@ -6630,14 +6671,31 @@ class MainWindow(QWidget):
                 if 'laser_data' in config:
                     ld = config['laser_data']
                     pts = ld.get('points', [])
+                    
+                    # Try to get saved average, else calc
+                    avg_depth = ld.get('avg_depth')
+                    
                     self.laser_depth_map = {}
+                    total_d = 0.0
+                    cnt = 0
                     for p in pts:
                         px = p.get('x')
                         py = p.get('y')
                         d = p.get('depth')
                         if px is not None and py is not None and d is not None:
                             self.laser_depth_map[(round(px, 2), round(py, 2))] = d
+                            total_d += d
+                            cnt += 1
+                    
                     self.log(f"✅ 已加载激光测高数据: {len(self.laser_depth_map)} 点")
+                    
+                    # UI Update
+                    if avg_depth is None:
+                         avg_depth = total_d / cnt if cnt > 0 else 0.0
+                    
+                    if hasattr(self, 'lbl_laser_depth'):
+                        avg_z = getattr(self, 'z_base', 0.0) + avg_depth
+                        self.lbl_laser_depth.setText(f"均Z:{avg_z:.2f} (均深:{avg_depth:.2f})")
 
                 # 注意：nozzle_offset, z_base, tool_setter, LASER_OFFSET, LASER_K, LASER_REF 已改为全局配置
                 
@@ -6681,6 +6739,30 @@ class MainWindow(QWidget):
             "safe_z_product": self.safe_z_product,
             "work_z": self.work_z
         }
+        
+        if hasattr(self, 'laser_depth_map') and self.laser_depth_map:
+             points_list = []
+             total_depth = 0.0
+             count = 0
+             for (x, y), depth in self.laser_depth_map.items():
+                 points_list.append({
+                     "x": x,
+                     "y": y,
+                     "depth": depth
+                 })
+                 total_depth += depth
+                 count += 1
+             
+             avg_depth = total_depth / count if count > 0 else 0.0
+             avg_z = getattr(self, 'z_base', 0.0) + avg_depth
+             
+             import time
+             config_data["laser_data"] = {
+                 "timestamp": time.time(),
+                 "points": points_list,
+                 "avg_depth": avg_depth,
+                 "avg_z": avg_z
+             }
         
         # 更新HalconProductManager的路径
         self.halcon_product_manager.save_paths_to_product(self.dots, self.polys)

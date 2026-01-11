@@ -6627,6 +6627,17 @@ class MainWindow(QWidget):
                 # [NEW] Load Laser Params (All Global now)
                 # No product specific load needed for Ref or K.
                 # Only Depth Map (loaded elsewhere)
+                if 'laser_data' in config:
+                    ld = config['laser_data']
+                    pts = ld.get('points', [])
+                    self.laser_depth_map = {}
+                    for p in pts:
+                        px = p.get('x')
+                        py = p.get('y')
+                        d = p.get('depth')
+                        if px is not None and py is not None and d is not None:
+                            self.laser_depth_map[(round(px, 2), round(py, 2))] = d
+                    self.log(f"✅ 已加载激光测高数据: {len(self.laser_depth_map)} 点")
 
                 # 注意：nozzle_offset, z_base, tool_setter, LASER_OFFSET, LASER_K, LASER_REF 已改为全局配置
                 

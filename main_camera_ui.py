@@ -220,6 +220,53 @@ class PollingWorker(QThread):
         self.running = False
         self.wait()
 
+# ================== 线程：自动设置激光基准 ==================
+class AutoLaserBaselineWorker(QThread):
+    finished_signal = pyqtSignal(bool, float, str) # success, measured_val, msg
+
+    def __init__(self, machine_client, target_x, target_y, safe_z, read_func):
+        super().__init__()
+        self.machine = machine_client
+        self.target_x = target_x
+        self.target_y = target_y
+        self.safe_z = safe_z
+        self.read_func = read_func # Function to read laser value
+
+    def run(self):
+        try:
+            # 1. Move Z to Safe Height (100mm)
+            self.machine.logger(f"🚀 [激光基准] 抬升 Z 到 {self.safe_z}...")
+            self.machine.move_z_absolute(self.safe_z, 600)
+            self.machine.wait_until_idle()
+            time.sleep(0.5)
+
+            # 2. Move XY to Target (Tool Setter - Laser Offset)
+            self.machine.logger(f"🚀 [激光基准] 移动激光到对刀仪 ({self.target_x:.2f}, {self.target_y:.2f})...")
+            self.machine.move_xy_absolute(self.target_x, self.target_y, 3000)
+            self.machine.wait_until_idle()
+            time.sleep(1.0) # Wait for stabilization
+
+            # 3. Read Laser Value
+            self.machine.logger(f"🔍 [激光基准] 读取传感器数据...")
+            # Take average of 10 readings
+            samples = []
+            for _ in range(10):
+                val = self.read_func()
+                if val is not None:
+                    samples.append(val)
+                time.sleep(0.1)
+            
+            if not samples:
+                self.finished_signal.emit(False, 0.0, "读取激光传感器失败")
+                return
+
+            avg_val = sum(samples) / len(samples)
+            self.finished_signal.emit(True, avg_val, "测量成功")
+
+        except Exception as e:
+            self.finished_signal.emit(False, 0.0, f"自动基准流程出错: {str(e)}")
+
+
 # ================== 线程：自动对刀 ==================
 class AutoToolSetWorker(QThread):
     finished_signal = pyqtSignal(bool, float, str) # success, new_z_base, msg
@@ -445,6 +492,137 @@ class TempWorker(QThread):
     def stop(self):
         self.running = False
         self.wait()
+
+class LaserMeasureWorker(QThread):
+    """
+    激光测高后台线程
+    执行流程:
+    1. 移动到安全Z
+    2. 遍历所有点
+    3. 移动到 (x+off_x, y+off_y)
+    4. 读取激光传感器
+    5. 计算深度: (raw - ref) / k
+    6. 返回结果
+    """
+    log_signal = pyqtSignal(str)
+    progress_signal = pyqtSignal(int, int) # current, total
+    # index, x, y, measured_depth
+    result_signal = pyqtSignal(int, float, float, float) 
+    finished_signal = pyqtSignal(bool, str) # success, message
+
+    def __init__(self, machine_client, points, measure_z, off_x, off_y, k, ref_val):
+        super().__init__()
+        self.machine = machine_client
+        self.points = points
+        self.measure_z = measure_z
+        self.off_x = off_x
+        self.off_y = off_y
+        self.k = k
+        self.ref_val = ref_val
+        self._is_stopped = False
+        self._is_paused = False
+
+    def stop(self):
+        self._is_stopped = True
+
+    def pause(self):
+        self._is_paused = True
+
+    def resume(self):
+        self._is_paused = False
+
+    def _read_hgc_dist(self):
+        """读取激光传感器原始值"""
+        if not self.machine.base_url or not self.machine.connected:
+            return None
+            
+        try:
+            url = f"{self.machine.base_url}/printer/objects/query"
+            params = {"temperature_sensor hgc_dist": ""}
+            r = self.machine.session.get(url, params=params, headers=self.machine._headers(), timeout=2)
+            r.raise_for_status()
+            data = r.json()
+            
+            # { "result": { "status": { "temperature_sensor hgc_dist": { "temperature": 37.86 } } } }
+            status = data.get('result', {}).get('status', {})
+            sensor = status.get('temperature_sensor hgc_dist', {})
+            val = sensor.get('temperature')
+            
+            if val is not None:
+                return float(val)
+        except Exception as e:
+            # self.log_signal.emit(f"Read sensor error: {e}")
+            pass
+        return None
+
+    def run(self):
+        total = len(self.points)
+        self.log_signal.emit(f"🚀 开始激光测高，共 {total} 个点")
+        self.log_signal.emit(f"⚙️ 配置: 测量Z={self.measure_z:.2f}, K={self.k:.4f}, 基准={self.ref_val:.3f}")
+
+        if not self.machine.connected:
+            self.finished_signal.emit(False, "未连接 Klipper")
+            return
+
+        try:
+            # 1. 开启激光 (调用宏)
+            self.machine._post_gcode("HGC_ON")
+            time.sleep(0.5) 
+
+            # 2. 移动到安全测量高度
+            self.log_signal.emit(f"🔼 移动至测量安全高度 Z={self.measure_z}")
+            self.machine.move_z_absolute(self.measure_z, 600)
+            self.machine.wait_until_idle()
+
+            for i, (pt_x, pt_y) in enumerate(self.points):
+                if self._is_stopped:
+                    raise Exception("用户停止")
+                
+                while self._is_paused:
+                    time.sleep(0.1)
+                    if self._is_stopped: raise Exception("用户停止")
+
+                # 3. 计算目标坐标
+                target_x = pt_x + self.off_x
+                target_y = pt_y + self.off_y 
+
+                self.log_signal.emit(f"📍 [{i+1}/{total}] 测点: ({pt_x:.2f}, {pt_y:.2f}) -> 激光位: ({target_x:.2f}, {target_y:.2f})")
+                
+                # 4. 移动到XY
+                self.machine.move_xy_absolute(target_x, target_y, 6000)
+                self.machine.wait_until_idle()
+
+                # 5. 稳定延时
+                time.sleep(0.5)
+
+                # 6. 读取传感器 (取多次平均)
+                samples = []
+                for _ in range(5):
+                    val = self._read_hgc_dist()
+                    if val is not None:
+                        # 计算深度
+                        # 如果 k=0 (避免除零), depth=0
+                        depth = (val - self.ref_val) / self.k if abs(self.k) > 1e-6 else 0.0
+                        samples.append(depth)
+                    time.sleep(0.05)
+                
+                if samples:
+                    avg_depth = sum(samples) / len(samples)
+                    self.log_signal.emit(f"✅ 测得深度: {avg_depth:.3f} mm")
+                    # 发送结果信号：index, original_x, original_y, measured_depth
+                    self.result_signal.emit(i, pt_x, pt_y, avg_depth)
+                else:
+                    self.log_signal.emit(f"❌ 读取传感器失败")
+                    self.result_signal.emit(i, pt_x, pt_y, -999.9)
+
+                self.progress_signal.emit(i + 1, total)
+
+            # 结束
+            # self.machine._post_gcode("HGC_OFF") # 测量完是否关激光？还是留着？为了安全可以关掉
+            self.finished_signal.emit(True, "所有点测量完成")
+
+        except Exception as e:
+            self.finished_signal.emit(False, str(e))
 
 ######## 滚轮
 class ImageLabel(QLabel):
@@ -770,6 +948,14 @@ class MainWindow(QWidget):
         self.vision_offset_x = 0.0
         self.vision_offset_y = 0.0
         
+        # [NEW] Laser Measurement Vars
+        self.laser_offset_x = 0.0
+        self.laser_offset_y = 0.0
+        self.laser_measure_z = 50.0
+        self.laser_scale_k = 0.5425
+        self.laser_ref_val = 0.0   
+        self.laser_worker = None
+
         # [New] Color Supply Delay (Synced with Batch/Dry Run)
         self.color_delay = 500
         
@@ -1573,12 +1759,19 @@ class MainWindow(QWidget):
         
         right_layout.addLayout(top_row_layout)
 
+        # [NEW] Initialize Laser Group
+        self.laser_group = self.init_laser_group()
+
         right_layout.addWidget(self.motion_group)
         # [MODIFIED] Put Tool Set and Offset groups side-by-side
         tools_layout = QHBoxLayout()
         tools_layout.addWidget(self.tool_set_group, stretch=1)
         tools_layout.addWidget(self.offset_group, stretch=1)
         right_layout.addLayout(tools_layout)
+        
+        # [NEW] Add Laser Group
+        right_layout.addWidget(self.laser_group)
+        
         right_layout.addWidget(action_group)   # 多功能区（包含所有按钮）
         # param_group 已移到第一行，这里不再添加
         right_layout.addWidget(self.vision_group)
@@ -1602,8 +1795,8 @@ class MainWindow(QWidget):
         # self.btn_ipad = btn_ipad
         # right_layout.addWidget(btn_ipad)
         
-        # 日志窗口
-        right_layout.addWidget(self.log_box)
+        # 日志窗口已移到左下角，这里不再添加
+        # right_layout.addWidget(self.log_box)  # [REMOVED - 已移到左下角]
         
         # 弹簧 (确保上方紧凑)
         right_layout.addStretch()
@@ -1614,17 +1807,15 @@ class MainWindow(QWidget):
         # right_widget.setFixedWidth(500) # 移除固定宽度，交给 Splitter 管理
 
         # ================== 双栏布局核心 (可拖拽分割) ==================
-        # [左栏: 相机(上) + 3D(下)] - [右栏: 固定控制面板]
+        # [左栏: 相机(上) + 日志|USB(下)] - [右栏: 固定控制面板]
 
-        # 1. 3D 视图 (缩放版 - 左下)
-        self.vis3d = Visualizer3D()
-        self.vis3d.setMinimumHeight(200) 
-        vis_group = QGroupBox("3D 针头姿态")
-        vis_layout = QVBoxLayout()
-        vis_layout.addWidget(self.vis3d)
-        vis_group.setLayout(vis_layout)
+        # 1. 系统日志 (移到左下 - 替代3D显示)
+        log_group = QGroupBox("系统日志")
+        log_layout = QVBoxLayout()
+        log_layout.addWidget(self.log_box)
+        log_group.setLayout(log_layout)
 
-        # 2. USB 相机视图 (新增 - 右下)
+        # 2. USB 相机视图 (右下)
         usb_group = QGroupBox("USB 针头实景")
         usb_layout = QVBoxLayout()
         
@@ -1655,9 +1846,9 @@ class MainWindow(QWidget):
         usb_layout.addWidget(self.label_usb_cam)
         usb_group.setLayout(usb_layout)
 
-        # 3. 底部水平分割器
+        # 3. 底部水平分割器 (日志 | USB相机)
         bottom_splitter = QSplitter(Qt.Horizontal)
-        bottom_splitter.addWidget(vis_group)
+        bottom_splitter.addWidget(log_group)
         bottom_splitter.addWidget(usb_group)
         
         # 强制 50:50 (假设宽度足够，各给 600px 期望值)
@@ -1871,6 +2062,464 @@ class MainWindow(QWidget):
         
         # Host
         self.lbl_host_temp.setText(f"{data.get('host', 0.0):.1f}°C")
+
+    # ================== ✅ 激光测高相关 ==================
+    def init_laser_group(self):
+        """初始化激光测距控制组"""
+        laser_group = QGroupBox("激光测距 (HGC)")
+        laser_layout = QGridLayout()
+
+        # 1. 偏移设置
+        laser_layout.addWidget(QLabel("Offset X:"), 0, 0)
+        self.spn_laser_offset_x = QDoubleSpinBox()
+        self.spn_laser_offset_x.setRange(-200.0, 200.0)
+        self.spn_laser_offset_x.setValue(getattr(self, 'laser_offset_x', 0.0))
+        self.spn_laser_offset_x.valueChanged.connect(self.on_laser_param_changed)
+        laser_layout.addWidget(self.spn_laser_offset_x, 0, 1)
+
+        laser_layout.addWidget(QLabel("Offset Y:"), 0, 2)
+        self.spn_laser_offset_y = QDoubleSpinBox()
+        self.spn_laser_offset_y.setRange(-200.0, 200.0)
+        self.spn_laser_offset_y.setValue(getattr(self, 'laser_offset_y', 0.0))
+        self.spn_laser_offset_y.valueChanged.connect(self.on_laser_param_changed)
+        laser_layout.addWidget(self.spn_laser_offset_y, 0, 3)
+
+        # 2. 测量高度设置
+        laser_layout.addWidget(QLabel("测量 Z:"), 1, 0)
+        self.spn_laser_measure_z = QDoubleSpinBox()
+        self.spn_laser_measure_z.setRange(0.0, 300.0)
+        self.spn_laser_measure_z.setValue(getattr(self, 'laser_measure_z', 50.0))
+        self.spn_laser_measure_z.valueChanged.connect(self.on_laser_param_changed)
+        laser_layout.addWidget(self.spn_laser_measure_z, 1, 1)
+
+        # [NEW] Scale K
+        laser_layout.addWidget(QLabel("K系数:"), 1, 2)
+        self.spn_laser_k = QDoubleSpinBox()
+        self.spn_laser_k.setRange(0.1, 10.0)
+        self.spn_laser_k.setDecimals(4)
+        self.spn_laser_k.setValue(getattr(self, 'laser_scale_k', 0.5425))
+        self.spn_laser_k.valueChanged.connect(self.on_laser_param_changed)
+        laser_layout.addWidget(self.spn_laser_k, 1, 3)
+
+        # 3. 实时数值 + 归零
+        self.btn_laser_zero = QPushButton("设为基准")
+        self.btn_laser_zero.clicked.connect(self.on_btn_laser_set_zero)
+        laser_layout.addWidget(self.btn_laser_zero, 2, 0)
+
+        # [NEW] Auto Set Baseline
+        self.btn_auto_set_ref = QPushButton("自动基准(对刀仪)")
+        self.btn_auto_set_ref.setStyleSheet("background-color: #7C3AED; color: white; font-weight: bold;") 
+        self.btn_auto_set_ref.clicked.connect(self.on_btn_auto_set_baseline_clicked)
+        laser_layout.addWidget(self.btn_auto_set_ref, 2, 1)
+
+        # [Grid Fix] Row 2, Col 2: Reference Value (Global)
+        self.lbl_laser_ref = QLabel(f"基准: {getattr(self, 'laser_ref_val', 0.0):.3f}")
+        self.lbl_laser_ref.setStyleSheet("color: #FBBF24; font-weight: bold;")
+        laser_layout.addWidget(self.lbl_laser_ref, 2, 2)
+        
+        # [Grid Fix] Row 2, Col 3: Current Value (Live)
+        self.lbl_laser_val = QLabel("当前: --")
+        self.lbl_laser_val.setStyleSheet("color: #60A5FA; font-weight: bold;")
+        laser_layout.addWidget(self.lbl_laser_val, 2, 3)
+
+        # [Moved] Depth Result to Row 3 (above button) or make btn Row 4
+        self.lbl_laser_depth = QLabel("深: --") # 显示换算后的深度
+        self.lbl_laser_depth.setStyleSheet("color: #10B981; font-weight: bold; font-size: 14px;")
+        laser_layout.addWidget(self.lbl_laser_depth, 3, 0, 1, 4)
+
+        # 4. 执行按钮 (Row 4)
+        self.btn_laser_measure = QPushButton("📏 激光测高")
+        self.btn_laser_measure.setStyleSheet("background-color: #D97706; color: white; font-weight: bold;")
+        self.btn_laser_measure.clicked.connect(self.on_btn_laser_measure_clicked)
+        laser_layout.addWidget(self.btn_laser_measure, 4, 0, 1, 4)
+        self.btn_laser_measure.setStyleSheet("background-color: #D97706; color: white; font-weight: bold;")
+        self.btn_laser_measure.clicked.connect(self.on_btn_laser_measure_clicked)
+        laser_layout.addWidget(self.btn_laser_measure, 3, 0, 1, 4)
+
+        laser_group.setLayout(laser_layout)
+        return laser_group
+
+    def on_laser_param_changed(self):
+        """激光参数变化时自动保存"""
+        if hasattr(self, 'spn_laser_offset_x'):
+            self.laser_offset_x = self.spn_laser_offset_x.value()
+            self.laser_offset_y = self.spn_laser_offset_y.value()
+            self.laser_measure_z = self.spn_laser_measure_z.value()
+            self.laser_scale_k = self.spn_laser_k.value()
+            
+            # 保存到配置文件
+            self.config.set('laser_offset_x', self.laser_offset_x)
+            self.config.set('laser_offset_y', self.laser_offset_y)
+            self.config.set('laser_measure_z', self.laser_measure_z)
+            self.config.set('laser_scale_k', self.laser_scale_k)
+            self.config.save_app_settings()
+            
+            self.log(f"✅ 激光参数已保存 (X={self.laser_offset_x:.2f}, Y={self.laser_offset_y:.2f}, Z={self.laser_measure_z:.1f}, K={self.laser_scale_k:.4f})")
+
+    def update_laser_ui(self, val):
+        """更新激光读数显示 (会被 TempWorker/PollingWorker 调用如果集成的话，或者单独Worker)"""
+        # 注意：目前没有Worker实时读取hgc_dist，只有在测高时才读。
+        # 如果需要实时显示，需要在 TempWorker 或 PollingWorker 里加上读取 hgc_dist 的逻辑
+        # 这里先只处理测高时的更新，或者手动查询
+        pass
+
+    def on_btn_laser_set_zero(self):
+        """设为基准"""
+        if not self.machine.base_url or not self.machine.connected:
+            self.log("❌ 未连接Klipper")
+            return
+            
+        try:
+            # 读取当前激光传感器值
+            url = f"{self.machine.base_url}/printer/objects/query"
+            params = {"temperature_sensor hgc_dist": ""}
+            r = self.machine.session.get(url, params=params, headers=self.machine._headers(), timeout=2)
+            r.raise_for_status()
+            data = r.json()
+            
+            status = data.get('result', {}).get('status', {})
+            sensor = status.get('temperature_sensor hgc_dist', {})
+            val = sensor.get('temperature')
+            
+            if val is not None:
+                self.laser_ref_val = float(val)
+                
+                # 调用Klipper宏设置基准
+                self.machine._post_gcode("HGC_ZERO_MM")
+                
+                # 保存基准值到配置文件
+                self.config.set('laser_ref_val', self.laser_ref_val)
+                self.config.save_app_settings()
+                
+                self.log(f"✅ 激光基准已设定: {self.laser_ref_val:.3f} (当前原始读数)")
+                if hasattr(self, 'lbl_laser_val'):
+                    self.lbl_laser_val.setText(f"{val:.3f}")
+            else:
+                self.log("❌ 无法读取激光传感器数据")
+        except Exception as e:
+            self.log(f"❌ 获取激光读数失败: {e}")
+
+    def on_btn_laser_measure_clicked(self):
+        """开始激光测高"""
+        if self.laser_worker and self.laser_worker.isRunning():
+            self.log("⚠ 测高任务正在运行中...")
+            return
+
+        # ✅ 尝试加载识别坐标
+        recognized_segments = self._load_recognized_coordinates()
+        
+        # 收集所有点 (从识别坐标或模板坐标)
+        if recognized_segments:
+            # 使用识别后的坐标
+            segments_list = recognized_segments
+            coord_source = "识别坐标"
+            self.log(f"📌 使用{coord_source} (共{len(segments_list)}个段)")
+        elif hasattr(self, 'current_segments') and self.current_segments:
+            # 回退到模板坐标
+            segments_list = self.current_segments.segments if hasattr(self.current_segments, 'segments') else []
+            coord_source = "模板坐标"
+            
+            ret = QMessageBox.question(
+                self, "使用模板坐标",
+                f"未找到识别坐标记录。\n\n"
+                f"建议先运行'相机空跑'或Halcon识别，\n"
+                f"让系统找到模具实际位置并保存坐标。\n\n"
+                f"是否使用{coord_source}进行测量？（坐标可能不准确）",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if ret != QMessageBox.Yes:
+                return
+        else:
+            QMessageBox.warning(self, "无数据", "当前没有路径数据，请先编辑路径或运行识别。")
+            return
+        
+        points_to_measure = []
+        
+        for seg in segments_list:
+            if seg.type == 'dot':
+                for pt_px in seg.points:
+                    # pt_px 是图像坐标，暂时直接使用
+                    # TODO: 添加像素→机器坐标转换
+                    points_to_measure.append(pt_px)
+        
+        if not points_to_measure:
+             QMessageBox.warning(self, "无点", "当前路径中没有 'dot' 类型的点。")
+             return
+
+        # [REVERTED] Use simple Camera + Laser Offset logic.
+        # If direction is wrong, User should flip sign in UI.
+        
+        # 确认
+        ret = QMessageBox.question(self, "确认测高", 
+                                   f"即将对 {len(points_to_measure)} 个点进行激光测高。\n"
+                                   f"坐标来源: {coord_source}\n"
+                                   f"安全高度 Z={self.laser_measure_z:.1f}\n"
+                                   f"偏移 X={self.laser_offset_x:.1f}, Y={self.laser_offset_y:.1f}\n"
+                                   f"K系数={self.laser_scale_k:.4f}, 基准={self.laser_ref_val:.3f}\n\n"
+                                   "请确认机器上方无障碍物。\n"
+                                   "如果移动方向相反，请修改偏移量的正负号。",
+                                   QMessageBox.Yes | QMessageBox.No)
+        if ret != QMessageBox.Yes:
+            return
+
+        self.btn_laser_measure.setEnabled(False)
+        
+        self.laser_worker = LaserMeasureWorker(
+            self.machine, 
+            points_to_measure, 
+            self.laser_measure_z, 
+            self.laser_offset_x,
+            self.laser_offset_y,
+            self.laser_scale_k,
+            self.laser_ref_val
+        )
+        self.laser_worker.log_signal.connect(self.log)
+        self.laser_worker.result_signal.connect(self.on_laser_measure_result)
+        self.laser_worker.finished_signal.connect(self.on_laser_measure_finished)
+        self.laser_worker.start()
+
+    # ================== 激光传感器读取 helper ==================
+    def _read_hgc_dist(self):
+        """读取激光传感器原始值 (MainWindow Helper)"""
+        if not hasattr(self, 'machine') or not self.machine.base_url or not self.machine.connected:
+            return None
+            
+        try:
+            url = f"{self.machine.base_url}/printer/objects/query"
+            params = {"temperature_sensor hgc_dist": ""}
+            # Use a short timeout
+            r = self.machine.session.get(url, params=params, headers=self.machine._headers(), timeout=1)
+            r.raise_for_status()
+            data = r.json()
+            
+            status = data.get('result', {}).get('status', {})
+            sensor = status.get('temperature_sensor hgc_dist', {})
+            val = sensor.get('temperature')
+            
+            if val is not None:
+                return float(val)
+        except Exception:
+            pass
+        return None
+
+    # ================== 自动基准逻辑 ==================
+    def on_btn_auto_set_baseline_clicked(self):
+        """自动移动到对刀仪位置并设为基准"""
+        # 1. Check Tool Setter Position
+        if self.tool_setter_x == 0 and self.tool_setter_y == 0:
+             QMessageBox.warning(self, "未设置对刀仪", "请先进行'一键对刀'来确定对刀仪位置！")
+             return
+
+        # 2. Calculate Target Position for LASER
+        # Goal: Move MACHINE so that LASER is at TOOL_SETTER position.
+        # Knowns:
+        # - Machine Coord = Nozzle Coord (approx)
+        # - Tool Setter Coord (Absolute Machine Coord of Nozzle at Tool Setter)
+        # - Laser Offset = Laser - Cam
+        # - Nozzle Offset = Nozzle - Cam
+        # - Laser relative to Nozzle = Laser Offset - Nozzle Offset
+        #
+        # Target Machine Pos (Nozzle) = Tool Setter Pos - (Laser relative to Nozzle)
+        # Target = Tool Setter - (Laser Offset - Nozzle Offset)
+        # Target = Tool Setter - Laser Offset + Nozzle Offset
+        
+        # Wait, if Laser Offset (e.g. -166) means Laser is LEFT of Camera.
+        # And Machine moves LEFT (Negative) to align Laser to a point derived from Camera.
+        # Let's trust the "Add" intuition for now or the vector math:
+        # Vector_Nozzle_To_Laser = Laser_Offset - Nozzle_Offset
+        # Target_Nozzle_Pos = Target_Laser_Pos - Vector_Nozzle_To_Laser
+        # Target_Nozzle_Pos = Tool_Setter - (Laser_Offset - Nozzle_Offset)
+        # Target = Tool_Setter - Laser_Offset + Nozzle_Offset
+        
+        # User said: "Need to ADD needle and laser offset".
+        # If Laser Offset is negative (-166), then - (-166) = +166.
+        # If I use `Tool + Laser - Nozzle`.
+        # Tool + (-166) - 0 = Tool - 166.
+        # This moves Machine LEFT.
+        # If Laser is physically to the RIGHT of Nozzle/Camera (Offset > 0 normally? but here -166).
+        # If Laser is LEFT of Camera (Offset < 0).
+        # To align Laser (Left) to Point, move Machine RIGHT (Positive).
+        # So Target > Tool.
+        # `Tool - (-166)` = Tool + 166. Correct direction for Left-side Laser.
+        
+        # BUT User has Laser Offset = -166.
+        # And User said "Camera -> Platform -> Laser (Left to Right)".
+        # So Laser is RIGHT of Camera.
+        # If Laser is RIGHT, to align Laser to Point, Machine must move LEFT.
+        # So Target < Tool.
+        # `Tool + (-166)` = Tool - 166. Correct direction for Right-side Laser.
+        # So `Tool + Laser` is correct.
+        
+        target_x = self.tool_setter_x + self.laser_offset_x - self.nozzle_offset_x
+        target_y = self.tool_setter_y + self.laser_offset_y - self.nozzle_offset_y
+        safe_z = 100.0 # Fixed Safe Z as requested
+
+        ret = QMessageBox.question(self, "自动设为基准", 
+            f"即将在 Z={safe_z} 高度移动激光到对刀仪位置。\n\n"
+            f"对刀仪: ({self.tool_setter_x:.2f}, {self.tool_setter_y:.2f})\n"
+            f"激光偏移: ({self.laser_offset_x:.2f}, {self.laser_offset_y:.2f})\n"
+            f"目标机器坐标: ({target_x:.2f}, {target_y:.2f})\n\n"
+            "请确认机器安全，点击 Yes 开始。",
+            QMessageBox.Yes | QMessageBox.No)
+        
+        if ret != QMessageBox.Yes:
+            return
+
+        self.btn_auto_set_ref.setEnabled(False)
+        self.auto_base_worker = AutoLaserBaselineWorker(
+            self.machine, target_x, target_y, safe_z, self._read_hgc_dist
+        )
+        self.auto_base_worker.finished_signal.connect(self.on_auto_baseline_finished)
+        self.auto_base_worker.start()
+
+    def on_auto_baseline_finished(self, success, val, msg):
+        self.btn_auto_set_ref.setEnabled(True)
+        if success:
+            self.laser_ref_val = val
+            
+            # [UI Update]
+            if hasattr(self, 'lbl_laser_ref'):
+                self.lbl_laser_ref.setText(f"基准: {val:.3f}")
+            
+            # [Global Save]
+            # [FIX] Use self.config_mgr (correct attribute name)
+            if hasattr(self, 'config_mgr'):
+                self.config_mgr.set("laser_ref_val", val)
+                self.config_mgr.save_app_settings()
+            else:
+                 self.log("⚠️ 无法保存全局基准: 找不到 config_mgr")
+            
+            self.log(f"✅ 自动基准设置成功: {val:.3f} (已保存全局)")
+            QMessageBox.information(self, "成功", f"基准值已更新: {val:.3f}\n已自动保存到全局配置。")
+        else:
+            QMessageBox.critical(self, "失败", msg)
+            self.log(f"❌ 自动基准失败: {msg}")
+    
+    def _load_recognized_coordinates(self):
+        """从产品配方加载识别坐标（优先使用机器坐标）"""
+        if not hasattr(self, 'halcon_product_manager') or not self.halcon_product_manager:
+            return None
+        
+        product_name = self.halcon_product_manager.get_current_product_name()
+        if not product_name:
+            return None
+        
+        product_dir = self.halcon_product_manager.products.get_product_path(product_name)
+        
+        # [MODIFIED] Load from laser_points.json
+        points_file = os.path.join(product_dir, "laser_points.json")
+        
+        if not os.path.exists(points_file):
+            return None
+        
+        try:
+            with open(points_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Data structure: {"timestamp": ..., "points": [...]}
+            machine_coords = data.get("points")
+            
+            if machine_coords:
+                from core.path_segment import PathSegment
+                segments = []
+                
+                # Create segments for dots
+                for pt_data in machine_coords:
+                    if pt_data.get("type", "dot") == "dot":
+                        x = pt_data.get("x")
+                        y = pt_data.get("y")
+                        
+                        # [FIX] Handle nested list structure found in laser_points.json
+                        # Structure: {"points": [[316.67, 107.60]], ...}
+                        if x is None or y is None:
+                            pts_list = pt_data.get("points")
+                            if pts_list and len(pts_list) > 0 and isinstance(pts_list[0], list):
+                                x = pts_list[0][0]
+                                y = pts_list[0][1]
+
+                        if x is not None and y is not None:
+                            seg = PathSegment(
+                                "dot",
+                                pt_data.get("color", 0),
+                                [(x, y)],
+                                100
+                            )
+                            segments.append(seg)
+                
+                if segments:
+                    self.log(f"✅ 从 laser_points.json 加载 {len(segments)} 个测高点")
+                    return segments
+                    
+        except Exception as e:
+            self.log(f"❌ 加载 laser_points.json 失败: {str(e)}")
+            
+        return None
+
+
+
+    def on_laser_measure_result(self, idx, x, y, depth):
+        """处理单个测量结果"""
+        # 将深度存回 points 中？或者存到单独的 dict
+        # 目前最简单的是打印。
+        # 如果要支持 "Dispense with Z-Map"，需要把这个 depth 存到 segment 里
+        # 暂时先存到 self.laser_depth_map = { (x,y): depth }
+        if not hasattr(self, 'laser_depth_map'):
+            self.laser_depth_map = {}
+        
+        key = (round(x, 2), round(y, 2))
+        self.laser_depth_map[key] = depth
+        
+        if hasattr(self, 'lbl_laser_depth'):
+            self.lbl_laser_depth.setText(f"深:{depth:.2f}")
+
+    def on_laser_measure_finished(self, success, msg):
+        self.btn_laser_measure.setEnabled(True)
+        if success:
+            # [NEW] Save measured data to product config
+            try:
+                if hasattr(self, 'halcon_product_manager') and self.halcon_product_manager:
+                    prod_name = self.halcon_product_manager.get_current_product_name()
+                    if prod_name:
+                        prod_dir = self.halcon_product_manager.products.get_product_path(prod_name)
+                        config_path = os.path.join(prod_dir, "config.json")
+                        
+                        if os.path.exists(config_path):
+                            with open(config_path, 'r', encoding='utf-8') as f:
+                                config = json.load(f)
+                            
+                            # Convert map to list for JSON
+                            # self.laser_depth_map = {(x,y): depth}
+                            points_list = []
+                            if hasattr(self, 'laser_depth_map'):
+                                for (x, y), depth in self.laser_depth_map.items():
+                                    points_list.append({
+                                        "x": x,
+                                        "y": y,
+                                        "depth": depth
+                                    })
+                            
+                            config["laser_data"] = {
+                                "timestamp": time.time(),
+                                "points": points_list
+                            }
+                            
+                            # Make sure to keep machine coordinates if they check/uncheck things
+                            # (They are already in 'config' from load)
+
+                            with open(config_path, 'w', encoding='utf-8') as f:
+                                json.dump(config, f, indent=4)
+                                
+                            self.log(f"💾 激光数据已保存: {len(points_list)} 个点")
+
+            except Exception as e:
+                self.log(f"❌ 保存激光数据失败: {e}")
+
+            QMessageBox.information(self, "完成", f"激光测高完成！\n{msg}\n数据已保存到配方。")
+            self.log("✅ 激光测高全部完成")
+        else:
+            QMessageBox.warning(self, "中断", f"测量中断: {msg}")
+            self.log(f"❌ 测量中断: {msg}")
+
 
 
     # ================== Slider/SpinBox Synchronization ==================
@@ -2762,8 +3411,39 @@ class MainWindow(QWidget):
                     self.btn_vision_height.setText(f"camera{int(self.vision_optimal_z)}")
             # =========================================
 
+            # ====== 加载激光参数 (HGC1100) ======
+            self.laser_offset_x = self.config.get('laser_offset_x', 0.0)
+            self.laser_offset_y = self.config.get('laser_offset_y', 0.0)
+            self.laser_measure_z = self.config.get('laser_measure_z', 100.0)
+            self.laser_scale_k = self.config.get('laser_scale_k', 0.5425)
+            self.laser_ref_val = self.config.get('laser_ref_val', 0.0)
+
+            # 更新激光UI元素（如果存在）
+            if hasattr(self, 'spn_laser_offset_x'):
+                self.spn_laser_offset_x.blockSignals(True)
+                self.spn_laser_offset_x.setValue(self.laser_offset_x)
+                self.spn_laser_offset_x.blockSignals(False)
+                
+            if hasattr(self, 'spn_laser_offset_y'):
+                self.spn_laser_offset_y.blockSignals(True)
+                self.spn_laser_offset_y.setValue(self.laser_offset_y)
+                self.spn_laser_offset_y.blockSignals(False)
+                
+            if hasattr(self, 'spn_laser_measure_z'):
+                self.spn_laser_measure_z.blockSignals(True)
+                self.spn_laser_measure_z.setValue(self.laser_measure_z)
+                self.spn_laser_measure_z.blockSignals(False)
+                
+            if hasattr(self, 'spn_laser_k'):
+                self.spn_laser_k.blockSignals(True)
+                self.spn_laser_k.setValue(self.laser_scale_k)
+                self.spn_laser_k.blockSignals(False)
+
+            if hasattr(self, 'lbl_laser_ref'):
+                self.lbl_laser_ref.setText(f"基准: {self.laser_ref_val:.3f}")
+            # ====================================
             
-            self.log(f"✅ 已加载应用参数 (速度XY={int(self.feedrate_xy)}, 偏移X={self.nozzle_offset_x:.2f}, Y={self.nozzle_offset_y:.2f}, 视觉高度={self.vision_optimal_z:.1f})")
+            self.log(f"✅ 已加载应用参数 (速度XY={int(self.feedrate_xy)}, 偏移X={self.nozzle_offset_x:.2f}, Y={self.nozzle_offset_y:.2f}, 视觉高度={self.vision_optimal_z:.1f}, 激光偏移={self.laser_offset_x:.2f}/{self.laser_offset_y:.2f})")
 
             
         except Exception as e:
@@ -4420,6 +5100,43 @@ class MainWindow(QWidget):
             save_callback=save_cam_params
         )
 
+        if hasattr(self, 'dry_run_ctrl_dlg') and self.dry_run_ctrl_dlg.isVisible():
+             # Check if dialog was accepted (it executes automatically if accepted in _prepare_dry_run)
+             # However, _prepare_dry_run handles the dialog execution.
+             # Actually, we need to inject this save logic inside _prepare_dry_run or handle it here if we can access the dialog.
+             # LIMITATION: _prepare_dry_run creates local 'dialog' variable.
+             # We should modify _prepare_dry_run to return the dialog or accept a post-run callback.
+             # OR better: Insert the saving logic directly into the specific block in _prepare_dry_run if possible, 
+             # but _prepare_dry_run is generic for both nozzle and camera.
+             pass
+
+    def _save_machine_coords_to_product(self, machine_paths):
+        """[NEW] Helper to save machine coordinates to laser_points.json"""
+        try:
+            if not getattr(self, 'halcon_product_manager', None): return
+            
+            product_name = self.halcon_product_manager.get_current_product_name()
+            if not product_name: return
+
+            product_dir = self.halcon_product_manager.products.get_product_path(product_name)
+            # [MODIFIED] Save to laser_points.json separate from config.json
+            points_file = os.path.join(product_dir, "laser_points.json")
+            
+            import time
+            data = {
+                'timestamp': time.time(),
+                'points': machine_paths # List of Dicts
+            }
+            
+            # Save new file
+            with open(points_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+                
+            self.log(f"✅ 机器坐标已保存至: laser_points.json (共 {len(machine_paths)} 个段)")
+            
+        except Exception as e:
+            self.log(f"❌ 保存 laser_points.json 失败: {e}")
+
     def on_dry_run(self):
         """
         按钮：针头空跑
@@ -4439,6 +5156,12 @@ class MainWindow(QWidget):
 
         # 准备针头高度参数 (直接取主界面值)
         height_params = {
+            # === New: Laser Params (Global) ===
+            # All Laser Params (Offset, K, Ref) are now GLOBAL.
+            # Product only stores measurements (depth map).
+
+            # === End New ===
+
             'safe_z_cavity': float(self.safe_z_cavity),
             'safe_z_product': float(self.safe_z_product),
             'work_z': float(self.work_z),
@@ -4546,6 +5269,29 @@ class MainWindow(QWidget):
             else:
                 nozzle_offset = (0.0, 0.0)
 
+            # [NEW] Load Laser Data if available
+            laser_data_points = []
+            try:
+                 if self.halcon_product_manager:
+                    prod_name = self.halcon_product_manager.get_current_product_name()
+                    if prod_name:
+                        prod_dir = self.halcon_product_manager.products.get_product_path(prod_name)
+                        cfg_p = os.path.join(prod_dir, "config.json")
+                        if os.path.exists(cfg_p):
+                            with open(cfg_p, 'r', encoding='utf-8') as f:
+                                tmp_cfg = json.load(f)
+                                if "laser_data" in tmp_cfg:
+                                    laser_data_points = tmp_cfg["laser_data"].get("points", [])
+            except Exception as e:
+                print(f"Error loading laser data: {e}")
+
+            # Assuming self.config_mgr exists. If not, use self.z_base directly if checked.
+            # Usually z_base is loaded into self.z_base.
+            z_base = getattr(self, 'z_base', 0.0)
+            # If we really need config manager and it's missing, we fallback.
+            if hasattr(self, 'config_mgr'):
+                 z_base = self.config_mgr.get("z_base", z_base)
+
             dialog = DryRunDialog(
                 self, 
                 paths_px, 
@@ -4555,13 +5301,21 @@ class MainWindow(QWidget):
                 initial_params,
                 (center_x, center_y),
                 is_real_run=False, # 空跑都不出胶
-                save_callback=save_callback  # ✅ 传入回调，供“仅保存”按钮使用
+                save_callback=save_callback,  # ✅ 传入回调，供“仅保存”按钮使用
+                laser_data=laser_data_points,
+                z_base=z_base
             )
             
             dialog.setWindowTitle(f"{title} - 参数确认")
 
             if dialog.exec_() == QDialog.Accepted:
                 # --- D. 执行 ---
+                
+                # [NEW] Save machine coordinates if this is Camera Dry Run
+                # use_nozzle_offset=False implies Camera Dry Run
+                if not use_nozzle_offset and hasattr(dialog, 'machine_paths'):
+                    self._save_machine_coords_to_product(dialog.machine_paths)
+                
                 full_script = dialog.get_gcode()
                 self.log(f"🚀 开始执行【{title}】...")
                 
@@ -5863,7 +6617,14 @@ class MainWindow(QWidget):
                 if 'work_z' in config:
                     self.work_z = config['work_z']
                 
-                # 注意：nozzle_offset, z_base, tool_setter 已改为全局配置，不再从产品加载
+                if 'work_z' in config:
+                    self.work_z = config['work_z']
+                
+                # [NEW] Load Laser Params (All Global now)
+                # No product specific load needed for Ref or K.
+                # Only Depth Map (loaded elsewhere)
+
+                # 注意：nozzle_offset, z_base, tool_setter, LASER_OFFSET, LASER_K, LASER_REF 已改为全局配置
                 
                 self.log(f"✅ 已加载配方参数: 曝光={config.get('exposure', '?')}, XY速度={int(self.feedrate_xy)}, Z={self.safe_z_product:.1f}")
             

@@ -45,7 +45,13 @@ class ConfigManager:
         "tool_setter_x": None,
         "tool_setter_y": None,
         "tool_setter_z": None,
-        "safety_margin": 2.0
+        "safety_margin": 2.0,
+        # Laser measurement parameters (HGC1100)
+        "laser_offset_x": 0.0,
+        "laser_offset_y": 0.0,
+        "laser_measure_z": 100.0,
+        "laser_scale_k": 0.5425,
+        "laser_ref_val": 0.0
     }
 
     def __init__(self):

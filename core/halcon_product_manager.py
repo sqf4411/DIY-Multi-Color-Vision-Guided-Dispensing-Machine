@@ -461,6 +461,11 @@ class HalconProductManager:
             
             if mold_segments:
                 found_paths.append(mold_segments)
+                
+                # ✅ 新增：保存识别结果到产品配方
+                self._save_recognized_coordinates(
+                    mold_segments, cx, cy, angle, score
+                )
             
             # 绘制分数
             text = f"S:{score:.2f}"
@@ -637,9 +642,51 @@ class HalconProductManager:
         """获取当前产品名称"""
         return self.current_product
     
+    
     def unload_product(self):
         """卸载当前产品"""
         self.current_product = None
         self.current_paths = {'dots': [], 'polys': []}
         self.model_ref_row = 0
         self.model_ref_col = 0
+    
+    def _save_recognized_coordinates(self, segments, cx, cy, angle, score):
+        """保存识别后的坐标到产品配方"""
+        if not self.current_product:
+            return  # 没有加载产品
+        
+        import time
+        
+        # 准备数据
+        recognized_data = {
+            "segments": [seg.to_dict() for seg in segments],
+            "timestamp": time.time(),
+            "transform_data": {
+                "cx": float(cx),
+                "cy": float(cy),
+                "angle": float(angle),
+                "score": float(score)
+            }
+        }
+        
+        # 读取现有配置
+        product_dir = self.products.get_product_path(self.current_product)
+        config_path = os.path.join(product_dir, "config.json")
+        
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            else:
+                config = {}
+            
+            # 更新配置
+            config["recognized_coordinates"] = recognized_data
+            
+            # 保存
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            
+            print(f"[HalconProductManager] ✅ 已保存识别坐标到 {self.current_product} ({len(segments)}个段)")
+        except Exception as e:
+            print(f"[HalconProductManager] ❌ 保存识别坐标失败: {e}")

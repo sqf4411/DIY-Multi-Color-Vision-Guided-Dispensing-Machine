@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
 import numpy as np
 
 class DryRunDialog(QDialog):
-    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None):
+    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None, laser_data=None, z_base=0.0):
         super().__init__(parent)
         self.save_callback = save_callback
         self.is_real_run = is_real_run
@@ -18,6 +18,10 @@ class DryRunDialog(QDialog):
         self.origin_x, self.origin_y, self.origin_z = machine_origin
         self.nozzle_offset_x, self.nozzle_offset_y = nozzle_offset
         self.center_x, self.center_y = img_center
+        
+        # [NEW] Laser Data
+        self.laser_data = laser_data if laser_data else []
+        self.z_base = z_base
         
         # Parse products structure
         self.products = []
@@ -44,6 +48,7 @@ class DryRunDialog(QDialog):
         self.generate_gcode()
 
     def init_ui(self):
+        self.machine_paths = [] # [NEW] Store calculated machine coordinates
         layout = QVBoxLayout()
         
         # 1. 参数设置区
@@ -73,6 +78,17 @@ class DryRunDialog(QDialog):
         self.spn_work_z.setValue(self.work_z)
         self.spn_work_z.valueChanged.connect(self.on_param_changed)
         param_layout.addWidget(self.spn_work_z, 0, 3)
+
+        # [NEW] Laser Z Option
+        self.chk_use_laser = QCheckBox(f"使用激光测量高度 (基准Z={self.z_base:.1f} + 测量 + 工作Z)")
+        if not self.laser_data:
+             self.chk_use_laser.setText("使用激光测量高度 (无数据)")
+             self.chk_use_laser.setEnabled(False)
+        else:
+             self.chk_use_laser.setChecked(True)
+        self.chk_use_laser.stateChanged.connect(self.on_param_changed)
+        # Occupy a full row
+        param_layout.addWidget(self.chk_use_laser, 1, 0, 1, 4)
 
         # Speed XY
         param_layout.addWidget(QLabel("XY 速度 (mm/min):"), 2, 0)
@@ -187,6 +203,7 @@ class DryRunDialog(QDialog):
         self.generate_gcode()
 
     def generate_gcode(self):
+        self.machine_paths = [] # [NEW] Reset paths
         gcode_lines = []
         gcode_lines.append("G90")
         # Start with Product Safe Z
@@ -238,20 +255,46 @@ class DryRunDialog(QDialog):
 
                     if len(path_machine) == 0: continue
 
+                    # [NEW] Collect machine coordinates for saving
+                    # Determine type based on length or original segment type if available
+                    seg_type = getattr(p_px, 'type', 'line' if len(path_machine) > 1 else 'dot')
+                    seg_color = getattr(p_px, 'color', color_idx)
+                    
+                    self.machine_paths.append({
+                        'type': seg_type,
+                        'color': seg_color,
+                        'points': path_machine.tolist() # [[x,y], [x,y]...]
+                    })
+
                     gcode_lines.append(f";   Segment {seg_idx + 1}")
 
                     # [TAG REMOVED] Logic moved to dispense block
 
                     # 2. Move to Start Point
                     start_x, start_y = path_machine[0]
+                    # Apply offset
                     start_x += self.nozzle_offset_x
                     start_y += self.nozzle_offset_y
 
-                    # Move XY first (at current Z, which should be safe)
+                    # Move XY first
                     gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{self.speed_xy}")
                     
                     # 3. Down to Work Z
-                    gcode_lines.append(f"G0 Z{self.work_z:.2f} F{self.speed_z}")
+                    calc_z = self.work_z
+                    
+                    use_laser = getattr(self, 'chk_use_laser', None) and self.chk_use_laser.isChecked()
+                    
+                    # [NEW] Three-Dimensional Dispensing
+                    if use_laser and seg_type == 'dot':
+                       # Match using Camera Machine Coords (abs_x[0])
+                       # Laser Measured stored using Machine Pos where Camera seen it
+                       depth = self.find_nearest_depth(abs_x[0], abs_y[0])
+                       if depth != 0.0:
+                           # Formula: Z_Target = Z_Base + Depth + Gap(WorkZ)
+                           calc_z = self.z_base + depth + self.work_z
+                           gcode_lines.append(f"; [3D] Depth={depth:.3f} -> Z={calc_z:.2f}")
+
+                    gcode_lines.append(f"G0 Z{calc_z:.2f} F{self.speed_z}")
 
                     # Check if it is a Dot (1 point) or Line (>1 points)
                     # Prepare Valve Commands

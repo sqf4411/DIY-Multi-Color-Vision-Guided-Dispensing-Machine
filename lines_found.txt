@@ -1,0 +1,14 @@
+DRY_RUN_BTN_FOUND: Line 976: # ====== ✅ 新增：相机空跑专用高度 (独立于针头) ======
+DRY_RUN_BTN_FOUND: Line 1007: # ====== ✅ 新增：相机空跑专用高度参数 ======
+DRY_RUN_BTN_FOUND: Line 1322: self.btn_virtual = QPushButton("相机空跑")
+LASER_MEASURE_FOUND: Line 2074: self.btn_laser_measure.clicked.connect(self.on_btn_laser_measure_clicked)
+LASER_MEASURE_FOUND: Line 2140: def on_btn_laser_measure_clicked(self):
+DRY_RUN_BTN_FOUND: Line 2163: f"建议先运行'相机空跑'或Halcon识别，\n"
+DRY_RUN_BTN_FOUND: Line 2237: # 有机器坐标（来自相机空跑）
+DRY_RUN_BTN_FOUND: Line 2275: self.log(f"⚠️ 使用图像坐标: {len(segments)}个段, 匹配分数={score:.2f}, {age/60:.1f}分钟前识别 (建议运行相机空跑)")
+DRY_RUN_BTN_FOUND: Line 3139: # Load Camera Dry Run Params (相机空跑参数)
+DRY_RUN_BTN_FOUND: Line 4829: 按钮：相机空跑 (原虚拟跑)
+DRY_RUN_BTN_FOUND: Line 4880: title="相机空跑 (Camera Dry Run)",
+DRY_RUN_DEF: Line 4885: def on_dry_run(self):
+DRY_RUN_DEF: Line 5054: def on_dry_run_finished(self, success, msg):
+REAL_RUN_DEF: Line 5082: def on_real_run(self):

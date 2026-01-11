@@ -510,7 +510,7 @@ class LaserMeasureWorker(QThread):
     result_signal = pyqtSignal(int, float, float, float) 
     finished_signal = pyqtSignal(bool, str) # success, message
 
-    def __init__(self, machine_client, points, measure_z, off_x, off_y, k, ref_val):
+    def __init__(self, machine_client, points, measure_z, off_x, off_y, k, ref_val, z_base=0.0):
         super().__init__()
         self.machine = machine_client
         self.points = points
@@ -519,6 +519,7 @@ class LaserMeasureWorker(QThread):
         self.off_y = off_y
         self.k = k
         self.ref_val = ref_val
+        self.z_base = z_base # [NEW] For displaying absolute Z
         self._is_stopped = False
         self._is_paused = False
 
@@ -608,7 +609,8 @@ class LaserMeasureWorker(QThread):
                 
                 if samples:
                     avg_depth = sum(samples) / len(samples)
-                    self.log_signal.emit(f"✅ 测得深度: {avg_depth:.3f} mm")
+                    abs_z = self.z_base + avg_depth
+                    self.log_signal.emit(f"✅ 测得深度: {avg_depth:.3f} mm (Z={abs_z:.3f})")
                     # 发送结果信号：index, original_x, original_y, measured_depth
                     self.result_signal.emit(i, pt_x, pt_y, avg_depth)
                 else:
@@ -2271,7 +2273,8 @@ class MainWindow(QWidget):
             self.laser_offset_x,
             self.laser_offset_y,
             self.laser_scale_k,
-            self.laser_ref_val
+            self.laser_ref_val,
+            self.z_base
         )
         self.laser_worker.log_signal.connect(self.log)
         self.laser_worker.result_signal.connect(self.on_laser_measure_result)
@@ -2470,7 +2473,8 @@ class MainWindow(QWidget):
         self.laser_depth_map[key] = depth
         
         if hasattr(self, 'lbl_laser_depth'):
-            self.lbl_laser_depth.setText(f"深:{depth:.2f}")
+            abs_z = self.z_base + depth
+            self.lbl_laser_depth.setText(f"Z:{abs_z:.2f} (深:{depth:.2f})")
 
     def on_laser_measure_finished(self, success, msg):
         self.btn_laser_measure.setEnabled(True)

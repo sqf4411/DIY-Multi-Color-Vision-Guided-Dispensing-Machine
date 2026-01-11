@@ -25,7 +25,7 @@
     "laser_offset_y": 20.3,
     "laser_measure_z": 100.0,
     "laser_scale_k": 0.5425,
-    "laser_ref_val": 44.803000000000004,
+    "laser_ref_val": 44.81,
     "jog_step_mm": 1.0,
     "calib_vision_pts": [
         [

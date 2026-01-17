@@ -1,8 +1,8 @@
 {
   "vision_offset_x": 0.0,
   "vision_offset_y": 0.0,
-  "exposure": 3.7,
-  "gain": 5.7,
+  "exposure": 2.0,
+  "gain": 5.4,
   "gamma": 1.9,
   "feedrate_xy": 1000,
   "feedrate_z": 300,
@@ -12,7 +12,7 @@
   "safe_z_product": 70.0,
   "work_z": 100.0,
   "laser_data": {
-    "timestamp": 1768131684.9304993,
+    "timestamp": 1768208469.3636749,
     "points": [
       {
         "x": 316.67,

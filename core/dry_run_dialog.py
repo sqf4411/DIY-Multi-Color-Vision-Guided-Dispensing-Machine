@@ -202,6 +202,56 @@ class DryRunDialog(QDialog):
         self.line_speed_xy = self.spn_line_speed.value()
         self.generate_gcode()
 
+    def find_nearest_depth(self, x, y):
+        """
+        查找最近的激光测高点深度
+        :param x: 机器坐标 X
+        :param y: 机器坐标 Y
+        :return: depth (mm)
+        """
+        if not self.laser_data:
+            return 0.0
+            
+        points = []
+        # Handle 1: laser_data might be a dict with key "points" (loaded from config JSON)
+        if isinstance(self.laser_data, dict):
+            points = self.laser_data.get('points', [])
+        # Handle 2: laser_data might be a list directly
+        elif isinstance(self.laser_data, list):
+            points = self.laser_data
+            
+        if not points:
+            return 0.0
+            
+        min_dist = float('inf')
+        nearest_depth = 0.0
+        found = False
+
+        for pt in points:
+            # Support both dict item and possible tuple (legacy)
+            if isinstance(pt, dict):
+                px = pt.get('x')
+                py = pt.get('y')
+                d = pt.get('depth', 0.0)
+            else:
+                continue
+
+            if px is None or py is None:
+                continue
+                
+            dist = ((px - x)**2 + (py - y)**2)**0.5
+            
+            # Simple nearest neighbor
+            if dist < min_dist:
+                min_dist = dist
+                nearest_depth = d
+                found = True
+        
+        # Optional: Add a max distance threshold (e.g. 5mm) if needed
+        # if min_dist > 5.0: return 0.0
+        
+        return nearest_depth if found else 0.0
+
     def generate_gcode(self):
         self.machine_paths = [] # [NEW] Reset paths
         gcode_lines = []

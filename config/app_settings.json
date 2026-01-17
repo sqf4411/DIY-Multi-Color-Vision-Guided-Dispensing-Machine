@@ -1,9 +1,9 @@
 {
-    "feedrate_xy": 1000,
-    "feedrate_z": 300,
+    "feedrate_xy": 1077.0,
+    "feedrate_z": 300.0,
     "accel": 452.0,
     "safe_z_cavity": 59.0,
-    "safe_z_product": 100.0,
+    "safe_z_product": 70.0,
     "work_z": 100.0,
     "jog_step": 1.0,
     "z_base": 52.599999999999966,

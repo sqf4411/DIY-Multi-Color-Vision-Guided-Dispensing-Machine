@@ -1,9 +1,9 @@
 {
   "vision_offset_x": 0.0,
   "vision_offset_y": 0.0,
-  "exposure": 5.2,
-  "gain": 2.5,
-  "gamma": 3.1,
+  "exposure": 6.4,
+  "gain": 8.8,
+  "gamma": 2.2,
   "feedrate_xy": 1000,
   "feedrate_z": 300,
   "accel": 452.0,
@@ -12,7 +12,7 @@
   "safe_z_product": 70.0,
   "work_z": 100.0,
   "laser_data": {
-    "timestamp": 1768639127.876082,
+    "timestamp": 1768641845.5937738,
     "points": [
       {
         "x": 316.67,
@@ -178,8 +178,8 @@
     "avg_depth": 3.5604838709677464,
     "avg_z": 56.16048387096771
   },
-  "model_row": 641.5,
-  "model_col": 1176.5,
+  "model_row": 673.5,
+  "model_col": 1180.0,
   "product_name": "006",
   "model_file": "006.shm",
   "valve_prefeed_time": 0.1,

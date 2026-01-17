@@ -1,6 +1,6 @@
 {
-    "feedrate_xy": 1077.0,
-    "feedrate_z": 300.0,
+    "feedrate_xy": 1000,
+    "feedrate_z": 300,
     "accel": 452.0,
     "safe_z_cavity": 59.0,
     "safe_z_product": 70.0,

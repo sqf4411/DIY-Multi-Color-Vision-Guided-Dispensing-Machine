@@ -70,10 +70,10 @@
 <c>* Find Scaled Shape Model (Robust to Scale/Height variations)</c>
 <c>* Find Scaled Shape Model (Robust to Scale/Height variations)</c>
 <c>* Optimization: Removed 'emphasize' to match training image characteristics (raw vs raw)</c>
-<c>* MinScore=0.05 (Absolute floor), NumMatches=4, MaxOverlap=0.5</c>
-<c>* Scale range: 0.9 to 1.1</c>
-<c>* Greediness: 0.7 (Faster search, 0.3 was too slow)</c>
-<l>find_scaled_shape_model (Image, ModelID, rad(0), rad(360), 0.9, 1.1, 0.05, 4, 0.5, 'least_squares', 0, 0.7, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
+<c>* MinScore=0.05 (🔙 Ultra-low), NumMatches=4, MaxOverlap=0.5</c>
+<c>* Scale range: 0.9 to 1.1, NumLevels=0 (🔙 No pyramid - fastest)</c>
+<c>* Greediness: 0.9 (🔙 Maximum speed)</c>
+<l>find_scaled_shape_model (Image, ModelID, rad(0), rad(360), 0.9, 1.1, 0.05, 4, 0.5, 'least_squares', 0, 0.9, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
 <c></c>
 <c>* Cleanup (Halcon handles memory usually, strictly we should clear)</c>
 <l>clear_shape_model (ModelID)</l>

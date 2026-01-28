@@ -226,9 +226,9 @@ class HalconManager:
                 6.29,                        # AngleExtent (360°)
                 'auto',                      # AngleStep
                 'auto',                      # Optimization
-                'ignore_global_polarity',    # Metric - 忽略全局明暗差异！
+                'use_polarity',              # Metric - 🔙 回退到最稳定的基础模式
                 'auto',                      # Contrast
-                12                           # MinContrast - 加大对比度 (12) 提取硬边缘，解决偏移问题
+                20                           # MinContrast - 🔙 回退到默认20（最快速度）
             )
             
             # 4. Get Model Origin

@@ -1,0 +1,31 @@
+{
+  "vision_offset_x": 0.0,
+  "vision_offset_y": 0.0,
+  "exposure": 2.6,
+  "gain": 5.4,
+  "gamma": 2.0,
+  "feedrate_xy": 1000,
+  "feedrate_z": 300,
+  "accel": 452.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 59.0,
+  "safe_z_product": 70.0,
+  "work_z": 100.0,
+  "nozzle_offset_x": -96.9,
+  "nozzle_offset_y": -5.199999999999989,
+  "z_base": 52.599999999999966,
+  "model_file": "1_2_MLA.shm",
+  "model_row": 699.0,
+  "model_col": 1182.0,
+  "product_name": "1_2_MLA",
+  "roi_in_reference": {
+    "x": 929,
+    "y": 445,
+    "width": 506,
+    "height": 508
+  },
+  "valve_prefeed_time": 0.1,
+  "valve_a_dispense_time": 0.77,
+  "valve_b_dispense_time": 2.0,
+  "line_speed_xy": 800
+}

@@ -228,7 +228,7 @@ class HalconManager:
                 'auto',                      # Optimization
                 'ignore_global_polarity',    # Metric - 忽略全局明暗差异！
                 'auto',                      # Contrast
-                20                           # MinContrast - 降低最小对比度
+                1                            # MinContrast - 极致降低 (1) 以捕捉最微弱细节
             )
             
             # 4. Get Model Origin

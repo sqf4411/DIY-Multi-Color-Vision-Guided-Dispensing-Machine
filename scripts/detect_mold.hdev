@@ -68,13 +68,12 @@
 <l>endif</l>
 <c></c>
 <c>* Find Scaled Shape Model (Robust to Scale/Height variations)</c>
-<c>* [Optimization] Enhance image contrast before matching to help with dark areas!</c>
-<l>emphasize (Image, ImageEnhanced, 7, 7, 1)</l>
-<c></c>
-<c>* MinScore=0.1 (降低阈值以检测暗区产品), NumMatches=0 (All), MaxOverlap=0.5</c>
+<c>* Find Scaled Shape Model (Robust to Scale/Height variations)</c>
+<c>* Optimization: Removed 'emphasize' to match training image characteristics (raw vs raw)</c>
+<c>* MinScore=0.2 (Lowered to catch all 4), NumMatches=4 (Exactly 4 slots), MaxOverlap=0.5</c>
 <c>* Scale range: 0.9 to 1.1 (Allows +/- 10% height variation)</c>
-<c>* Greediness: 0.8 (更宽容，更快)</c>
-<l>find_scaled_shape_model (ImageEnhanced, ModelID, rad(0), rad(360), 0.9, 1.1, 0.1, 0, 0.5, 'least_squares', 0, 0.8, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
+<c>* Greediness: 0.3 (Very thorough search to avoid missing targets)</c>
+<l>find_scaled_shape_model (Image, ModelID, rad(0), rad(360), 0.9, 1.1, 0.2, 4, 0.5, 'least_squares', 0, 0.3, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
 <c></c>
 <c>* Cleanup (Halcon handles memory usually, strictly we should clear)</c>
 <l>clear_shape_model (ModelID)</l>

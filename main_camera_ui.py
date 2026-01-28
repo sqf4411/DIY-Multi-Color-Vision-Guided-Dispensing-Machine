@@ -5977,111 +5977,22 @@ class MainWindow(QWidget):
         Returns: (paths_pixels, debug_img_bgr)
         """
         if self.chk_use_halcon.isChecked():
-            # Use Halcon
-            res = self.halcon_manager.process_image(gray_img)
-            debug_img = cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
-            
-            found_paths = []
-            
-            # ROI Center from Halcon Script (Dynamic)
-            ref_row, ref_col = self.model_ref_row, self.model_ref_col
-            # Fallback if 0 (invalid)
-            if ref_row == 0 and ref_col == 0:
-                 ref_row, ref_col = 651.6765, 1113.3245
-            
-            if res and "matches" in res:
-                for match in res["matches"]:
-
-                    # Halcon: Row=Y, Col=X
-                    cx, cy = match['col'], match['row']
-                    score = match['score']
-                    angle = match['angle'] # Radians
+            # [Refactor] Use HalconProductManager for all processing
+            # This ensures ROI offsets and new path logic are used.
+            if self.halcon_product_manager:
+                res = self.halcon_product_manager.process_image(gray_img)
+                
+                # Extract results
+                found_paths = res.get('found_paths', [])
+                debug_img = res.get('debug_img')
+                
+                if debug_img is None:
+                    debug_img = cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
                     
-                    # 1. Draw Match Center
-                    cx_i, cy_i = int(cx), int(cy)
-                    cv2.drawMarker(debug_img, (cx_i, cy_i), (0, 255, 0), cv2.MARKER_CROSS, 40, 3)
-
-                    # 2. Transform Golden Path
-                    if not hasattr(self, 'halcon_path_template') or self.halcon_path_template is None:
-                        self._compute_halcon_template()
-
-                    mold_segments = []
-                    
-                    if hasattr(self, 'halcon_path_template') and self.halcon_path_template is not None:
-                         try:
-                            path_segments = self.halcon_path_template
-                            
-                            # 3. Transform & Draw Each Segment
-                            for item in path_segments:
-                                seg_pts = None
-                                is_obj = False
-                                
-                                # Compatibility: Handle both PathSegment object and raw numpy array
-                                if hasattr(item, 'points'): # PathSegment
-                                    # Use cached numpy array if available (from _compute), else convert
-                                    if hasattr(item, 'points_np'):
-                                        pts = item.points_np
-                                    else:
-                                        pts = np.array(item.points, dtype=np.float32)
-                                    is_obj = True
-                                else:
-                                    pts = item # Expecting numpy array
-                                
-                                if pts is None or len(pts) == 0: continue
-
-                                # pts is already Centered relative to Halcon ROI Center (Reference Point)
-                                
-                                # b. Rotate
-                                # Matrix: [[cos, -sin], [sin, cos]]
-                                sys_ang = angle
-                                cos_a = np.cos(sys_ang)
-                                sin_a = np.sin(sys_ang)
-                                
-                                x_new = pts[:, 0] * cos_a + pts[:, 1] * sin_a
-                                y_new = -pts[:, 0] * sin_a + pts[:, 1] * cos_a
-                                
-                                pts_rotated = np.stack([x_new, y_new], axis=1)
-                                
-                                # c. Translate to machine center (Halcon Match)
-                                pts_transformed = pts_rotated + np.array([cx, cy])
-                                
-                                # ====== ✅ Apply Vision Offset (Correction) ======
-                                if hasattr(self, 'vision_offset_x'):
-                                     pts_transformed[:, 0] += self.vision_offset_x
-                                if hasattr(self, 'vision_offset_y'):
-                                     pts_transformed[:, 1] += self.vision_offset_y
-                                # ===============================================
-                                
-                                # d. Draw (Magenta)
-                                pts_draw = pts_transformed.astype(np.int32)
-                                is_closed = False 
-                                if len(pts_draw) == 1:
-                                     cv2.circle(debug_img, tuple(pts_draw[0]), 4, (255, 0, 255), -1)
-                                else:
-                                     cv2.polylines(debug_img, [pts_draw], is_closed, (255, 0, 255), 4, cv2.LINE_AA)
-                                
-                                # Append to results
-                                if is_obj:
-                                    # Create NEW PathSegment with FINAL coordinates
-                                    # This ensures G-code generator receives Absolute Pixels + Color Info
-                                    from core.path_segment import PathSegment
-                                    final_seg = PathSegment(item.type, item.color, pts_transformed.tolist(), item.dwell_ms)
-                                    mold_segments.append(final_seg)
-                            
-                         except Exception as e:
-                            print(f"[ERROR] Path draw failed: {e}")
-                            
-                    else:
-                         mold_segments.append(np.array([[cx, cy]]))
-                    
-                    if mold_segments:
-                        found_paths.append(mold_segments)
-                    
-                    # Draw Score
-                    text = f"S:{score:.2f}"
-                    cv2.putText(debug_img, text, (cx_i + 25, cy_i), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-                    
-            return found_paths, debug_img
+                return found_paths, debug_img
+            else:
+                print("[MainUI] Error: halcon_product_manager NOT initialized!")
+                return [], cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
         else:
             # Use Legacy OpenCV
             from core.mold_detector import get_paths_and_image

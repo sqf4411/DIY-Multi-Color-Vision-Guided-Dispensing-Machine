@@ -233,6 +233,9 @@ class HalconProductManager:
             self.vision_offset_x = config.get('vision_offset_x', 0.0)
             self.vision_offset_y = config.get('vision_offset_y', 0.0)
             
+            # ⭐ 加载 ROI 偏移信息（用于路径坐标转换）
+            self.roi_in_reference = config.get('roi_in_reference', None)
+            
             # 4.5 ⭐ 应用阀门参数到全局配置
             from pathlib import Path
             from datetime import datetime
@@ -424,17 +427,18 @@ class HalconProductManager:
             (found_paths, debug_img)
         """
         # 1. 翻转图像为正向（与训练图和路径编辑器一致）
-        gray_img_upright = cv2.flip(gray_img, -1)
+        # [Fix] UI already passes upright image (from last_frame which is flipped).
+        # So check if we really need to flip again. 
+        # Usually, input gray_img is already upright.
+        gray_img_upright = gray_img
         
-        # 2. 运行Halcon识别（使用正向图）
+        # 2. 运行Halcon识别
         res = self.halcon.process_image(gray_img_upright)
         debug_img = cv2.cvtColor(gray_img_upright, cv2.COLOR_GRAY2BGR)
         found_paths = []
         
         if not res or 'matches' not in res:
-            # 翻转回倒置，用于UI显示（render会再翻转回正向）
-            debug_img = cv2.flip(debug_img, -1)
-            return found_paths, debug_img
+            return {'found_paths': [], 'debug_img': debug_img, 'success': False}
         
         # 2. 获取参考点
         ref_row, ref_col = self.model_ref_row, self.model_ref_col
@@ -472,10 +476,12 @@ class HalconProductManager:
             cv2.putText(debug_img, text, (cx_i + 25, cy_i), 
                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
         
-        # 翻转回倒置，用于UI显示（render会再翻转回正向）
-        debug_img = cv2.flip(debug_img, -1)
-        
-        return found_paths, debug_img
+        return {
+            'found_paths': found_paths,
+            'debug_img': debug_img,
+            'matches': res['matches'],
+            'success': True
+        }
     
     def get_current_segments(self):
         """
@@ -520,23 +526,62 @@ class HalconProductManager:
                 pts = np.array(seg.points, dtype=np.float32)
                 if len(pts) == 0: continue
                 
-                # 保存的路径已经是相对坐标（在路径编辑时相对化了）
-                # 所以这里直接使用，不需要再减origin
-                pts_centered = pts  # 已经相对于origin
+                # ⭐ ROI 坐标系转换
+                # 路径现在保存在 ROI 坐标系（编辑器使用 roi_template.png）
+                # 需要转换：ROI -> Reference (training) -> Relative (相对origin) -> Rotated -> Current Match
                 
-                # 2.2 旋转
+                # 2.1 从 ROI 坐标转换到 Reference 坐标（训练位置）
+                # 获取 ROI 偏移（从 config.json）
+                roi_offset_x = 0
+                roi_offset_y = 0
+                
+                # [Fix] 确保 roi_in_reference 已加载
+                if not hasattr(self, 'roi_in_reference') or not self.roi_in_reference:
+                    print(f"[HalconProductManager] ⚠️ Warning: roi_in_reference missing. Try reloading for '{self.current_product}'...")
+                    if self.current_product:
+                        cfg = self.products.load_product_config(self.current_product)
+                        if cfg:
+                            self.roi_in_reference = cfg.get('roi_in_reference')
+                            print(f"[HalconProductManager] ✅ Reloaded ROI: {self.roi_in_reference}")
+                        else:
+                            print(f"[HalconProductManager] ❌ Failed to load config for '{self.current_product}'")
+                
+                # 强制打印调试信息 (无条件)
+                if len(pts) > 0:
+                    roi_status = self.roi_in_reference if hasattr(self, 'roi_in_reference') else "MISSING"
+                    print(f"[DEBUG] Product={self.current_product}")
+                    print(f"[DEBUG] ROI_Info={roi_status}")
+                    print(f"[DEBUG] RefPoint=({ref_col}, {ref_row}) Match=({cx}, {cy})")
+                    print(f"[DEBUG] Pts[0]={pts[0]}")
+
+                if hasattr(self, 'roi_in_reference') and self.roi_in_reference:
+                    roi_offset_x = self.roi_in_reference.get('x', 0)
+                    roi_offset_y = self.roi_in_reference.get('y', 0)
+                
+                # 应用偏移：ROI -> Reference
+                pts_in_reference = pts + np.array([roi_offset_x, roi_offset_y])
+                
+                if len(pts) > 0 and hasattr(self, 'roi_in_reference') and self.roi_in_reference:
+                    print(f"[坐标转换] 第1个点(Ref): {pts_in_reference[0]}")
+                
+                # 2.2 转换为相对于训练原点的坐标
+                pts_centered = pts_in_reference - np.array([ref_col, ref_row])
+                
+                if len(pts) > 0 and hasattr(self, 'roi_in_reference') and self.roi_in_reference:
+                    print(f"[坐标转换] 第1个点(相对): {pts_centered[0]}")
+                
+                # 2.3 旋转
                 cos_a = np.cos(angle)
                 sin_a = np.sin(angle)
-                # 保持原有旋转逻辑
                 x_new = pts_centered[:, 0] * cos_a + pts_centered[:, 1] * sin_a
                 y_new = -pts_centered[:, 0] * sin_a + pts_centered[:, 1] * cos_a
                 
                 pts_rotated = np.stack([x_new, y_new], axis=1)
                 
-                # 2.3 平移到匹配中心
+                # 2.4 平移到匹配中心
                 pts_transformed = pts_rotated + np.array([cx, cy])
                 
-                # 2.4 应用视觉偏移
+                # 2.5 应用视觉偏移
                 pts_transformed[:, 0] += self.vision_offset_x
                 pts_transformed[:, 1] += self.vision_offset_y
                 

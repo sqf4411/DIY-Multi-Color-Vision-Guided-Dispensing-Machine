@@ -674,6 +674,10 @@ class BatchRunDialog(QDialog):
         form_z.addRow("相机高度:", h_cam_z)
 
         # 针头/真实高度
+        self.spn_nozzle_work = QDoubleSpinBox()
+        self.spn_nozzle_work.setRange(-500, 500)
+        self.spn_nozzle_work.setValue(self.mw.work_z if self.mw.work_z is not None else 0.0)
+        
         self.spn_nozzle_safe_cavity = QDoubleSpinBox()
         self.spn_nozzle_safe_cavity.setRange(-500, 500)
         self.spn_nozzle_safe_cavity.setValue(self.mw.safe_z_cavity if self.mw.safe_z_cavity is not None else 0.0)
@@ -681,22 +685,54 @@ class BatchRunDialog(QDialog):
         self.spn_nozzle_safe_product = QDoubleSpinBox()
         self.spn_nozzle_safe_product.setRange(-500, 500)
         self.spn_nozzle_safe_product.setValue(self.mw.safe_z_product if self.mw.safe_z_product is not None else 0.0)
-
-        self.spn_nozzle_work = QDoubleSpinBox()
-        self.spn_nozzle_work.setRange(-500, 500)
-        self.spn_nozzle_work.setValue(self.mw.work_z if self.mw.work_z is not None else 0.0)
         
         h_nozzle_z = QHBoxLayout()
-        h_nozzle_z.addWidget(QLabel("腔内安全:"))
-        h_nozzle_z.addWidget(self.spn_nozzle_safe_cavity)
-        h_nozzle_z.addWidget(QLabel("移动安全:"))
-        h_nozzle_z.addWidget(self.spn_nozzle_safe_product)
-        h_nozzle_z.addWidget(QLabel("工作:"))
+        h_nozzle_z.addWidget(QLabel("点胶高度 (真实/Real):"))
         h_nozzle_z.addWidget(self.spn_nozzle_work)
+        h_nozzle_z.addWidget(QLabel("凹槽安全 (真实/Real):"))
+        h_nozzle_z.addWidget(self.spn_nozzle_safe_cavity)
+        h_nozzle_z.addWidget(QLabel("产品安全 (真实/Real):"))
+        h_nozzle_z.addWidget(self.spn_nozzle_safe_product)
         form_z.addRow("针头高度:", h_nozzle_z)
         
         grp_z.setLayout(form_z)
         layout.addWidget(grp_z)
+
+        # --- 2.5 激光测量参考 (Laser Measurement Reference) ---
+        grp_laser = QGroupBox("激光测量参考 (Laser Reference)")
+        laser_layout = QVBoxLayout()
+        
+        # Check if laser data exists
+        laser_data = getattr(self.mw, 'laser_depth_map', None)
+        if laser_data and len(laser_data) > 0:
+            # Calculate stats
+            depths = [pt['depth'] for pt in laser_data if 'depth' in pt]
+            if depths:
+                avg_depth = sum(depths) / len(depths)
+                min_depth = min(depths)
+                max_depth = max(depths)
+                
+                info_text = f"""<strong>测量数据:</strong><br>
+测量点数: {len(depths)} 个<br>
+平均深度: {avg_depth:.3f} mm<br>
+深度范围: {min_depth:.3f} ~ {max_depth:.3f} mm<br>
+<br>
+<span style='color: #10B981;'>✓ 激光数据可用，可作为高度参考</span>"""
+                
+                lbl_laser_info = QLabel(info_text)
+                lbl_laser_info.setStyleSheet("padding: 8px; background-color: #F0FDF4; border: 1px solid #10B981; border-radius: 4px;")
+                laser_layout.addWidget(lbl_laser_info)
+            else:
+                lbl_no_data = QLabel("⚠️ 未找到有效的激光测量数据")
+                lbl_no_data.setStyleSheet("color: #F59E0B; padding: 8px;")
+                laser_layout.addWidget(lbl_no_data)
+        else:
+            lbl_no_data = QLabel("❌ 未进行激光测量\n\n请在主界面中执行激光测量后再使用针头批量功能")
+            lbl_no_data.setStyleSheet("color: #EF4444; padding: 8px; background-color: #FEF2F2; border: 1px solid #EF4444; border-radius: 4px;")
+            laser_layout.addWidget(lbl_no_data)
+        
+        grp_laser.setLayout(laser_layout)
+        layout.addWidget(grp_laser)
 
         # --- 3. 运行日志 ---
         self.log_box = QTextEdit()

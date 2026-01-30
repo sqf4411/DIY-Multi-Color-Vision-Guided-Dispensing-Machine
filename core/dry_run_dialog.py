@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
 import numpy as np
 
 class DryRunDialog(QDialog):
-    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None, laser_data=None, z_base=0.0):
+    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None):
         super().__init__(parent)
         self.save_callback = save_callback
         self.is_real_run = is_real_run
@@ -18,10 +18,6 @@ class DryRunDialog(QDialog):
         self.origin_x, self.origin_y, self.origin_z = machine_origin
         self.nozzle_offset_x, self.nozzle_offset_y = nozzle_offset
         self.center_x, self.center_y = img_center
-        
-        # [NEW] Laser Data
-        self.laser_data = laser_data if laser_data else []
-        self.z_base = z_base
         
         # Parse products structure
         self.products = []
@@ -55,40 +51,31 @@ class DryRunDialog(QDialog):
         param_group = QGroupBox("参数设置")
         param_layout = QGridLayout()
 
-        # Safe Z Cavity
-        param_layout.addWidget(QLabel("腔内安全高度 (Cavity Z):"), 0, 0)
-        self.spn_safe_z_cavity = QDoubleSpinBox()
-        self.spn_safe_z_cavity.setRange(0, 300)
-        self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
-        self.spn_safe_z_cavity.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_safe_z_cavity, 0, 1)
-
-        # Safe Z Product
-        param_layout.addWidget(QLabel("产品安全高度 (Product Z):"), 1, 0)
-        self.spn_safe_z_product = QDoubleSpinBox()
-        self.spn_safe_z_product.setRange(0, 300)
-        self.spn_safe_z_product.setValue(self.safe_z_product)
-        self.spn_safe_z_product.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_safe_z_product, 1, 1)
-
-        # Work Z
-        param_layout.addWidget(QLabel("点胶高度 (Work Z):"), 0, 2)
+        # Work Z (Dispensing Height)
+        param_layout.addWidget(QLabel("点胶高度 (虚拟/Virtual):"), 0, 0)
         self.spn_work_z = QDoubleSpinBox()
         self.spn_work_z.setRange(0, 300)
         self.spn_work_z.setValue(self.work_z)
         self.spn_work_z.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_work_z, 0, 3)
+        param_layout.addWidget(self.spn_work_z, 0, 1)
 
-        # [NEW] Laser Z Option
-        self.chk_use_laser = QCheckBox(f"使用激光测量高度 (基准Z={self.z_base:.1f} + 测量 + 工作Z)")
-        if not self.laser_data:
-             self.chk_use_laser.setText("使用激光测量高度 (无数据)")
-             self.chk_use_laser.setEnabled(False)
-        else:
-             self.chk_use_laser.setChecked(True)
-        self.chk_use_laser.stateChanged.connect(self.on_param_changed)
-        # Occupy a full row
-        param_layout.addWidget(self.chk_use_laser, 1, 0, 1, 4)
+        # Safe Z Cavity (Cavity Safety)
+        param_layout.addWidget(QLabel("凹槽安全 (虚拟/Virtual):"), 1, 0)
+        self.spn_safe_z_cavity = QDoubleSpinBox()
+        self.spn_safe_z_cavity.setRange(0, 300)
+        self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
+        self.spn_safe_z_cavity.valueChanged.connect(self.on_param_changed)
+        param_layout.addWidget(self.spn_safe_z_cavity, 1, 1)
+
+        # Safe Z Product (Product Safety)
+        param_layout.addWidget(QLabel("产品安全 (虚拟/Virtual):"), 0, 2)
+        self.spn_safe_z_product = QDoubleSpinBox()
+        self.spn_safe_z_product.setRange(0, 300)
+        self.spn_safe_z_product.setValue(self.safe_z_product)
+        self.spn_safe_z_product.valueChanged.connect(self.on_param_changed)
+        param_layout.addWidget(self.spn_safe_z_product, 0, 3)
+
+        # [REMOVED] Laser checkbox - not applicable for camera dry run (virtual simulation)
 
         # Speed XY
         param_layout.addWidget(QLabel("XY 速度 (mm/min):"), 2, 0)
@@ -202,56 +189,6 @@ class DryRunDialog(QDialog):
         self.line_speed_xy = self.spn_line_speed.value()
         self.generate_gcode()
 
-    def find_nearest_depth(self, x, y):
-        """
-        查找最近的激光测高点深度
-        :param x: 机器坐标 X
-        :param y: 机器坐标 Y
-        :return: depth (mm)
-        """
-        if not self.laser_data:
-            return 0.0
-            
-        points = []
-        # Handle 1: laser_data might be a dict with key "points" (loaded from config JSON)
-        if isinstance(self.laser_data, dict):
-            points = self.laser_data.get('points', [])
-        # Handle 2: laser_data might be a list directly
-        elif isinstance(self.laser_data, list):
-            points = self.laser_data
-            
-        if not points:
-            return 0.0
-            
-        min_dist = float('inf')
-        nearest_depth = 0.0
-        found = False
-
-        for pt in points:
-            # Support both dict item and possible tuple (legacy)
-            if isinstance(pt, dict):
-                px = pt.get('x')
-                py = pt.get('y')
-                d = pt.get('depth', 0.0)
-            else:
-                continue
-
-            if px is None or py is None:
-                continue
-                
-            dist = ((px - x)**2 + (py - y)**2)**0.5
-            
-            # Simple nearest neighbor
-            if dist < min_dist:
-                min_dist = dist
-                nearest_depth = d
-                found = True
-        
-        # Optional: Add a max distance threshold (e.g. 5mm) if needed
-        # if min_dist > 5.0: return 0.0
-        
-        return nearest_depth if found else 0.0
-
     def generate_gcode(self):
         self.machine_paths = [] # [NEW] Reset paths
         gcode_lines = []
@@ -329,20 +266,8 @@ class DryRunDialog(QDialog):
                     # Move XY first
                     gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{self.speed_xy}")
                     
-                    # 3. Down to Work Z
+                    # 3. Down to Work Z (constant height for virtual simulation)
                     calc_z = self.work_z
-                    
-                    use_laser = getattr(self, 'chk_use_laser', None) and self.chk_use_laser.isChecked()
-                    
-                    # [NEW] Three-Dimensional Dispensing
-                    if use_laser and seg_type == 'dot':
-                       # Match using Camera Machine Coords (abs_x[0])
-                       # Laser Measured stored using Machine Pos where Camera seen it
-                       depth = self.find_nearest_depth(abs_x[0], abs_y[0])
-                       if depth != 0.0:
-                           # Formula: Z_Target = Z_Base + Depth + Gap(WorkZ)
-                           calc_z = self.z_base + depth + self.work_z
-                           gcode_lines.append(f"; [3D] Depth={depth:.3f} -> Z={calc_z:.2f}")
 
                     gcode_lines.append(f"G0 Z{calc_z:.2f} F{self.speed_z}")
 

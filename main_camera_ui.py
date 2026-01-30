@@ -5341,29 +5341,8 @@ class MainWindow(QWidget):
             else:
                 nozzle_offset = (0.0, 0.0)
 
-            # [NEW] Load Laser Data if available
-            laser_data_points = []
-            try:
-                 if self.halcon_product_manager:
-                    prod_name = self.halcon_product_manager.get_current_product_name()
-                    if prod_name:
-                        prod_dir = self.halcon_product_manager.products.get_product_path(prod_name)
-                        cfg_p = os.path.join(prod_dir, "config.json")
-                        if os.path.exists(cfg_p):
-                            with open(cfg_p, 'r', encoding='utf-8') as f:
-                                tmp_cfg = json.load(f)
-                                if "laser_data" in tmp_cfg:
-                                    laser_data_points = tmp_cfg["laser_data"].get("points", [])
-                                    self.log(f"🔎 [DryRun] 从配方加载了 {len(laser_data_points)} 个测高点")
-            except Exception as e:
-                self.log(f"❌ 加载激光数据失败: {e}")
-
-            # Assuming self.config_mgr exists. If not, use self.z_base directly if checked.
-            # Usually z_base is loaded into self.z_base.
-            z_base = getattr(self, 'z_base', 0.0)
-            # If we really need config manager and it's missing, we fallback.
-            if hasattr(self, 'config_mgr'):
-                 z_base = self.config_mgr.get("z_base", z_base)
+            # [REMOVED] Laser data loading - not needed for virtual camera dry run
+            # Camera dry run uses constant heights, while needle batch uses real hardware and laser reference
 
             dialog = DryRunDialog(
                 self, 
@@ -5374,9 +5353,7 @@ class MainWindow(QWidget):
                 initial_params,
                 (center_x, center_y),
                 is_real_run=False, # 空跑都不出胶
-                save_callback=save_callback,  # ✅ 传入回调，供“仅保存”按钮使用
-                laser_data=laser_data_points,
-                z_base=z_base
+                save_callback=save_callback  # ✅ 传入回调，供“仅保存”按钮使用
             )
             
             dialog.setWindowTitle(f"{title} - 参数确认")

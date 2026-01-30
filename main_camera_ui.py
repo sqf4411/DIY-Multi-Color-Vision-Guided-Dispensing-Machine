@@ -591,27 +591,30 @@ class LaserMeasureWorker(QThread):
 
                 self.log_signal.emit(f"📍 [{i+1}/{total}] 测点: ({pt_x:.2f}, {pt_y:.2f}) -> 激光位: ({target_x:.2f}, {target_y:.2f})")
                 
-                # 4. 移动到XY
-                self.machine.move_xy_absolute(target_x, target_y, 6000)
+                # 4. 移动到XY（降低速度以提高稳定性）
+                self.machine.move_xy_absolute(target_x, target_y, 3000)  # 从6000降低到3000 mm/min
                 self.machine.wait_until_idle()
 
-                # 5. 稳定延时
-                time.sleep(0.5)
+                # 5. 稳定延时（增加延时确保机器完全稳定）
+                time.sleep(1.0)  # 从0.5秒增加到1.0秒
 
                 # 6. 读取传感器 (取多次平均)
                 samples = []
                 for _ in range(5):
-                    val = self._read_hgc_dist()
-                    if val is not None:
-                        # 计算深度
-                        # 如果 k=0 (避免除零), depth=0
-                        # [FIX] Formula Inverted.
-                        # Higher Val = Further Distance = Lower Z.
-                        # So Depth (Z-Delta) should be Negative when Val > Ref.
-                        # Old: (Val - Ref) / K  => Positive when Val > Ref. Wrong.
-                        # New: (Ref - Val) / K  => Negative when Val > Ref. Correct.
-                        depth = (self.ref_val - val) / self.k if abs(self.k) > 1e-6 else 0.0
-                        samples.append(depth)
+                    try:
+                        val = self._read_hgc_dist()
+                        if val is not None:
+                            # 计算深度
+                            # 如果 k=0 (避免除零), depth=0
+                            # [FIX] Formula Inverted.
+                            # Higher Val = Further Distance = Lower Z.
+                            # So Depth (Z-Delta) should be Negative when Val > Ref.
+                            # Old: (Val - Ref) / K  => Positive when Val > Ref. Wrong.
+                            # New: (Ref - Val) / K  => Negative when Val > Ref. Correct.
+                            depth = (self.ref_val - val) / self.k if abs(self.k) > 1e-6 else 0.0
+                            samples.append(depth)
+                    except Exception as read_err:
+                        self.log_signal.emit(f"⚠️ 读取传感器异常: {read_err}")
                     time.sleep(0.05)
                 
                 if samples:
@@ -5353,7 +5356,8 @@ class MainWindow(QWidget):
                 initial_params,
                 (center_x, center_y),
                 is_real_run=False, # 空跑都不出胶
-                save_callback=save_callback  # ✅ 传入回调，供“仅保存”按钮使用
+                save_callback=save_callback,
+                use_nozzle_offset=use_nozzle_offset
             )
             
             dialog.setWindowTitle(f"{title} - 参数确认")

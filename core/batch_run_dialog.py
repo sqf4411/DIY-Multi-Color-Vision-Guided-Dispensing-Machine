@@ -687,11 +687,11 @@ class BatchRunDialog(QDialog):
         self.spn_nozzle_safe_product.setValue(self.mw.safe_z_product if self.mw.safe_z_product is not None else 0.0)
         
         h_nozzle_z = QHBoxLayout()
-        h_nozzle_z.addWidget(QLabel("点胶高度 (真实/Real):"))
+        h_nozzle_z.addWidget(QLabel("点胶高度:"))
         h_nozzle_z.addWidget(self.spn_nozzle_work)
-        h_nozzle_z.addWidget(QLabel("凹槽安全 (真实/Real):"))
+        h_nozzle_z.addWidget(QLabel("凹槽安全:"))
         h_nozzle_z.addWidget(self.spn_nozzle_safe_cavity)
-        h_nozzle_z.addWidget(QLabel("产品安全 (真实/Real):"))
+        h_nozzle_z.addWidget(QLabel("产品安全:"))
         h_nozzle_z.addWidget(self.spn_nozzle_safe_product)
         form_z.addRow("针头高度:", h_nozzle_z)
         
@@ -704,31 +704,40 @@ class BatchRunDialog(QDialog):
         
         # Check if laser data exists
         laser_data = getattr(self.mw, 'laser_depth_map', None)
+        z_base = getattr(self.mw, 'z_base', 0.0)
+        
         if laser_data and len(laser_data) > 0:
-            # Calculate stats
-            depths = [pt['depth'] for pt in laser_data if 'depth' in pt]
-            if depths:
-                avg_depth = sum(depths) / len(depths)
-                min_depth = min(depths)
-                max_depth = max(depths)
-                
-                info_text = f"""<strong>测量数据:</strong><br>
+            # laser_depth_map is a dictionary: {(x,y): depth}
+            try:
+                depths = list(laser_data.values())
+                if depths:
+                    avg_depth = sum(depths) / len(depths)
+                    min_depth = min(depths)
+                    max_depth = max(depths)
+                    avg_z = z_base + avg_depth
+                    
+                    info_text = f"""<strong>测量数据:</strong><br>
 测量点数: {len(depths)} 个<br>
-平均深度: {avg_depth:.3f} mm<br>
+均Z: {avg_z:.2f} mm<br>
+均深: {avg_depth:.2f} mm<br>
 深度范围: {min_depth:.3f} ~ {max_depth:.3f} mm<br>
 <br>
 <span style='color: #10B981;'>✓ 激光数据可用，可作为高度参考</span>"""
-                
-                lbl_laser_info = QLabel(info_text)
-                lbl_laser_info.setStyleSheet("padding: 8px; background-color: #F0FDF4; border: 1px solid #10B981; border-radius: 4px;")
-                laser_layout.addWidget(lbl_laser_info)
-            else:
-                lbl_no_data = QLabel("⚠️ 未找到有效的激光测量数据")
-                lbl_no_data.setStyleSheet("color: #F59E0B; padding: 8px;")
-                laser_layout.addWidget(lbl_no_data)
+                    
+                    lbl_laser_info = QLabel(info_text)
+                    lbl_laser_info.setStyleSheet("padding: 10px; background-color: #1a1a1a; border: 2px solid #10B981; border-radius: 4px; color: #00FF00;")
+                    laser_layout.addWidget(lbl_laser_info)
+                else:
+                    lbl_no_data = QLabel("⚠️ 未找到有效的激光测量数据")
+                    lbl_no_data.setStyleSheet("color: #FFA500; padding: 10px; background-color: #2a2a2a; border: 2px solid #FFA500; border-radius: 4px;")
+                    laser_layout.addWidget(lbl_no_data)
+            except Exception as e:
+                lbl_error = QLabel(f"❌ 读取激光数据失败: {e}")
+                lbl_error.setStyleSheet("color: #FF4444; padding: 10px; background-color: #2a2a2a; border: 2px solid #FF4444; border-radius: 4px;")
+                laser_layout.addWidget(lbl_error)
         else:
             lbl_no_data = QLabel("❌ 未进行激光测量\n\n请在主界面中执行激光测量后再使用针头批量功能")
-            lbl_no_data.setStyleSheet("color: #EF4444; padding: 8px; background-color: #FEF2F2; border: 1px solid #EF4444; border-radius: 4px;")
+            lbl_no_data.setStyleSheet("color: #FF6B6B; padding: 10px; background-color: #2a2a2a; border: 2px solid #FF6B6B; border-radius: 4px;")
             laser_layout.addWidget(lbl_no_data)
         
         grp_laser.setLayout(laser_layout)

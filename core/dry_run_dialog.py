@@ -6,10 +6,11 @@ from PyQt5.QtWidgets import (
 import numpy as np
 
 class DryRunDialog(QDialog):
-    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None):
+    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None, use_nozzle_offset=False):
         super().__init__(parent)
         self.save_callback = save_callback
         self.is_real_run = is_real_run
+        self.use_nozzle_offset = use_nozzle_offset  # Track if this is nozzle dry run
         self.setWindowTitle("点胶参数设置 & G-code 预览" if is_real_run else "空跑参数设置 & G-code 预览")
         self.resize(800, 600)
 
@@ -52,7 +53,7 @@ class DryRunDialog(QDialog):
         param_layout = QGridLayout()
 
         # Work Z (Dispensing Height)
-        param_layout.addWidget(QLabel("点胶高度 (虚拟/Virtual):"), 0, 0)
+        param_layout.addWidget(QLabel("点胶高度:"), 0, 0)
         self.spn_work_z = QDoubleSpinBox()
         self.spn_work_z.setRange(0, 300)
         self.spn_work_z.setValue(self.work_z)
@@ -60,7 +61,7 @@ class DryRunDialog(QDialog):
         param_layout.addWidget(self.spn_work_z, 0, 1)
 
         # Safe Z Cavity (Cavity Safety)
-        param_layout.addWidget(QLabel("凹槽安全 (虚拟/Virtual):"), 1, 0)
+        param_layout.addWidget(QLabel("凹槽安全:"), 1, 0)
         self.spn_safe_z_cavity = QDoubleSpinBox()
         self.spn_safe_z_cavity.setRange(0, 300)
         self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
@@ -68,7 +69,7 @@ class DryRunDialog(QDialog):
         param_layout.addWidget(self.spn_safe_z_cavity, 1, 1)
 
         # Safe Z Product (Product Safety)
-        param_layout.addWidget(QLabel("产品安全 (虚拟/Virtual):"), 0, 2)
+        param_layout.addWidget(QLabel("产品安全:"), 0, 2)
         self.spn_safe_z_product = QDoubleSpinBox()
         self.spn_safe_z_product.setRange(0, 300)
         self.spn_safe_z_product.setValue(self.safe_z_product)
@@ -127,6 +128,52 @@ class DryRunDialog(QDialog):
 
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
+        
+        # --- 激光测量参考 (Laser Measurement Reference) ---
+        # Only show for nozzle dry run (use_nozzle_offset=True), not for camera dry run
+        if self.use_nozzle_offset and hasattr(self.parent(), 'laser_depth_map'):
+            grp_laser = QGroupBox("激光测量参考 (Laser Reference)")
+            laser_layout = QVBoxLayout()
+            
+            laser_data = getattr(self.parent(), 'laser_depth_map', None)
+            z_base = getattr(self.parent(), 'z_base', 0.0)
+            
+            if laser_data and len(laser_data) > 0:
+                # laser_depth_map is a dictionary: {(x,y): depth}
+                try:
+                    depths = list(laser_data.values())
+                    if depths:
+                        avg_depth = sum(depths) / len(depths)
+                        min_depth = min(depths)
+                        max_depth = max(depths)
+                        avg_z = z_base + avg_depth
+                        
+                        info_text = f"""<strong>测量数据:</strong><br>
+测量点数: {len(depths)} 个<br>
+均Z: {avg_z:.2f} mm<br>
+均深: {avg_depth:.2f} mm<br>
+深度范围: {min_depth:.3f} ~ {max_depth:.3f} mm<br>
+<br>
+<span style='color: #10B981;'>✓ 激光数据可用，可作为高度参考</span>"""
+                        
+                        lbl_laser_info = QLabel(info_text)
+                        lbl_laser_info.setStyleSheet("padding: 10px; background-color: #1a1a1a; border: 2px solid #10B981; border-radius: 4px; color: #00FF00;")
+                        laser_layout.addWidget(lbl_laser_info)
+                    else:
+                        lbl_no_data = QLabel("⚠️ 未找到有效的激光测量数据")
+                        lbl_no_data.setStyleSheet("color: #FFA500; padding: 10px; background-color: #2a2a2a; border: 2px solid #FFA500; border-radius: 4px;")
+                        laser_layout.addWidget(lbl_no_data)
+                except Exception as e:
+                    lbl_error = QLabel(f"❌ 读取激光数据失败: {e}")
+                    lbl_error.setStyleSheet("color: #FF4444; padding: 10px; background-color: #2a2a2a; border: 2px solid #FF4444; border-radius: 4px;")
+                    laser_layout.addWidget(lbl_error)
+            else:
+                lbl_no_data = QLabel("❌ 未进行激光测量\n\n建议：在主界面中执行激光测量以获得更精确的高度参考")
+                lbl_no_data.setStyleSheet("color: #FF6B6B; padding: 10px; background-color: #2a2a2a; border: 2px solid #FF6B6B; border-radius: 4px;")
+                laser_layout.addWidget(lbl_no_data)
+            
+            grp_laser.setLayout(laser_layout)
+            layout.addWidget(grp_laser)
 
         # 2. 产品选择区 (New)
         prod_group = QGroupBox(f"产品选择 (共 {len(self.products)} 个)")

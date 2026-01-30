@@ -1,0 +1,272 @@
+﻿
+>     def on_btn_laser_measure_clicked(self):
+          """寮€濮嬫縺鍏夋祴楂?""
+          if self.laser_worker and self.laser_worker.isRunn
+ing():
+              self.log("鈿?娴嬮珮浠诲姟姝ｅ湪杩愯涓?..")
+              return
+  
+          # 鉁?灏濊瘯鍔犺浇璇嗗埆鍧愭爣
+          recognized_segments = self._load_recognized_coord
+inates()
+          
+          # 鏀堕泦鎵€鏈夌偣 (浠庤瘑鍒潗鏍囨垨妯℃澘鍧愭爣)
+          if recognized_segments:
+              # 浣跨敤璇嗗埆鍚庣殑鍧愭爣
+              segments_list = recognized_segments
+              coord_source = "璇嗗埆鍧愭爣"
+              self.log(f"馃搶 浣跨敤{coord_source} (鍏眥len(segmen
+ts_list)}涓)")
+          elif hasattr(self, 'current_segments') and self.c
+urrent_segments:
+              # 鍥為€€鍒版ā鏉垮潗鏍?            segments_list = sel
+f.current_segments.segments if hasattr(self.current_segment
+s, 'segments') else []
+              coord_source = "妯℃澘鍧愭爣"
+              
+              ret = QMessageBox.question(
+                  self, "浣跨敤妯℃澘鍧愭爣",
+                  f"鏈壘鍒拌瘑鍒潗鏍囪褰曘€俓n\n"
+                  f"寤鸿鍏堣繍琛?鐩告満绌鸿窇'鎴朒alcon璇嗗埆锛孿n"
+                  f"璁╃郴缁熸壘鍒版ā鍏峰疄闄呬綅缃苟淇濆瓨鍧愭爣銆俓n\n"
+                  f"鏄惁浣跨敤{coord_source}杩涜娴嬮噺锛燂紙鍧愭爣鍙兘涓嶅噯纭
+級",
+                  QMessageBox.Yes | QMessageBox.No
+              )
+              if ret != QMessageBox.Yes:
+                  return
+          else:
+              QMessageBox.warning(self, "鏃犳暟鎹?, "褰撳墠娌℃湁璺緞鏁
+版嵁锛岃鍏堢紪杈戣矾寰勬垨杩愯璇嗗埆銆?)
+              return
+          
+          points_to_measure = []
+          
+          for seg in segments_list:
+              if seg.type == 'dot':
+                  for pt_px in seg.points:
+                      # pt_px 鏄浘鍍忓潗鏍囷紝鏆傛椂鐩存帴浣跨敤
+                      # TODO: 娣诲姞鍍忕礌鈫掓満鍣ㄥ潗鏍囪浆鎹?            
+        points_to_measure.append(pt_px)
+          
+          if not points_to_measure:
+               QMessageBox.warning(self, "鏃犵偣", "褰撳墠璺緞涓病鏈
+?'dot' 绫诲瀷鐨勭偣銆?)
+               return
+  
+          # [REVERTED] Use simple Camera + Laser Offset log
+ic.
+          # If direction is wrong, User should flip sign in
+ UI.
+          
+          # 纭
+          ret = QMessageBox.question(self, "纭娴嬮珮", 
+                                     f"鍗冲皢瀵?{len(points_to_
+measure)} 涓偣杩涜婵€鍏夋祴楂樸€俓n"
+                                     f"鍧愭爣鏉ユ簮: {coord_sourc
+e}\n"
+                                     f"瀹夊叏楂樺害 Z={self.laser
+_measure_z:.1f}\n"
+                                     f"鍋忕Щ X={self.laser_of
+fset_x:.1f}, Y={self.laser_offset_y:.1f}\n"
+                                     f"K绯绘暟={self.laser_sca
+le_k:.4f}, 鍩哄噯={self.laser_ref_val:.3f}\n\n"
+                                     "璇风‘璁ゆ満鍣ㄤ笂鏂规棤闅滅鐗┿€俓n"
+                                     "濡傛灉绉诲姩鏂瑰悜鐩稿弽锛岃淇敼鍋忕Щ
+閲忕殑姝ｈ礋鍙枫€?,
+                                     QMessageBox.Yes | QMes
+sageBox.No)
+          if ret != QMessageBox.Yes:
+              return
+  
+          self.btn_laser_measure.setEnabled(False)
+          
+          # [NEW] Capture Start Position
+          start_x, start_y, start_z = 0, 0, 0
+          if self.machine.connected:
+               start_x, start_y, start_z = self.machine.get
+_position()
+          
+          self.laser_worker = LaserMeasureWorker(
+              self.machine, 
+              points_to_measure, 
+              self.laser_measure_z, 
+              self.laser_offset_x,
+              self.laser_offset_y,
+              self.laser_scale_k,
+              self.laser_ref_val,
+              self.z_base,
+              initial_pos=(start_x, start_y, start_z) # [NE
+W] Pass initial pos
+          )
+          self.laser_worker.log_signal.connect(self.log)
+          self.laser_worker.result_signal.connect(self.on_l
+aser_measure_result)
+          self.laser_worker.finished_signal.connect(self.on
+_laser_measure_finished)
+          
+          # [NEW] Progress Dialog
+          self.progress_dlg = ProcessingDialog("婵€鍏夋祴楂樹腑", 
+self)
+          self.progress_dlg.update_status(f"鍑嗗娴嬮噺 {len(poi
+nts_to_measure)} 涓偣...")
+          
+          # Connect Worker -> Dialog
+          self.laser_worker.progress_signal.connect(self.pr
+ogress_dlg.update_progress)
+          self.laser_worker.log_signal.connect(self.progres
+s_dlg.update_status) # Sync status text
+          
+          # Connect Dialog -> Worker
+          self.progress_dlg.pause_signal.connect(self.laser
+_worker.pause)
+          self.progress_dlg.resume_signal.connect(self.lase
+r_worker.resume)
+          self.progress_dlg.stop_signal.connect(self.laser_
+worker.stop)
+          
+          self.laser_worker.start()
+          self.progress_dlg.show()
+  
+      # ================== 婵€鍏変紶鎰熷櫒璇诲彇 helper =============
+=====
+      def _read_hgc_dist(self):
+          """璇诲彇婵€鍏変紶鎰熷櫒鍘熷鍊?(MainWindow Helper)"""
+          if not hasattr(self, 'machine') or not self.machi
+ne.base_url or not self.machine.connected:
+              return None
+              
+          try:
+              url = f"{self.machine.base_url}/printer/objec
+ts/query"
+              params = {"temperature_sensor hgc_dist": ""}
+              # Use a short timeout
+              r = self.machine.session.get(url, params=para
+ms, headers=self.machine._headers(), timeout=1)
+              r.raise_for_status()
+              data = r.json()
+              
+              status = data.get('result', {}).get('status',
+ {})
+              sensor = status.get('temperature_sensor hgc_d
+ist', {})
+              val = sensor.get('temperature')
+              
+              if val is not None:
+                  return float(val)
+          except Exception:
+              pass
+          return None
+  
+      # ================== 鑷姩鍩哄噯閫昏緫 ==================
+      def on_btn_auto_set_baseline_clicked(self):
+          """鑷姩绉诲姩鍒板鍒€浠綅缃苟璁句负鍩哄噯"""
+          # 1. Check Tool Setter Position
+          if self.tool_setter_x == 0 and self.tool_setter_y
+ == 0:
+               QMessageBox.warning(self, "鏈缃鍒€浠?, "璇峰厛杩
+涜'涓€閿鍒€'鏉ョ‘瀹氬鍒€浠綅缃紒")
+               return
+  
+          # 2. Calculate Target Position for LASER
+          # Goal: Move MACHINE so that LASER is at TOOL_SET
+TER position.
+          # Knowns:
+          # - Machine Coord = Nozzle Coord (approx)
+          # - Tool Setter Coord (Absolute Machine Coord of 
+Nozzle at Tool Setter)
+          # - Laser Offset = Laser - Cam
+          # - Nozzle Offset = Nozzle - Cam
+          # - Laser relative to Nozzle = Laser Offset - Noz
+zle Offset
+          #
+          # Target Machine Pos (Nozzle) = Tool Setter Pos -
+ (Laser relative to Nozzle)
+          # Target = Tool Setter - (Laser Offset - Nozzle O
+ffset)
+          # Target = Tool Setter - Laser Offset + Nozzle Of
+fset
+          
+          # Wait, if Laser Offset (e.g. -166) means Laser i
+s LEFT of Camera.
+          # And Machine moves LEFT (Negative) to align Lase
+r to a point derived from Camera.
+          # Let's trust the "Add" intuition for now or the 
+vector math:
+          # Vector_Nozzle_To_Laser = Laser_Offset - Nozzle_
+Offset
+          # Target_Nozzle_Pos = Target_Laser_Pos - Vector_N
+ozzle_To_Laser
+          # Target_Nozzle_Pos = Tool_Setter - (Laser_Offset
+ - Nozzle_Offset)
+          # Target = Tool_Setter - Laser_Offset + Nozzle_Of
+fset
+          
+          # User said: "Need to ADD needle and laser offset
+".
+          # If Laser Offset is negative (-166), then - (-16
+6) = +166.
+          # If I use `Tool + Laser - Nozzle`.
+          # Tool + (-166) - 0 = Tool - 166.
+          # This moves Machine LEFT.
+          # If Laser is physically to the RIGHT of Nozzle/C
+amera (Offset > 0 normally? but here -166).
+          # If Laser is LEFT of Camera (Offset < 0).
+          # To align Laser (Left) to Point, move Machine RI
+GHT (Positive).
+          # So Target > Tool.
+          # `Tool - (-166)` = Tool + 166. Correct direction
+ for Left-side Laser.
+          
+          # BUT User has Laser Offset = -166.
+          # And User said "Camera -> Platform -> Laser (Lef
+t to Right)".
+          # So Laser is RIGHT of Camera.
+          # If Laser is RIGHT, to align Laser to Point, Mac
+hine must move LEFT.
+          # So Target < Tool.
+          # `Tool + (-166)` = Tool - 166. Correct direction
+ for Right-side Laser.
+          # So `Tool + Laser` is correct.
+          
+          target_x = self.tool_setter_x + self.laser_offset
+_x - self.nozzle_offset_x
+          target_y = self.tool_setter_y + self.laser_offset
+_y - self.nozzle_offset_y
+          safe_z = 100.0 # Fixed Safe Z as requested
+  
+          ret = QMessageBox.question(self, "鑷姩璁句负鍩哄噯", 
+              f"鍗冲皢鍦?Z={safe_z} 楂樺害绉诲姩婵€鍏夊埌瀵瑰垁浠綅缃€俓n\n"
+              f"瀵瑰垁浠? ({self.tool_setter_x:.2f}, {self.tool
+_setter_y:.2f})\n"
+              f"婵€鍏夊亸绉? ({self.laser_offset_x:.2f}, {self.l
+aser_offset_y:.2f})\n"
+              f"鐩爣鏈哄櫒鍧愭爣: ({target_x:.2f}, {target_y:.2f})
+\n\n"
+              "璇风‘璁ゆ満鍣ㄥ畨鍏紝鐐瑰嚮 Yes 寮€濮嬨€?,
+              QMessageBox.Yes | QMessageBox.No)
+          
+          if ret != QMessageBox.Yes:
+              return
+  
+          self.btn_auto_set_ref.setEnabled(False)
+          self.auto_base_worker = AutoLaserBaselineWorker(
+              self.machine, target_x, target_y, safe_z, sel
+f._read_hgc_dist
+          )
+          self.auto_base_worker.finished_signal.connect(sel
+f.on_auto_baseline_finished)
+          self.auto_base_worker.start()
+  
+      def on_auto_baseline_finished(self, success, val, msg
+):
+          self.btn_auto_set_ref.setEnabled(True)
+          if success:
+              self.laser_ref_val = val
+              
+              # [UI Update]
+              if hasattr(self, 'lbl_laser_ref'):
+                  self.lbl_laser_ref.setText(f"鍩哄噯: {val:.3
+f}")
+
+

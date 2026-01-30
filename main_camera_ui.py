@@ -589,10 +589,10 @@ class LaserMeasureWorker(QThread):
                 target_x = pt_x + self.off_x
                 target_y = pt_y + self.off_y 
 
-                self.log_signal.emit(f"📍 [{i+1}/{total}] 测点: ({pt_x:.2f}, {pt_y:.2f}) -> 激光位: ({target_x:.2f}, {target_y:.2f})")
+                self.log_signal.emit(f"📍 [{i+1}/{total}] 测: ({pt_x:.2f}, {pt_y:.2f})-激光: ({target_x:.2f}, {target_y:.2f})")
                 
                 # 4. 移动到XY（降低速度以提高稳定性）
-                self.machine.move_xy_absolute(target_x, target_y, 3000)  # 从6000降低到3000 mm/min
+                self.machine.move_xy_absolute(target_x, target_y, 1500)  # 从3000降低到1500 mm/min
                 self.machine.wait_until_idle()
 
                 # 5. 稳定延时（增加延时确保机器完全稳定）
@@ -2243,46 +2243,41 @@ class MainWindow(QWidget):
         
         # 收集所有点 (从识别坐标或模板坐标)
         if recognized_segments:
-            # 使用识别后的坐标
+            # 使用识别后的坐标（最准确）
             segments_list = recognized_segments
             coord_source = "识别坐标"
             self.log(f"📌 使用{coord_source} (共{len(segments_list)}个段)")
         elif hasattr(self, 'current_segments') and self.current_segments:
-            # 回退到模板坐标
+            # 直接使用模板坐标（无需警告）
             segments_list = self.current_segments.segments if hasattr(self.current_segments, 'segments') else []
             coord_source = "模板坐标"
-            
-            ret = QMessageBox.question(
-                self, "使用模板坐标",
-                f"未找到识别坐标记录。\n\n"
-                f"建议先运行'相机空跑'或Halcon识别，\n"
-                f"让系统找到模具实际位置并保存坐标。\n\n"
-                f"是否使用{coord_source}进行测量？（坐标可能不准确）",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if ret != QMessageBox.Yes:
-                return
+            self.log(f"📌 使用{coord_source} (共{len(segments_list)}个段)")
+            self.log("ℹ️  提示: 如需更精确的测量结果，建议先运行'相机空跑'获取识别坐标")
         else:
-            QMessageBox.warning(self, "无数据", "当前没有路径数据，请先编辑路径或运行识别。")
+            QMessageBox.warning(self, "无数据", "当前没有路径数据，请先编辑路径或加载产品。")
             return
         
         points_to_measure = []
         
+        # 直接收集所有点（识别坐标已包含所有产品实例的点）
         for seg in segments_list:
             if seg.type == 'dot':
                 for pt_px in seg.points:
-                    # pt_px 是图像坐标，暂时直接使用
-                    # TODO: 添加像素→机器坐标转换
-                    points_to_measure.append(pt_px)
+                    # pt_px should be [x, y] array or (x, y) tuple
+                    if isinstance(pt_px, (list, tuple)) and len(pt_px) >= 2:
+                        points_to_measure.append((float(pt_px[0]), float(pt_px[1])))
+                    else:
+                        self.log(f"⚠️ 跳过格式错误的点: {pt_px}")
         
         if not points_to_measure:
              QMessageBox.warning(self, "无点", "当前路径中没有 'dot' 类型的点。")
              return
-
+        
+        self.log(f"📍 总共收集到 {len(points_to_measure)} 个测量点")
         # [REVERTED] Use simple Camera + Laser Offset logic.
         # If direction is wrong, User should flip sign in UI.
         
-        # 确认
+        # 确认 - 只显示一次
         ret = QMessageBox.question(self, "确认测高", 
                                    f"即将对 {len(points_to_measure)} 个点进行激光测高。\n"
                                    f"坐标来源: {coord_source}\n"
@@ -2293,6 +2288,7 @@ class MainWindow(QWidget):
                                    "如果移动方向相反，请修改偏移量的正负号。",
                                    QMessageBox.Yes | QMessageBox.No)
         if ret != QMessageBox.Yes:
+            self.log("❌ 用户取消激光测量")
             return
 
         self.btn_laser_measure.setEnabled(False)
@@ -6339,6 +6335,12 @@ class MainWindow(QWidget):
             self.dots = []
             self.polys = []
             
+            # Clear laser data display (no measurements for new model)
+            self.laser_depth_map = {}
+            if hasattr(self, 'lbl_laser_depth'):
+                self.lbl_laser_depth.setText("均Z:-- (均深:--)")
+                self.lbl_laser_depth.setStyleSheet("color: #6B7280;")
+            
             # 清除缓存
             if hasattr(self, 'halcon_path_template'):
                 self.halcon_path_template = None
@@ -6562,6 +6564,12 @@ class MainWindow(QWidget):
                     self.dots = []
                     self.polys = []
                     
+                    # Clear laser data display
+                    self.laser_depth_map = {}
+                    if hasattr(self, 'lbl_laser_depth'):
+                        self.lbl_laser_depth.setText("均Z:-- (均深:--)")
+                        self.lbl_laser_depth.setStyleSheet("color: #6B7280;")
+                    
                     # Clear cache
                     if hasattr(self, 'halcon_path_template'):
                         self.halcon_path_template = None
@@ -6741,13 +6749,22 @@ class MainWindow(QWidget):
                     
                     self.log(f"✅ 已加载激光测高数据: {len(self.laser_depth_map)} 点")
                     
-                    # UI Update
-                    if avg_depth is None:
-                         avg_depth = total_d / cnt if cnt > 0 else 0.0
-                    
+                    # UI Update - 只有在有数据时才显示
+                    if cnt > 0:
+                        if avg_depth is None:
+                            avg_depth = total_d / cnt
+                        
+                        if hasattr(self, 'lbl_laser_depth'):
+                            avg_z = getattr(self, 'z_base', 0.0) + avg_depth
+                            self.lbl_laser_depth.setText(f"均Z:{avg_z:.2f} (均深:{avg_depth:.2f})")
+                            self.lbl_laser_depth.setStyleSheet("color: #10B981; font-weight: bold;")
+                else:
+                    # 没有激光数据，清空显示
+                    self.laser_depth_map = {}
                     if hasattr(self, 'lbl_laser_depth'):
-                        avg_z = getattr(self, 'z_base', 0.0) + avg_depth
-                        self.lbl_laser_depth.setText(f"均Z:{avg_z:.2f} (均深:{avg_depth:.2f})")
+                        self.lbl_laser_depth.setText("均Z:-- (均深:--)")
+                        self.lbl_laser_depth.setStyleSheet("color: #6B7280;")  # Gray color
+                    self.log("ℹ️  未找到激光测高数据（请先执行激光测量）")
 
                 # 注意：nozzle_offset, z_base, tool_setter, LASER_OFFSET, LASER_K, LASER_REF 已改为全局配置
                 

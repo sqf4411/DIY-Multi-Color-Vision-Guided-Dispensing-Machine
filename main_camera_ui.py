@@ -4520,12 +4520,57 @@ class MainWindow(QWidget):
         if "未加载" in current_recipe:
              name, ok = QInputDialog.getText(self, "保存配方", "请输入配方名称:")
              if not ok or not name.strip(): return
-             name = name.strip()
         else:
              name = current_recipe
 
-        # Collect Data - ⭐ COMPLETE PARAMETER SET
-        config_data = {
+        # [FIX] Load existing config first to preserve hidden keys (model_file, roi_in_reference, etc.)
+        existing_config = {}
+        if self.recipe_manager:
+            # Try to load existing to backup hidden fields
+            old_config, _, _, _ = self.recipe_manager.load_recipe(name)
+            if old_config:
+                existing_config = old_config
+                existing_config = old_config
+                self.log(f"ℹ️ Merging with existing config (preserved {len(existing_config)} keys)")
+                self.log(f"DEBUG: recipe_manager type: {type(self.recipe_manager)}")
+                self.log(f"DEBUG: Is same as product_manager? {self.recipe_manager is self.product_manager}")
+                
+                if 'roi_in_reference' in existing_config:
+                     self.log(f"DEBUG: ✅ Found roi_in_reference in existing config: {existing_config['roi_in_reference']}")
+                else:
+                     self.log(f"DEBUG: ❌ roi_in_reference MISSING in existing config! Keys: {list(existing_config.keys())}")
+            else:
+                 self.log("DEBUG: ❌ Failed to load existing config (old_config is empty). Trying manual load...")
+                 # Manual Fallback
+                 try:
+                     prod_mgr = self.product_manager if hasattr(self, 'product_manager') else self.recipe_manager
+                     path = prod_mgr.get_product_path(name)
+                     cfg_path = os.path.join(path, "config.json")
+                     if os.path.exists(cfg_path):
+                         with open(cfg_path, 'r', encoding='utf-8') as f:
+                             existing_config = json.load(f)
+                         self.log(f"DEBUG: ✅ Manual load success. Keys: {len(existing_config)}")
+                 except Exception as e:
+                     self.log(f"DEBUG: ❌ Manual load failed: {e}")
+
+        # [CRITICAL GUARD] If existing_config is empty (and we are updating an existing recipe), ABORT.
+        # Check if file existed but we failed to load it
+        if not existing_config:
+             # Check if directory exists (meaning it's an existing product)
+             prod_mgr = self.product_manager if hasattr(self, 'product_manager') else self.recipe_manager
+             p_path = prod_mgr.get_product_path(name)
+             if os.path.exists(os.path.join(p_path, "config.json")):
+                 QMessageBox.critical(self, "保存失败", 
+                     f"严重错误：无法读取原配方 '{name}' 的配置文件！\n\n"
+                     "为防止数据丢失（如ROI坐标），已取消保存。\n"
+                     "请检查日志或联系技术支持。")
+                 return
+
+        # Collect Data (Merge UI values into existing_config)
+        config_data = existing_config.copy()
+        
+        # Update with current UI values
+        config_data.update({
             # === 视觉参数 ===
             'vision_offset_x': self.vision_offset_x,
             'vision_offset_y': self.vision_offset_y,
@@ -4560,7 +4605,7 @@ class MainWindow(QWidget):
             
             # === Halcon 模式 ===
             'use_halcon': self.chk_use_halcon.isChecked() if hasattr(self, 'chk_use_halcon') else False,
-        }
+        })
         
         # Path Data
         # Assuming we have a global path variable (self.dispensing_path or similar?)

@@ -206,7 +206,7 @@ class HalconProductManager:
                 return False, f"模型文件不存在: {model_file}"
             
             # 3. 加载路径
-            # 3. 加载路径
+            self.current_segments = None  # [FIX] 防止状态泄漏：先清空上一产品的富文本段
             path_data, poly_data = self.products.load_product_paths(product_name)
             
             # [NEW] 尝试加载 multicolor_path.json

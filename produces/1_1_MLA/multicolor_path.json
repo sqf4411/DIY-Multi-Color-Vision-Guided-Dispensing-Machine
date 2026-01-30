@@ -43,6 +43,28 @@
         ]
       ],
       "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 0,
+      "points": [
+        [
+          353.0,
+          161.5
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 0,
+      "points": [
+        [
+          222.5,
+          136.5
+        ]
+      ],
+      "dwell_ms": 100
     }
   ]
 }

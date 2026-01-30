@@ -6381,6 +6381,12 @@ class MainWindow(QWidget):
         btn_load = QPushButton("加载 (Load)")
         btn_load.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 6px;")
         
+        btn_rename = QPushButton("重命名 (Rename)")
+        btn_rename.setStyleSheet("background-color: #F59E0B; color: white; padding: 6px;")
+        
+        btn_retrain = QPushButton("重新训练 (Retrain)")
+        btn_retrain.setStyleSheet("background-color: #8B5CF6; color: white; padding: 6px;")
+        
         btn_delete = QPushButton("删除 (Delete)")
         btn_delete.setStyleSheet("background-color: #EF4444; color: white; padding: 6px;")
         
@@ -6388,6 +6394,8 @@ class MainWindow(QWidget):
         btn_cancel.setStyleSheet("padding: 6px;")
         
         btn_layout.addWidget(btn_load)
+        btn_layout.addWidget(btn_rename)
+        btn_layout.addWidget(btn_retrain)
         btn_layout.addWidget(btn_delete)
         btn_layout.addWidget(btn_cancel)
         layout.addLayout(btn_layout)
@@ -6442,10 +6450,134 @@ class MainWindow(QWidget):
                 except Exception as e:
                     QMessageBox.critical(dialog, "删除失败", f"无法删除产品: {e}")
         
-        # Check double click
+        def do_rename():
+            item = list_widget.currentItem()
+            if not item: return
+            old_name = item.text()
+            
+            # Input new name
+            new_name, ok = QInputDialog.getText(
+                dialog, "重命名产品",
+                f"请输入新的产品名称:",
+                text=old_name
+            )
+            
+            if ok and new_name and new_name != old_name:
+                # Validate name
+                if not new_name.strip():
+                    QMessageBox.warning(dialog, "错误", "产品名称不能为空")
+                    return
+                
+                # Check if name already exists
+                if new_name in [list_widget.item(i).text() for i in range(list_widget.count())]:
+                    QMessageBox.warning(dialog, "错误", f"产品 '{new_name}' 已存在")
+                    return
+                
+                try:
+                    import shutil
+                    old_path = self.product_manager.get_product_path(old_name)
+                    new_path = self.product_manager.get_product_path(new_name)
+                    
+                    if os.path.exists(old_path):
+                        shutil.move(old_path, new_path)
+                        self.log(f"✅ 已重命名产品: {old_name} -> {new_name}")
+                        
+                        # Update list
+                        item.setText(new_name)
+                        
+                        # Update current product if matches
+                        if self.current_product == old_name:
+                            self.current_product = new_name
+                            self.lbl_recipe_name.setText(new_name)
+                            
+                        QMessageBox.information(dialog, "成功", f"产品已重命名为: {new_name}")
+                    else:
+                        QMessageBox.critical(dialog, "错误", f"产品路径不存在: {old_path}")
+                except Exception as e:
+                    QMessageBox.critical(dialog, "重命名失败", f"无法重命名产品: {e}")
+        
+        def do_retrain():
+            item = list_widget.currentItem()
+            if not item: return
+            product_name = item.text()
+            
+            # Confirm
+            reply = QMessageBox.question(
+                dialog, "确认重新训练",
+                f"确定要重新训练产品 '{product_name}' 吗？\n\n"
+                "1. 请先选择用于训练的图片\n"
+                "2. 手动框选ROI区域\n"
+                "3. 旧模型将被覆盖！",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            
+            if reply == QMessageBox.Yes:
+                # Close dialog first
+                dialog.accept()
+                
+                # Step 1: Select training image
+                img_path, _ = QFileDialog.getOpenFileName(
+                    self, "选择训练图像", "", "Images (*.png *.jpg *.bmp)")
+                if not img_path:
+                    self.log(f"⚠️ 取消重新训练: 未选择图片")
+                    return
+                
+                self.log(f"🔄 开始重新训练产品: {product_name}")
+                
+                # Step 2: Collect current config
+                initial_config = {
+                    'vision_offset_x': 0.0,
+                    'vision_offset_y': 0.0,
+                    'exposure': self.spn_exp.value() if hasattr(self, 'spn_exp') else 4.4,
+                    'gain': self.spn_gain.value() if hasattr(self, 'spn_gain') else 5.5,
+                    'gamma': self.spn_gamma.value() if hasattr(self, 'spn_gamma') else 2.6,
+                    'feedrate_xy': self.feedrate_xy,
+                    'feedrate_z': self.feedrate_z,
+                    'accel': self.accel,
+                    'jog_step_mm': self.jog_step_mm,
+                    'safe_z_cavity': self.safe_z_cavity,
+                    'safe_z_product': self.safe_z_product,
+                    'work_z': self.work_z,
+                    'nozzle_offset_x': self.nozzle_offset_x,
+                    'nozzle_offset_y': self.nozzle_offset_y,
+                    'z_base': self.z_base,
+                }
+                
+                # Step 3: Call train_new_product (will overwrite existing product)
+                # This will prompt for manual ROI selection
+                success, msg = self.halcon_product_manager.train_new_product(
+                    img_path, product_name, initial_config
+                )
+                
+                if success:
+                    self.current_product = product_name
+                    self.lbl_recipe_name.setText(product_name)
+                    self.lbl_recipe_name.setStyleSheet("color: #10B981; font-weight: bold;")
+                    
+                    # Sync model parameters
+                    self.model_ref_row = self.halcon_product_manager.model_ref_row
+                    self.model_ref_col = self.halcon_product_manager.model_ref_col
+                    
+                    # Clear paths
+                    self.dots = []
+                    self.polys = []
+                    
+                    # Clear cache
+                    if hasattr(self, 'halcon_path_template'):
+                        self.halcon_path_template = None
+                    
+                    self.update_button_states()
+                    self.log(f"✅ {msg}")
+                    QMessageBox.information(self, "成功", f"产品 '{product_name}' 重新训练成功！\n可以重新编辑路径。")
+                else:
+                    QMessageBox.critical(self, "训练失败", msg)
+                    self.log(f"❌ {msg}")
+        
         list_widget.itemDoubleClicked.connect(do_load)
         
         btn_load.clicked.connect(do_load)
+        btn_rename.clicked.connect(do_rename)
+        btn_retrain.clicked.connect(do_retrain)
         btn_delete.clicked.connect(do_delete)
         btn_cancel.clicked.connect(dialog.reject)
         

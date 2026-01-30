@@ -1,31 +1,142 @@
 {
-  "vision_offset_x": 0.0,
-  "vision_offset_y": 0.0,
-  "exposure": 2.6,
-  "gain": 5.4,
-  "gamma": 2.0,
-  "feedrate_xy": 1000,
-  "feedrate_z": 300,
-  "accel": 452.0,
-  "jog_step_mm": 1.0,
-  "safe_z_cavity": 59.0,
-  "safe_z_product": 70.0,
-  "work_z": 100.0,
-  "nozzle_offset_x": -96.9,
-  "nozzle_offset_y": -5.199999999999989,
-  "z_base": 52.599999999999966,
-  "model_file": "1_2_MLA.shm",
-  "model_row": 699.0,
-  "model_col": 1182.0,
-  "product_name": "1_2_MLA",
-  "roi_in_reference": {
-    "x": 929,
-    "y": 445,
-    "width": 506,
-    "height": 508
-  },
-  "valve_prefeed_time": 0.1,
-  "valve_a_dispense_time": 0.77,
-  "valve_b_dispense_time": 2.0,
-  "line_speed_xy": 800
+    "vision_offset_x": 0.0,
+    "vision_offset_y": 0.0,
+    "exposure": 2.6,
+    "gain": 5.4,
+    "gamma": 2.0,
+    "feedrate_xy": 1000,
+    "feedrate_z": 300,
+    "accel": 452.0,
+    "jog_step_mm": 1.0,
+    "safe_z_cavity": 59.0,
+    "safe_z_product": 70.0,
+    "work_z": 100.0,
+    "nozzle_offset_x": -96.9,
+    "nozzle_offset_y": -5.199999999999989,
+    "z_base": 52.599999999999966,
+    "model_file": "1_2_MLA.shm",
+    "model_row": 699.0,
+    "model_col": 1182.0,
+    "product_name": "1_2_MLA",
+    "roi_in_reference": {
+        "x": 929,
+        "y": 445,
+        "width": 506,
+        "height": 508
+    },
+    "valve_prefeed_time": 0.1,
+    "valve_a_dispense_time": 0.77,
+    "valve_b_dispense_time": 2.0,
+    "line_speed_xy": 800,
+    "recognized_coordinates": {
+        "segments": [
+            {
+                "type": "dot",
+                "color": 0,
+                "points": [
+                    [
+                        1826.8343288783158,
+                        1160.529436229721
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "dot",
+                "color": 0,
+                "points": [
+                    [
+                        1832.2814097022858,
+                        1253.0041858130378
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "dot",
+                "color": 0,
+                "points": [
+                    [
+                        1795.5987833146603,
+                        1422.1834839594299
+                    ]
+                ],
+                "dwell_ms": 100
+            }
+        ],
+        "timestamp": 1769757027.521455,
+        "transform_data": {
+            "cx": 1819.0957733837727,
+            "cy": 1318.0686845421903,
+            "angle": 0.004833956574005289,
+            "score": 0.48413817353568334
+        }
+    },
+    "laser_data": {
+        "timestamp": 1769757087.2911148,
+        "points": [
+            {
+                "x": 182.92,
+                "y": 115.53,
+                "depth": 3.778801843317975
+            },
+            {
+                "x": 183.07,
+                "y": 112.2,
+                "depth": 3.7640552995391707
+            },
+            {
+                "x": 181.66,
+                "y": 106.12,
+                "depth": 3.749308755760372
+            },
+            {
+                "x": 206.39,
+                "y": 115.68,
+                "depth": 3.6129032258064564
+            },
+            {
+                "x": 206.55,
+                "y": 112.34,
+                "depth": 3.568663594470048
+            },
+            {
+                "x": 205.16,
+                "y": 106.26,
+                "depth": 3.553917050691247
+            },
+            {
+                "x": 183.0,
+                "y": 91.95,
+                "depth": 4.479262672811065
+            },
+            {
+                "x": 183.15,
+                "y": 88.62,
+                "depth": 3.7308755760368735
+            },
+            {
+                "x": 181.74,
+                "y": 82.54,
+                "depth": 3.531797235023049
+            },
+            {
+                "x": 206.46,
+                "y": 92.17,
+                "depth": 4.099539170506914
+            },
+            {
+                "x": 206.62,
+                "y": 88.83,
+                "depth": 3.336405529953924
+            },
+            {
+                "x": 205.24,
+                "y": 82.75,
+                "depth": 3.3069124423963183
+            }
+        ],
+        "avg_depth": 3.7093701996927844,
+        "avg_z": 56.30937019969275
+    }
 }

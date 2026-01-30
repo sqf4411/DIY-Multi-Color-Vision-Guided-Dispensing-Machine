@@ -511,7 +511,7 @@ class LaserMeasureWorker(QThread):
     result_signal = pyqtSignal(int, float, float, float) 
     finished_signal = pyqtSignal(bool, str) # success, message
 
-    def __init__(self, machine_client, points, measure_z, off_x, off_y, k, ref_val, z_base=0.0):
+    def __init__(self, machine_client, points, measure_z, off_x, off_y, k, ref_val, z_base=0.0, initial_pos=None):
         super().__init__()
         self.machine = machine_client
         self.points = points
@@ -521,6 +521,7 @@ class LaserMeasureWorker(QThread):
         self.k = k
         self.ref_val = ref_val
         self.z_base = z_base # [NEW] For displaying absolute Z
+        self.initial_pos = initial_pos # [NEW] (x, y, z) to return to
         self._is_stopped = False
         self._is_paused = False
 
@@ -626,11 +627,32 @@ class LaserMeasureWorker(QThread):
                 self.progress_signal.emit(i + 1, total)
 
             # 结束
-            # self.machine._post_gcode("HGC_OFF") # 测量完是否关激光？还是留着？为了安全可以关掉
             self.finished_signal.emit(True, "所有点测量完成")
-
+        
         except Exception as e:
             self.finished_signal.emit(False, str(e))
+        
+        finally:
+            # [NEW] Return to initial position
+            if self.initial_pos:
+                try:
+                    init_x, init_y, init_z = self.initial_pos
+                    self.log_signal.emit(f"🔙 测量完成，自动归位 -> ({init_x:.2f}, {init_y:.2f}, {init_z:.2f})")
+                    
+                    # 1. Ensure Z is safe (use measure_z or current if higher, but measure_z should be safe)
+                    # self.machine.move_z_absolute(self.measure_z, 600) 
+                    # self.machine.wait_until_idle()
+                    
+                    # 2. Move XY back
+                    self.machine.move_xy_absolute(init_x, init_y, 6000)
+                    self.machine.wait_until_idle()
+                    
+                    # 3. Move Z back
+                    self.machine.move_z_absolute(init_z, 600)
+                    self.machine.wait_until_idle()
+                    
+                except Exception as e:
+                    self.log_signal.emit(f"⚠ 自动归位失败: {e}")
 
 ######## 滚轮
 class ImageLabel(QLabel):
@@ -2272,6 +2294,11 @@ class MainWindow(QWidget):
 
         self.btn_laser_measure.setEnabled(False)
         
+        # [NEW] Capture Start Position
+        start_x, start_y, start_z = 0, 0, 0
+        if self.machine.connected:
+             start_x, start_y, start_z = self.machine.get_position()
+        
         self.laser_worker = LaserMeasureWorker(
             self.machine, 
             points_to_measure, 
@@ -2280,7 +2307,8 @@ class MainWindow(QWidget):
             self.laser_offset_y,
             self.laser_scale_k,
             self.laser_ref_val,
-            self.z_base
+            self.z_base,
+            initial_pos=(start_x, start_y, start_z) # [NEW] Pass initial pos
         )
         self.laser_worker.log_signal.connect(self.log)
         self.laser_worker.result_signal.connect(self.on_laser_measure_result)

@@ -139,13 +139,14 @@ class HalconProductManager:
                 return False, "模型训练失败"
             
             # 7. 更新配置（保存ROI信息用于记录）
+            roi_info = {
+                'x': x, 'y': y, 'width': w, 'height': h
+            }
             config_data['model_file'] = f'{product_name}.shm'
             config_data['model_row'] = origin_row
             config_data['model_col'] = origin_col
             config_data['product_name'] = product_name
-            config_data['roi_in_reference'] = {
-                'x': x, 'y': y, 'width': w, 'height': h
-            }  # 记录ROI在reference.png中的位置
+            config_data['roi_in_reference'] = roi_info  # 记录ROI在reference.png中的位置
             
             # 8. 保存配置（路径为空）
             success, msg = self.products.save_product(
@@ -163,6 +164,9 @@ class HalconProductManager:
             self.current_paths = {'dots': [], 'polys': []}
             self.model_ref_row = origin_row
             self.model_ref_col = origin_col
+            
+            # [FIX] Initialize roi_in_reference in memory immediately
+            self.roi_in_reference = roi_info
             
             # 10. 加载模型
             self.halcon.set_model_path(model_path)
@@ -309,6 +313,22 @@ class HalconProductManager:
             config_data['product_name'] = self.current_product
             config_data['model_file'] = f'{self.current_product}.shm'
             
+            # [FIX] Ensure roi_in_reference is preserved if not present in config_data
+            if 'roi_in_reference' not in config_data:
+                if hasattr(self, 'roi_in_reference') and self.roi_in_reference:
+                    config_data['roi_in_reference'] = self.roi_in_reference
+                    print(f"[HalconProductManager] ✅ Preserved roi_in_reference: {self.roi_in_reference}")
+                else:
+                    # Try to reload from disk if memory is empty (prevent data loss)
+                    old_config = self.products.load_product_config(self.current_product)
+                    if old_config and 'roi_in_reference' in old_config:
+                        config_data['roi_in_reference'] = old_config['roi_in_reference']
+                        # Sync back to memory
+                        self.roi_in_reference = old_config['roi_in_reference']
+                        print(f"[HalconProductManager] ✅ Recovered roi_in_reference from disk: {self.roi_in_reference}")
+                    else:
+                        print(f"[HalconProductManager] ⚠️ Warning: roi_in_reference missing during save!")
+
             # 保存配置和路径
             success, msg = self.products.save_product(
                 self.current_product,

@@ -1,0 +1,193 @@
+{
+  "vision_offset_x": 0.0,
+  "vision_offset_y": 0.0,
+  "exposure": 2.9,
+  "gain": 0.0,
+  "gamma": 1.9,
+  "feedrate_xy": 1000,
+  "feedrate_z": 300,
+  "accel": 452.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 59.0,
+  "safe_z_product": 100.0,
+  "work_z": 100.0,
+  "model_row": 667.0,
+  "model_col": 1165.5,
+  "product_name": "test3",
+  "model_file": "test3.shm",
+  "roi_in_reference": {
+    "x": 892,
+    "y": 406,
+    "width": 547,
+    "height": 522
+  },
+  "valve_prefeed_time": 0.1,
+  "valve_a_dispense_time": 0.77,
+  "valve_b_dispense_time": 2.0,
+  "line_speed_xy": 800,
+  "recognized_coordinates": {
+    "segments": [
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1048.952592672332,
+            1174.7880342076082
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1337.1694225217752,
+            1168.1052787544352
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1347.2840577980726,
+            1478.274064791788
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1043.1126929217214,
+            1489.691834143852
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1120.0031051191283,
+            1419.431232956732
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1276.420444970435,
+            1414.7005129365498
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1299.1552196171413,
+            1294.767363370723
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1280.8556994129726,
+            1225.620693370488
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1129.763862117094,
+            1230.3263520203907
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1177.0087366728294,
+            1226.1096860533387
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1097.2549761077028,
+            1253.77894294201
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1094.142837519849,
+            1299.7269220978883
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1100.987759320882,
+            1339.6367382719627
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1111.748443662987,
+            1362.8855822304192
+          ]
+        ],
+        "dwell_ms": 100
+      }
+    ],
+    "timestamp": 1770200187.0878608,
+    "transform_data": {
+      "cx": 1178.7608257577651,
+      "cy": 1336.6560214559183,
+      "angle": 0.004708746947550672,
+      "score": 0.20606063498453508
+    }
+  }
+}

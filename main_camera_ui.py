@@ -4566,6 +4566,21 @@ class MainWindow(QWidget):
                      "请检查日志或联系技术支持。")
                  return
 
+        # [CRITICAL GUARD 2] Specific check for Halcon Mode ROI
+        is_halcon = self.chk_use_halcon.isChecked() if hasattr(self, 'chk_use_halcon') else False
+        if is_halcon and 'roi_in_reference' not in existing_config:
+             # Try to salvage from running memory if available
+             if hasattr(self, 'halcon_product_manager') and getattr(self.halcon_product_manager, 'roi_in_reference', None):
+                 existing_config['roi_in_reference'] = self.halcon_product_manager.roi_in_reference
+                 self.log(f"DEBUG: ✅ Salvaged roi_in_reference from memory: {existing_config['roi_in_reference']}")
+             else:
+                 QMessageBox.critical(self, "保存失败", 
+                     f"错误：配方 '{name}' 缺少关键定位数据 (ROI)！\n"
+                     "原因：可能在保存前未成功训练，或者数据丢失。\n\n"
+                     "请先点击 [训练新模型] 重新生成数据，然后再保存。")
+                 self.log(f"DEBUG: ❌ Aborted save. Halcon mode requires roi_in_reference.")
+                 return
+
         # Collect Data (Merge UI values into existing_config)
         config_data = existing_config.copy()
         

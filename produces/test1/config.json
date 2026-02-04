@@ -1,0 +1,152 @@
+{
+  "vision_offset_x": 0.0,
+  "vision_offset_y": 0.0,
+  "exposure": 2.4,
+  "gain": 5.4,
+  "gamma": 2.0,
+  "feedrate_xy": 1000,
+  "feedrate_z": 300,
+  "accel": 452.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 59.0,
+  "safe_z_product": 100.0,
+  "work_z": 100.0,
+  "nozzle_offset_x": -96.9,
+  "nozzle_offset_y": -5.199999999999989,
+  "z_base": 52.599999999999966,
+  "model_file": "test1.shm",
+  "model_row": 675.0,
+  "model_col": 1149.0,
+  "product_name": "test1",
+  "roi_in_reference": {
+    "x": 882,
+    "y": 429,
+    "width": 534,
+    "height": 492
+  },
+  "valve_prefeed_time": 0.1,
+  "valve_a_dispense_time": 0.77,
+  "valve_b_dispense_time": 2.0,
+  "line_speed_xy": 800,
+  "recognized_coordinates": {
+    "segments": [
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1709.7031452303925,
+            1184.5865780866388
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1719.072860649351,
+            1487.3999332039014
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            2007.5831621562863,
+            1476.1240813610077
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            2001.4469725249241,
+            1168.1019121040845
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1845.6918822782545,
+            1238.7623417850302
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1773.1359106744194,
+            1314.3686277708912
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1804.5728368201737,
+            1394.2076278924876
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1935.081862259539,
+            1356.1177690813468
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1946.2660657238087,
+            1400.925134006548
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1946.6391128359332,
+            1309.941461139858
+          ]
+        ],
+        "dwell_ms": 100
+      }
+    ],
+    "timestamp": 1770200115.2078536,
+    "transform_data": {
+      "cx": 1834.2161755199322,
+      "cy": 1343.7754659520047,
+      "angle": 0.003042599393555368,
+      "score": 0.10934825598523545
+    }
+  }
+}

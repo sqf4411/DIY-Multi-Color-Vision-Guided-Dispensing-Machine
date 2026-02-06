@@ -1,0 +1,28 @@
+{
+  "vision_offset_x": 0.0,
+  "vision_offset_y": 0.0,
+  "exposure": 2.1,
+  "gain": 3.5,
+  "gamma": 2.0,
+  "feedrate_xy": 1000,
+  "feedrate_z": 300,
+  "accel": 452.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 59.0,
+  "safe_z_product": 100.0,
+  "work_z": 100.0,
+  "model_row": 657.0,
+  "model_col": 1184.5,
+  "product_name": "3_TB1",
+  "model_file": "3_TB1.shm",
+  "roi_in_reference": {
+    "x": 907,
+    "y": 394,
+    "width": 555,
+    "height": 526
+  },
+  "valve_prefeed_time": 0.1,
+  "valve_a_dispense_time": 0.77,
+  "valve_b_dispense_time": 2.0,
+  "line_speed_xy": 800
+}

@@ -2298,6 +2298,11 @@ class MainWindow(QWidget):
         if self.machine.connected:
              start_x, start_y, start_z = self.machine.get_position()
         
+        # [FIX] Clear old data before starting new measurement
+        self.laser_depth_map = {} 
+        if hasattr(self, 'lbl_laser_depth'):
+            self.lbl_laser_depth.setText("均Z:-- (均深:--)")
+        
         self.laser_worker = LaserMeasureWorker(
             self.machine, 
             points_to_measure, 
@@ -4118,6 +4123,12 @@ class MainWindow(QWidget):
                 
                 # [NEW] ⭐ 重要：更新按钮状态，解锁识别模具、空跑、批量等功能
                 self.update_button_states()
+                
+                # [FIX] Clear Laser Data (Path changed, old measurements are invalid)
+                self.laser_depth_map = {}
+                if hasattr(self, 'lbl_laser_depth'):
+                    self.lbl_laser_depth.setText("均Z:-- (均深:--)")
+                self.log("ℹ️ 路径已更新，旧激光数据已清除 (请重新测高)")
                      
             else:
                 self.log("❌ 编辑取消或保存失败")
@@ -4260,6 +4271,12 @@ class MainWindow(QWidget):
             
             # ⭐ 重要：更新按钮状态，因为路径已改变
             self.update_button_states()
+
+            # [FIX] Clear Laser Data (Path changed, old measurements are invalid)
+            self.laser_depth_map = {}
+            if hasattr(self, 'lbl_laser_depth'):
+                self.lbl_laser_depth.setText("均Z:-- (均深:--)")
+            self.log("ℹ️ 路径已更新，旧激光数据已清除 (请重新测高)")
         else:
             self.log("⚠ 路径示教取消或未保存")
     # ================== 点胶任务按钮（占位） ==================
@@ -4886,6 +4903,31 @@ class MainWindow(QWidget):
         self.model_ref_col = config.get('model_col', 1113.3245)
         
         self.log(f"✅ 已恢复所有参数: 速度XY={int(self.feedrate_xy)}, 偏移X={self.nozzle_offset_x:.2f}, Y={self.nozzle_offset_y:.2f}, Z基准={self.z_base:.2f}")
+            
+        # [NEW] ⭐ Load Laser Data (Restored logic)
+        if 'laser_data' in config:
+            ld = config['laser_data']
+            pts = ld.get('points', [])
+            self.laser_depth_map = {} # Clear existing
+            for p in pts:
+                px = p.get('x')
+                py = p.get('y')
+                d = p.get('depth')
+                if px is not None and py is not None and d is not None:
+                    self.laser_depth_map[(round(px, 2), round(py, 2))] = d
+            
+            # Update UI Label
+            avg_z = ld.get('avg_z', 0.0)
+            avg_depth = ld.get('avg_depth', 0.0)
+            if hasattr(self, 'lbl_laser_depth'):
+                self.lbl_laser_depth.setText(f"均Z:{avg_z:.2f} (均深:{avg_depth:.2f})")
+            
+            self.log(f"✅ 已加载激光测高数据: {len(self.laser_depth_map)} 点")
+        else:
+            self.laser_depth_map = {}
+            if hasattr(self, 'lbl_laser_depth'):
+                self.lbl_laser_depth.setText("均Z:-- (均深:--)")
+            self.log("ℹ️ 该配方未包含激光测高数据")
             
         # 2. Load Model
         # Use model_file from config, fallback to model.shm

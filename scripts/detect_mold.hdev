@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<hdevelop file_version="1.2" halcon_version="20.11">
+<hdevelop file_version="1.2" halcon_version="25.05.0.0">
 <procedure name="main">
 <interface/>
 <body>
@@ -12,18 +12,18 @@
 </procedure>
 <procedure name="detect_mold">
 <interface>
-  <io>
-    <par name="Image" base_type="iconic" dimension="0"/>
-  </io>
-  <ic>
-    <par name="ModelPath" base_type="ctrl" dimension="0"/>
-  </ic>
-  <oc>
-    <par name="ResultRow" base_type="ctrl" dimension="0"/>
-    <par name="ResultColumn" base_type="ctrl" dimension="0"/>
-    <par name="ResultAngle" base_type="ctrl" dimension="0"/>
-    <par name="ResultScore" base_type="ctrl" dimension="0"/>
-  </oc>
+<io>
+<par name="Image" base_type="iconic" dimension="0"/>
+</io>
+<ic>
+<par name="ModelPath" base_type="ctrl" dimension="0"/>
+</ic>
+<oc>
+<par name="ResultRow" base_type="ctrl" dimension="0"/>
+<par name="ResultColumn" base_type="ctrl" dimension="0"/>
+<par name="ResultAngle" base_type="ctrl" dimension="0"/>
+<par name="ResultScore" base_type="ctrl" dimension="0"/>
+</oc>
 </interface>
 <body>
 <c>* Initialization</c>
@@ -40,19 +40,19 @@
 <c></c>
 <l>if (FileExists == 0)</l>
 <c>    * --- TRAINING PHASE ---</c>
-<l>    GoldenImagePath := 'H:/CodeForGithub/DIY-Multi-Color-Vision-Guided-Dispensing-Machine/config/mold2.png'</l>
+<l>    tuple_regexp_replace (ModelPath, '\\\\[^\\\\]+\\.shm$', '\\\\reference.png', GoldenImagePath)</l>
 <l>    file_exists (GoldenImagePath, ImgExists)</l>
 <l>    if (ImgExists)</l>
 <l>        read_image (TrainImage, GoldenImagePath)</l>
 <c>        </c>
 <c>        * ROI definition</c>
-        <c>        * ROI definition (Updated identifiers from user)</c>
-        <l>        gen_rectangle1 (ModelRegion, 448.829, 936.949, 854.524, 1289.7)</l>
+<c>        * ROI definition (Updated identifiers from user)</c>
+<l>        gen_rectangle1 (ModelRegion, 448.829, 936.949, 854.524, 1289.7)</l>
 <l>        reduce_domain (TrainImage, ModelRegion, TemplateImage)</l>
 <c>        </c>
 <c>        * Use Standard Shape Model (Robust)</c>
 <c>        * auto, rad(-90), rad(180), auto, auto, auto, auto, 'use_polarity', auto, auto</c>
-<l>        create_shape_model (TemplateImage, 'auto', rad(0), rad(360), 'auto', 'auto', 'use_polarity', 'auto', 'auto', ModelID)</l>
+<l>        create_scaled_shape_model (TemplateImage, 'auto', rad(0), rad(360), 'auto', 0.9, 1.1, 'auto', 'auto', 'ignore_global_polarity', 'auto', 'auto', ModelID)</l>
 <l>        write_shape_model (ModelID, ModelFile)</l>
 <l>    else</l>
 <l>        return ()</l>
@@ -73,7 +73,7 @@
 <c>* MinScore=0.05 (Ultra-low), NumMatches=4, MaxOverlap=0.5</c>
 <c>* Scale range: 0.9 to 1.1, NumLevels=0 (No pyramid - fastest)</c>
 <c>* Greediness: 0.5 (Balanced - more thorough search)</c>
-<l>find_scaled_shape_model (Image, ModelID, rad(0), rad(360), 0.9, 1.1, 0.02, 4, 0.5, 'least_squares', 0, 0.5, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
+<l>find_scaled_shape_model (Image, ModelID, rad(-45), rad(90), 0.9, 1.1, 0.02, 8, 0.5, 'least_squares', 0, 0.5, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
 <c></c>
 <c>* Cleanup (Halcon handles memory usually, strictly we should clear)</c>
 <l>clear_shape_model (ModelID)</l>
@@ -83,6 +83,7 @@
 <docu id="detect_mold">
 <parameters>
 <parameter id="Image"/>
+<parameter id="ModelPath"/>
 <parameter id="ResultAngle"/>
 <parameter id="ResultColumn"/>
 <parameter id="ResultRow"/>

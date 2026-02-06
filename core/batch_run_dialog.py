@@ -277,7 +277,7 @@ class BatchWorker(QThread):
                             all_prods = self.mw.product_manager.list_products()
                             best_prod, score = self.mw.halcon_product_manager.find_best_match_product(gray_img, all_prods)
                             
-                            if best_prod and score > 0.3: # Lowered to 0.3 for similar molds
+                            if best_prod and score > 0.15: # Lowered to 0.15 for low recognition scores
                                 self.log_signal.emit(f"✅ (R{r}C{c}) 识别到产品 [{best_prod}] (Score: {score:.2f})")
                                 # 加载该产品
                                 ok, msg = self.mw.halcon_product_manager.load_product(best_prod)

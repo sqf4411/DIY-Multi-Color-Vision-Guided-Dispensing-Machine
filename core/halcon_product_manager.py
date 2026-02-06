@@ -374,11 +374,12 @@ class HalconProductManager:
                 # 运行检测
                 result = self.halcon.process_image(image_np)
                 if result and result.get('success') and result.get('matches'):
-                    # 取最高分
-                    max_score = max([m['score'] for m in result['matches']])
-                    print(f"[BestMatch] Candidate '{prod}' Score: {max_score:.2f}")
-                    if max_score > best_score:
-                        best_score = max_score
+                    # [CHANGE] 使用第一个匹配（左上角产品，训练参考）而不是最高分
+                    # 第一个匹配最可靠，因为它对应训练时使用的产品
+                    first_score = result['matches'][0]['score']
+                    print(f"[BestMatch] Candidate '{prod}' First Match Score: {first_score:.2f} (Total: {len(result['matches'])} matches)")
+                    if first_score > best_score:
+                        best_score = first_score
                         best_product = prod
                 else:
                     print(f"[BestMatch] Candidate '{prod}' Score: 0.00 (No Match)")

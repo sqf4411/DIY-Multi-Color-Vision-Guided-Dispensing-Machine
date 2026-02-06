@@ -45,7 +45,12 @@ class BatchWorker(QThread):
         """
         try:
             # Get product directory
-            prod_dir = os.path.join(self.mw.product_base_dir, product_name)
+            # [FIX] Use product_manager instead of missing product_base_dir
+            if hasattr(self.mw, 'product_manager'):
+                prod_dir = self.mw.product_manager.get_product_path(product_name)
+            else:
+                # Fallback if product_manager not found (unlikely)
+                prod_dir = os.path.join("produces", product_name)
             config_path = os.path.join(prod_dir, "config.json")
             
             if not os.path.exists(config_path):

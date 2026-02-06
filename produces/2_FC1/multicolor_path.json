@@ -5,8 +5,8 @@
       "color": 0,
       "points": [
         [
-          255.35475234270413,
-          262.65060240963857
+          54.0,
+          49.0
         ]
       ],
       "dwell_ms": 100
@@ -16,8 +16,140 @@
       "color": 0,
       "points": [
         [
-          303.1094073262748,
-          378.72094438359494
+          58.5,
+          353.5
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 0,
+      "points": [
+        [
+          344.5,
+          351.5
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 0,
+      "points": [
+        [
+          338.5,
+          42.5
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 1,
+      "points": [
+        [
+          140.0,
+          156.0
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 1,
+      "points": [
+        [
+          177.0,
+          114.5
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 1,
+      "points": [
+        [
+          225.0,
+          114.0
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 1,
+      "points": [
+        [
+          266.5,
+          153.5
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 1,
+      "points": [
+        [
+          134.0,
+          238.5
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 1,
+      "points": [
+        [
+          197.5,
+          241.5
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 1,
+      "points": [
+        [
+          203.0,
+          203.5
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 1,
+      "points": [
+        [
+          284.5,
+          230.0
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 1,
+      "points": [
+        [
+          246.5,
+          282.0
+        ]
+      ],
+      "dwell_ms": 100
+    },
+    {
+      "type": "dot",
+      "color": 1,
+      "points": [
+        [
+          168.0,
+          279.0
         ]
       ],
       "dwell_ms": 100

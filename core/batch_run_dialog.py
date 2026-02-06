@@ -61,11 +61,35 @@ class BatchWorker(QThread):
                 config = json.load(f)
             
             if self.mode == 'camera_dry':
-                # 加载相机空跑参数
+                # 加载相机空跑参数 (Priority: Product Cam -> Global Cam -> Product Nozzle)
+                # Get global params from MainWindow
+                global_cam_safe_z_cavity = getattr(self.mw, 'cam_safe_z_cavity', 0.0)
+                global_cam_safe_z_product = getattr(self.mw, 'cam_safe_z_product', 0.0)
+                global_cam_work_z = getattr(self.mw, 'cam_work_z', 0.0)
+
+                # Helper: return first value > 0
+                def first_valid(*values):
+                    for v in values:
+                        if v and v > 0:
+                            return v
+                    return 0.0
+                
                 params = {
-                    'safe_z_cavity': config.get('cam_safe_z_cavity', 0.0),
-                    'safe_z_product': config.get('cam_safe_z_product', 0.0),
-                    'work_z': config.get('cam_work_z', 0.0)
+                    'safe_z_cavity': first_valid(
+                        config.get('cam_safe_z_cavity'),
+                        global_cam_safe_z_cavity,
+                        config.get('safe_z_cavity')
+                    ),
+                    'safe_z_product': first_valid(
+                        config.get('cam_safe_z_product'),
+                        global_cam_safe_z_product,
+                        config.get('safe_z_product')
+                    ),
+                    'work_z': first_valid(
+                        config.get('cam_work_z'),
+                        global_cam_work_z,
+                        config.get('work_z')
+                    )
                 }
                 self.log_signal.emit(f"📂 已加载【{product_name}】的相机参数: {params}")
             else:  # nozzle_dry or real
@@ -82,6 +106,8 @@ class BatchWorker(QThread):
                 self.log_signal.emit(f"⚠️ 警告: 产品 {product_name} 的参数未设置或为0，可能导致撞车！")
                 return None
             
+            # Store as instance attribute for use by other methods (e.g., _safe_lift_z)
+            self.params = params
             return params
             
         except Exception as e:
@@ -251,7 +277,7 @@ class BatchWorker(QThread):
                             all_prods = self.mw.product_manager.list_products()
                             best_prod, score = self.mw.halcon_product_manager.find_best_match_product(gray_img, all_prods)
                             
-                            if best_prod and score > 0.4: # Lower threshold to 0.4
+                            if best_prod and score > 0.3: # Lowered to 0.3 for similar molds
                                 self.log_signal.emit(f"✅ (R{r}C{c}) 识别到产品 [{best_prod}] (Score: {score:.2f})")
                                 # 加载该产品
                                 ok, msg = self.mw.halcon_product_manager.load_product(best_prod)
@@ -457,10 +483,8 @@ class BatchWorker(QThread):
 
     def _safe_lift_z(self):
         """辅助函数：抬升到移动安全高度"""
-        if self.mode == 'camera_dry':
-            safe_z_move = float(self.cfg['cam_safe_z_product'])
-        else:
-            safe_z_move = float(self.cfg['nozzle_safe_z_product'])
+        # Use loaded per-product params instead of cfg
+        safe_z_move = float(self.params.get('safe_z_product', 100.0))
         self.mw.machine.move_to(z=safe_z_move, speed=self.mw.feedrate_z)
 
 
@@ -477,21 +501,21 @@ class BatchWorker(QThread):
         h_img, w_img = self.mw.last_frame.shape[:2]
         center_x, center_y = w_img / 2, h_img / 2
         
-        # 根据模式选择参数
+        # 根据模式选择参数（从 self.params 加载，已做 fallback 处理）
         if self.mode == 'camera_dry':
             # 相机空跑：无偏移，用相机高度
             off_x, off_y = 0.0, 0.0
-            safe_z_cavity = float(self.cfg['cam_safe_z_cavity'])
-            safe_z_product = float(self.cfg['cam_safe_z_product'])
-            work_z = float(self.cfg['cam_work_z'])
+            safe_z_cavity = float(self.params.get('safe_z_cavity', 100.0))
+            safe_z_product = float(self.params.get('safe_z_product', 100.0))
+            work_z = float(self.params.get('work_z', 100.0))
             valve_on = False
         else:
-            # 针头空跑 / 真实点胶：有偏移，用主界面高度
+            # 针头空跑 / 真实点胶：有偏移，用nozzle高度
             off_x = self.mw.nozzle_offset_x
             off_y = self.mw.nozzle_offset_y
-            safe_z_cavity = float(self.cfg['nozzle_safe_z_cavity'])
-            safe_z_product = float(self.cfg['nozzle_safe_z_product'])
-            work_z = float(self.cfg['nozzle_work_z'])
+            safe_z_cavity = float(self.params.get('safe_z_cavity', 100.0))
+            safe_z_product = float(self.params.get('safe_z_product', 100.0))
+            work_z = float(self.params.get('work_z', 100.0))
             valve_on = (self.mode == 'real')
 
         speed_xy = int(self.mw.feedrate_xy)

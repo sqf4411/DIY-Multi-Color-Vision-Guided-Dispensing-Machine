@@ -5292,11 +5292,12 @@ class MainWindow(QWidget):
         }
         
         def save_cam_params(dialog):
+            # Update in-memory variables
             self.cam_safe_z_cavity = dialog.safe_z_cavity
             self.cam_safe_z_product = dialog.safe_z_product
             self.cam_work_z = dialog.work_z
             
-            # 速度参数是共享的，同步更新变量和 UI 滑块
+            # Update shared speed parameters and UI
             self.feedrate_xy = dialog.speed_xy
             self.feedrate_z = dialog.speed_z
             
@@ -5316,6 +5317,35 @@ class MainWindow(QWidget):
             self.line_dwell_ms = dialog.line_dwell_ms
             self.color_delay = dialog.color_delay
 
+            # [CRITICAL] Save camera params to PRODUCT config (not global)
+            # This allows each product/mold to have different camera heights for batch mixed mode
+            if self.halcon_product_manager and self.halcon_product_manager.current_product:
+                # Load existing product config
+                existing_config = self.halcon_product_manager.products.load_product_config(
+                    self.halcon_product_manager.current_product
+                )
+                if existing_config:
+                    # Update camera-specific height parameters
+                    existing_config['cam_safe_z_cavity'] = self.cam_safe_z_cavity
+                    existing_config['cam_safe_z_product'] = self.cam_safe_z_product
+                    existing_config['cam_work_z'] = self.cam_work_z
+                    
+                    # [CRITICAL] Use halcon_product_manager.save_product() to preserve Halcon metadata
+                    # This wrapper ensures roi_in_reference and model data are not lost
+                    success, msg = self.halcon_product_manager.save_product(
+                        config_data=existing_config
+                    )
+                    
+                    if success:
+                        self.log(f"✅ 相机参数已保存到产品配方")
+                    else:
+                        self.log(f"❌ 保存产品配方失败: {msg}")
+                else:
+                    self.log("❌ 无法加载当前产品配置")
+            else:
+                self.log("⚠️ 未加载产品，相机参数仅保存到内存")
+            
+            # Also save to global app settings for convenience
             self.save_app_settings()
 
         self._prepare_dry_run(
@@ -5398,12 +5428,12 @@ class MainWindow(QWidget):
         }
 
         def save_nozzle_params(dialog):
-            # 更新主界面控件，控件会自动更新变量
+            # Update main window spinboxes (which auto-update self.safe_z_*, self.work_z via signals)
             self.spn_safe_z_cavity.setValue(dialog.safe_z_cavity)
             self.spn_safe_z_product.setValue(dialog.safe_z_product)
             self.spn_work_z.setValue(dialog.work_z)
                         
-            # 速度参数是共享的，同步更新变量和 UI 滑块
+            # Update shared speed parameters and UI sliders
             self.feedrate_xy = dialog.speed_xy
             self.feedrate_z = dialog.speed_z
             
@@ -5423,6 +5453,34 @@ class MainWindow(QWidget):
             self.line_dwell_ms = dialog.line_dwell_ms
             self.color_delay = dialog.color_delay
 
+            # [CRITICAL] Save nozzle params to PRODUCT config (not just global)
+            # This allows each product/mold to have different nozzle heights for batch mode
+            if self.halcon_product_manager and self.halcon_product_manager.current_product:
+                # Load existing product config
+                existing_config = self.halcon_product_manager.products.load_product_config(
+                    self.halcon_product_manager.current_product
+                )
+                if existing_config:
+                    # Update nozzle-specific height parameters
+                    existing_config['safe_z_cavity'] = dialog.safe_z_cavity
+                    existing_config['safe_z_product'] = dialog.safe_z_product
+                    existing_config['work_z'] = dialog.work_z
+                    
+                    # [CRITICAL] Use halcon_product_manager.save_product() to preserve Halcon metadata
+                    success, msg = self.halcon_product_manager.save_product(
+                        config_data=existing_config
+                    )
+                    
+                    if success:
+                        self.log(f"✅ 针头参数已保存到产品配方")
+                    else:
+                        self.log(f"❌ 保存产品配方失败: {msg}")
+                else:
+                    self.log("❌ 无法加载当前产品配置")
+            else:
+                self.log("⚠️ 未加载产品，针头参数仅保存到内存")
+
+            # Also save to global app settings for convenience
             self.save_app_settings()
 
         self._prepare_dry_run(

@@ -435,6 +435,18 @@ class DryRunDialog(QDialog):
                 from PyQt5.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "保存失败", f"保存参数时出错: {e}")
 
+    def accept(self):
+        """重写 accept: 点击 Run 时自动保存参数（防止用户忘记点 Save）"""
+        if self.save_callback:
+            try:
+                self.save_callback(self)
+                # 静默保存，不弹窗打断流程
+            except Exception as e:
+                # 如果保存失败，记录日志但不阻止运行
+                print(f"[DryRunDialog] Auto-save failed: {e}")
+        # 调用父类 accept，关闭对话框
+        super().accept()
+
 from PyQt5.QtWidgets import QPushButton, QProgressBar
 
 class DryRunControlDialog(QDialog):

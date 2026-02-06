@@ -177,6 +177,28 @@ class HalconManager:
                     "score": s
                 })
             
+            # [Optimization] Sort 4 points clockwise: TL -> TR -> BR -> BL
+            if len(results) == 4:
+                try:
+                    avg_row = sum(r['row'] for r in results) / 4.0
+                    avg_col = sum(r['col'] for r in results) / 4.0
+                    
+                    def get_sort_key(res):
+                        r, c = res['row'], res['col']
+                        # 0: Top-Left (r<mid, c<mid)
+                        # 1: Top-Right (r<mid, c>=mid)
+                        # 2: Bottom-Right (r>=mid, c>=mid)
+                        # 3: Bottom-Left (r>=mid, c<mid)
+                        if r < avg_row:
+                            return 0 if c < avg_col else 1
+                        else:
+                            return 3 if c < avg_col else 2
+                            
+                    results.sort(key=get_sort_key)
+                    print(f"[HalconManager] ✅ 已按顺时针排序4个模具 (TL->TR->BR->BL)")
+                except Exception as e:
+                    print(f"[HalconManager] ⚠️ 排序失败: {e}")
+            
             print(f"[HalconManager] 识别成功，找到 {len(results)} 个目标。")
             return {
                 "success": True,

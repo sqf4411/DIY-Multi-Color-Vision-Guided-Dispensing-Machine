@@ -73,7 +73,7 @@
 <c>* MinScore=0.05 (Ultra-low), NumMatches=4, MaxOverlap=0.5</c>
 <c>* Scale range: 0.9 to 1.1, NumLevels=0 (No pyramid - fastest)</c>
 <c>* Greediness: 0.5 (Balanced - more thorough search)</c>
-<l>find_scaled_shape_model (Image, ModelID, rad(-45), rad(90), 0.9, 1.1, 0.02, 8, 0.5, 'least_squares', 0, 0.5, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
+<l>find_scaled_shape_model (Image, ModelID, rad(-45), rad(90), 0.9, 1.1, 0.02, 4, 0.5, 'least_squares', 0, 0.5, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
 <c></c>
 <c>* Cleanup (Halcon handles memory usually, strictly we should clear)</c>
 <l>clear_shape_model (ModelID)</l>

@@ -24,5 +24,93 @@
   "valve_prefeed_time": 0.1,
   "valve_a_dispense_time": 0.77,
   "valve_b_dispense_time": 2.0,
-  "line_speed_xy": 800
+  "line_speed_xy": 800,
+  "recognized_coordinates": {
+    "segments": [
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1711.7811487814383,
+            502.90618494380254
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1999.597546815075,
+            500.2521410776933
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            2006.1354927338896,
+            798.2658396867324
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1721.6061009394136,
+            806.37862229794
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1789.419699303048,
+            627.8152297151114
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1934.8635218353909,
+            615.3675817614836
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1872.0770370038142,
+            735.2439847602262
+          ]
+        ],
+        "dwell_ms": 100
+      }
+    ],
+    "timestamp": 1770369923.3080313,
+    "transform_data": {
+      "cx": 1856.9738596003524,
+      "cy": 662.2951155984015,
+      "angle": 6.266590495908127,
+      "score": 0.16940802867020466
+    }
+  }
 }

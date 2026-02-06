@@ -25,6 +25,7 @@ class BatchWorker(QThread):
     current_line_signal = pyqtSignal(str)   # 新增：发送当前执行的 G-code 行
     current_index_signal = pyqtSignal(int)  # 新增：发送当前执行的 G-code 行号 (用于准确高亮)
     path_update_signal = pyqtSignal(list)   # 新增：发送当前产品的路径数据用于实时显示
+    request_manual_change_signal = pyqtSignal(str) # [NEW] 请求手动换胶 (Name of finished color)
 
     def __init__(self, main_window, grid_config, mode='real'):
         super().__init__()
@@ -405,6 +406,28 @@ class BatchWorker(QThread):
             # Maybe return to Safe Z or Origin?
             self._safe_lift_z()
             self.log_signal.emit(f"✅ {color_name} 批次完成")
+
+            # [NEW] Manual Change Logic (Mixed Mode Only)
+            is_mixed = self.cfg.get('mixed_mode', False)
+            # If not the last color, pause for change
+            if is_mixed and color_idx != sorted_colors[-1]:
+                 self.log_signal.emit(f"⏸ 等待手动换胶 ({color_name} -> Next)...")
+                 
+                 # 1. Return to Start Position (Safety first)
+                 # Z is already safe from _safe_lift_z() above
+                 self.mw.machine.move_to(x=start_x, y=start_y, speed=self.mw.feedrate_xy)
+                 
+                 # 2. Emit Request Signal
+                 self.request_manual_change_signal.emit(color_name)
+                 
+                 # 3. Enter Pause Loop
+                 self.pause()
+                 while self.paused and self.running:
+                     self.msleep(100)
+                 
+                 if not self.running:
+                     self.log_signal.emit("⏹ 用户在换胶阶段终止任务")
+                     return
 
         # 结束 - 返回起始点
         self.log_signal.emit("🔙 全部完成，返回起始点...")
@@ -879,6 +902,23 @@ class BatchRunDialog(QDialog):
             'line_speed_xy': self.spn_line_speed.value()
         }
 
+    def on_manual_change_requested(self, color_name):
+        """Handle request for manual glue change"""
+        dialog = ManualChangeDialog(self.mw, color_name)
+        res = dialog.exec_()
+        
+        if res == QDialog.Accepted:
+            # Continue
+            self.log("▶ 用户确认换胶完成，继续执行...")
+            if self.worker:
+                self.worker.resume()
+        else:
+            # Stop
+            self.log("❌ 用户取消任务")
+            if self.worker:
+                self.worker.stop()
+                self.worker.resume() # Resume to exit loop via running=False check
+
     def on_start(self, mode):
         # 自动保存配置 (符合用户直觉：运行即保存)
         self.save_settings(silent=True)
@@ -894,7 +934,11 @@ class BatchRunDialog(QDialog):
         self.worker.finished_signal.connect(self.on_finished)
         self.worker.gcode_signal.connect(self.update_gcode_display)
         self.worker.current_index_signal.connect(self.highlight_current_line)
+        self.worker.finished_signal.connect(self.on_finished)
+        self.worker.gcode_signal.connect(self.update_gcode_display)
+        self.worker.current_index_signal.connect(self.highlight_current_line)
         self.worker.path_update_signal.connect(self.mw.on_batch_path_update)  # [NEW] Dynamic path visualization
+        self.worker.request_manual_change_signal.connect(self.on_manual_change_requested) # [NEW]
         
         # 关闭实时识别 (防止卡顿和Z轴变化导致的误识别)
         self.mw.live_detect = False
@@ -1074,6 +1118,112 @@ class BatchRunDialog(QDialog):
             self.log(f"❌ 保存失败: {e}")
             if not silent:
                 QMessageBox.warning(self, "保存失败", f"无法保存配置: {e}")
+
+class ManualChangeDialog(QDialog):
+    """
+    Dialogue for manual glue cartridge change and test dispense.
+    """
+    def __init__(self, main_window, color_name):
+        super().__init__(main_window)
+        self.mw = main_window
+        self.setWindowTitle(f"换胶提示: {color_name} 完成")
+        self.resize(450, 350)
+        self.setStyleSheet("background-color: #1e1e1e; color: white;")
+        
+        layout = QVBoxLayout()
+        
+        # 1. Info Header
+        info_frame = QGroupBox()
+        info_layout = QVBoxLayout()
+        lbl_icon = QLabel("⚠️")
+        lbl_icon.setStyleSheet("font-size: 40px;")
+        lbl_icon.setAlignment(Qt.AlignCenter)
+        
+        lbl_msg = QLabel(f"<h3>当前颜色 [{color_name}] 已执行完毕</h3>"
+                         "<p style='font-size: 14px;'>请按以下步骤操作：</p>"
+                         "<ol style='font-size: 14px;'>"
+                         "<li>机器已回到起始位置 (Safe Z -> Start XY)</li>"
+                         "<li><b>手动更换胶筒</b> 为下一色</li>"
+                         "<li>执行下方 <b>[测试出胶]</b> 确认状态</li>"
+                         "<li>点击 <b>[继续执行]</b> 开始下一色</li>"
+                         "</ol>")
+        lbl_msg.setWordWrap(True)
+        lbl_msg.setStyleSheet("color: #E5E7EB;")
+        
+        info_layout.addWidget(lbl_icon)
+        info_layout.addWidget(lbl_msg)
+        info_frame.setLayout(info_layout)
+        layout.addWidget(info_frame)
+        
+        # 2. Test Dispense Section
+        grp_test = QGroupBox("🛠️ 排胶测试 (Test Dispense)")
+        grp_test.setStyleSheet("QGroupBox { border: 1px solid #4B5563; margin-top: 10px; } "
+                               "QGroupBox::title { color: #F59E0B; }")
+        test_layout = QHBoxLayout()
+        
+        self.spn_time = QDoubleSpinBox()
+        self.spn_time.setRange(0.1, 10.0)
+        self.spn_time.setValue(3.0)
+        self.spn_time.setSuffix(" s")
+        self.spn_time.setStyleSheet("background-color: #374151; padding: 5px;")
+        
+        btn_test = QPushButton("👇 测试出胶")
+        btn_test.setCursor(Qt.PointingHandCursor)
+        btn_test.setStyleSheet("""
+            QPushButton { background-color: #D97706; color: white; font-weight: bold; padding: 8px; border-radius: 4px; }
+            QPushButton:hover { background-color: #F59E0B; }
+            QPushButton:pressed { background-color: #B45309; }
+        """)
+        btn_test.clicked.connect(self.on_test_dispense)
+        
+        test_layout.addWidget(QLabel("时长 (Seconds):"))
+        test_layout.addWidget(self.spn_time)
+        test_layout.addWidget(btn_test)
+        grp_test.setLayout(test_layout)
+        layout.addWidget(grp_test)
+        
+        layout.addStretch()
+        
+        # 3. Action Buttons
+        btn_layout = QHBoxLayout()
+        
+        btn_stop = QPushButton("🛑 结束任务 (End)")
+        btn_stop.setCursor(Qt.PointingHandCursor)
+        btn_stop.setMinimumHeight(40)
+        btn_stop.setStyleSheet("""
+            QPushButton { background-color: #DC2626; color: white; font-weight: bold; border-radius: 4px; }
+            QPushButton:hover { background-color: #EF4444; }
+        """)
+        btn_stop.clicked.connect(self.reject)
+        
+        btn_continue = QPushButton("▶ 继续执行 (Continue)")
+        btn_continue.setCursor(Qt.PointingHandCursor)
+        btn_continue.setMinimumHeight(40)
+        btn_continue.setStyleSheet("""
+            QPushButton { background-color: #059669; color: white; font-weight: bold; border-radius: 4px; }
+            QPushButton:hover { background-color: #10B981; }
+        """)
+        btn_continue.clicked.connect(self.accept)
+        
+        btn_layout.addWidget(btn_stop)
+        btn_layout.addWidget(btn_continue)
+        layout.addLayout(btn_layout)
+        
+        self.setLayout(layout)
+        
+    def on_test_dispense(self):
+        t = self.spn_time.value()
+        # Non-blocking simple post
+        self.mw.log(f"🧪 [测试] 执行排胶 {t}秒 ...")
+        
+        # Send raw gcode to avoid mode checks, ensuring valve opens
+        cmds = [
+            f"Set_Pin Pin=VALVE_A_CTRL Value=1",
+            f"G4 P{int(t * 1000)}",
+            f"Set_Pin Pin=VALVE_A_CTRL Value=0"
+        ]
+        for cmd in cmds:
+            self.mw.machine._post_gcode(cmd)
 
     def closeEvent(self, event):
         """关闭窗口时自动保存"""

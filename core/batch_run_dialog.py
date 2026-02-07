@@ -464,10 +464,13 @@ class BatchWorker(QThread):
         self.log_signal.emit("🔙 全部完成，返回起始点...")
         self.progress_signal.emit(global_total_steps, global_total_steps)
         
+        # [FIX] Use start_z as default fallback to ensure safe return height consistent with start position
+        fallback_z = start_z if start_z > 0 else 100.0
+        
         if self.mode == 'camera_dry':
-            final_safe_z = float(self.cfg['cam_safe_z_product'])
+            final_safe_z = float(self.cfg.get('cam_safe_z_product', fallback_z))
         else:
-            final_safe_z = float(self.cfg['nozzle_safe_z_product'])
+            final_safe_z = float(self.cfg.get('nozzle_safe_z_product', fallback_z))
         self.mw.machine.move_to(z=final_safe_z, speed=self.mw.feedrate_z)
         self.mw.machine.move_to(x=start_x, y=start_y, speed=self.mw.feedrate_xy)
         self.mw.machine.wait_until_idle()

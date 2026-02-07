@@ -186,7 +186,9 @@ class BatchWorker(QThread):
         sorted_colors = sorted(list(active_colors)) if active_colors else [0]
         if not sorted_colors: sorted_colors = [0]
         
-        total_ops = total_molds * len(sorted_colors)
+        total_scan_ops = total_molds
+        total_dispense_ops = total_molds * len(sorted_colors)
+        total_ops = total_scan_ops + total_dispense_ops
         ops_finished = 0
         RESOLUTION = 1000
         global_total_steps = total_ops * RESOLUTION
@@ -226,6 +228,100 @@ class BatchWorker(QThread):
         
         self.mw.machine.move_to(z=safe_z, speed=self.mw.feedrate_z)
         self.log_signal.emit(f"🔼 抬升至安全高度 Z={safe_z} [产品: {current_product}]")
+
+        # --- Phase 1: Pre-Scan Matrix ---
+        self.log_signal.emit(f"🔍 开始全矩阵扫描识别 ({rows}x{cols} 模具)...")
+        
+        for r in range(rows):
+            for c in range(cols):
+                if not self.running: 
+                    self.finished_signal.emit(False, "用户停止")
+                    return
+
+                while self.paused:
+                    if not self.running: return
+                    self.msleep(100)
+
+                # Update Progress for Scan
+                current_op_scan = ops_finished * RESOLUTION
+                self.progress_signal.emit(current_op_scan, global_total_steps)
+
+                target_x = start_x + c * space_x
+                target_y = start_y + r * space_y
+                
+                self.log_signal.emit(f"📍 [Scan {ops_finished + 1}/{total_ops}] (R{r}, C{c}) 定位 & 识别...")
+                
+                # Move Camera to Position
+                self.mw.machine.move_to(x=target_x, y=target_y, speed=self.mw.feedrate_xy)
+                
+                # Use vision_work_z (already separated in params)
+                vision_z = params.get('vision_work_z', work_z)
+                self.mw.machine.move_to(z=vision_z, speed=self.mw.feedrate_z)
+                self.mw.machine.wait_until_idle()
+                time.sleep(0.5) 
+
+                if self.mw.last_frame is None:
+                    self.log_signal.emit("❌ 无法获取图像，跳过")
+                    self._safe_lift_z()
+                    ops_finished += 1 # Count as done even if failed
+                    continue
+
+                img = self.mw.last_frame.copy()
+                img = cv2.flip(img, -1)
+                if len(img.shape) == 3: gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                else: gray_img = img
+
+                # [MIXED MODE LOGIC]
+                is_mixed = self.cfg.get('mixed_mode', False)
+                current_prod_name = getattr(self.mw.halcon_product_manager, 'current_product', None)
+
+                if is_mixed:
+                    self.log_signal.emit(f"🔍 [混合模式] 识别产品类型...")
+                    all_prods = self.mw.product_manager.list_products()
+                    best_prod, score = self.mw.halcon_product_manager.find_best_match_product(gray_img, all_prods)
+
+                    if best_prod and score > 0.15:
+                        self.log_signal.emit(f"✅ (R{r}C{c}) 识别到产品 [{best_prod}] (Score: {score:.2f})")
+                        current_prod_name = best_prod
+                        
+                        # Load found product to update Config/Template for correct path finding
+                        # Optimize: only load if different from currently loaded
+                        current_loaded = getattr(self.mw.halcon_product_manager, 'current_product', None)
+                        if current_loaded != best_prod:
+                            ok, msg = self.mw.halcon_product_manager.load_product(best_prod)
+                            if ok:
+                                self.mw._compute_halcon_template()
+                                # Reload params safe_z if needed? Maybe later.
+                            else:
+                                 self.log_signal.emit(f"❌ 加载产品失败: {msg}")
+                    else:
+                        self.log_signal.emit(f"⚠️ (R{r}C{c}) 未识别到已知产品")
+                        current_prod_name = None
+
+                # Detect Paths (using currently loaded template)
+                paths_groups, _ = self.mw.get_vision_result(gray_img)
+                
+                cache_key = (r, c)
+                if paths_groups:
+                    # Store in cache
+                    # Note: We store paths relative to IMAGE, so they need image context.
+                    # But get_vision_result returns object coordinates if calibrated?
+                    # The get_vision_result returns paths relative to current frame/roi?
+                    # Wait, get_calculated_paths uses center_x, center_y. 
+                    # We store paths_groups which are 'Path' objects or lists of points.
+                    # This is compatible with MAIN loop logic.
+                    vision_cache[cache_key] = (paths_groups, target_x, target_y, current_prod_name)
+                    # Update Preview
+                    self.path_update_signal.emit(paths_groups)
+                else:
+                    self.log_signal.emit(f"⚠️ (R{r}C{c}) 未检测到路径")
+                    vision_cache[cache_key] = None # Mark as processed
+
+                # Lift Safe Z
+                self._safe_lift_z()
+                ops_finished += 1
+        
+        self.log_signal.emit("✅ 全矩阵扫描完成，开始按颜色点胶...")
 
         # --- Outer Loop: Colors ---
         for color_idx in sorted_colors:
@@ -714,13 +810,15 @@ class BatchWorker(QThread):
         
         # End of Processing: Close Color Valve if open
         if active_color_valve is not None:
-            lines.append(f"; [Tag] {active_color_valve} (OFF) - End Batch Item")
-            if self.mode == 'real':
-                lines.append(active_color_valve)
-            active_color_valve = None
-
-        # 最后确保在最高安全高度
-        lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
+             # [MOD] Simulation Check
+            is_sim = self.cfg.get('disable_valves', False)
+            if not is_sim:
+                lines.append(f"SET_PIN PIN={active_color_valve} VALUE=0")
+            else:
+                lines.append(f"; [Tag] {active_color_valve} (OFF) - End Batch Item")
+            
+            # [RM] Redundant lift here - already lifted in loop
+            # lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
         
         return lines
 

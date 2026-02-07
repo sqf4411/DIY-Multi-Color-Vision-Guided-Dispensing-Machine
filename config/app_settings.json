@@ -2,7 +2,7 @@
     "feedrate_xy": 1000,
     "feedrate_z": 300,
     "accel": 452.0,
-    "safe_z_cavity": 105.0,
+    "safe_z_cavity": 85.0,
     "safe_z_product": 100.0,
     "work_z": 100.0,
     "jog_step": 1.0,
@@ -40,5 +40,5 @@
     "line_speed_xy": 800,
     "batch_change_x": 196.62,
     "batch_change_y": 69.42,
-    "batch_change_z": 164.0
+    "batch_change_z": 100.0
 }

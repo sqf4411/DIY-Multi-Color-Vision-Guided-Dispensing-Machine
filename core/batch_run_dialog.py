@@ -226,11 +226,18 @@ class BatchWorker(QThread):
         safe_z_product = params['safe_z_product']
         work_z = params['work_z']
         
-        self.mw.machine.move_to(z=safe_z, speed=self.mw.feedrate_z)
-        self.log_signal.emit(f"🔼 抬升至安全高度 Z={safe_z} [产品: {current_product}]")
+        
+        # [OPT] Determine initial Z for scanning efficiently
+        # Use vision_work_z if available (higher), creating safer/faster scan start
+        start_scan_z = params.get('vision_work_z', safe_z_product)
+        if start_scan_z < safe_z_product: start_scan_z = safe_z_product # Ensure at least product safe height
+        
+        self.mw.machine.move_to(z=start_scan_z, speed=self.mw.feedrate_z)
+        self.log_signal.emit(f"🔼 抬升至识别高度 Z={start_scan_z} [产品: {current_product}]")
 
         # --- Phase 1: Pre-Scan Matrix ---
         self.log_signal.emit(f"🔍 开始全矩阵扫描识别 ({rows}x{cols} 模具)...")
+        found_colors_in_scan = set()
         
         for r in range(rows):
             for c in range(cols):
@@ -255,6 +262,7 @@ class BatchWorker(QThread):
                 self.mw.machine.move_to(x=target_x, y=target_y, speed=self.mw.feedrate_xy)
                 
                 # Use vision_work_z (already separated in params)
+                # [OPT] Stay at Vision Z for efficiency
                 vision_z = params.get('vision_work_z', work_z)
                 self.mw.machine.move_to(z=vision_z, speed=self.mw.feedrate_z)
                 self.mw.machine.wait_until_idle()
@@ -262,6 +270,7 @@ class BatchWorker(QThread):
 
                 if self.mw.last_frame is None:
                     self.log_signal.emit("❌ 无法获取图像，跳过")
+                    # Lift only on failure to be safe
                     self._safe_lift_z()
                     ops_finished += 1 # Count as done even if failed
                     continue
@@ -285,13 +294,11 @@ class BatchWorker(QThread):
                         current_prod_name = best_prod
                         
                         # Load found product to update Config/Template for correct path finding
-                        # Optimize: only load if different from currently loaded
                         current_loaded = getattr(self.mw.halcon_product_manager, 'current_product', None)
                         if current_loaded != best_prod:
                             ok, msg = self.mw.halcon_product_manager.load_product(best_prod)
                             if ok:
                                 self.mw._compute_halcon_template()
-                                # Reload params safe_z if needed? Maybe later.
                             else:
                                  self.log_signal.emit(f"❌ 加载产品失败: {msg}")
                     else:
@@ -303,25 +310,36 @@ class BatchWorker(QThread):
                 
                 cache_key = (r, c)
                 if paths_groups:
-                    # Store in cache
-                    # Note: We store paths relative to IMAGE, so they need image context.
-                    # But get_vision_result returns object coordinates if calibrated?
-                    # The get_vision_result returns paths relative to current frame/roi?
-                    # Wait, get_calculated_paths uses center_x, center_y. 
-                    # We store paths_groups which are 'Path' objects or lists of points.
-                    # This is compatible with MAIN loop logic.
                     vision_cache[cache_key] = (paths_groups, target_x, target_y, current_prod_name)
                     # Update Preview
                     self.path_update_signal.emit(paths_groups)
+                    
+                    # [OPT] Collect Active Colors
+                    for group in paths_groups:
+                        for p in group:
+                            c = getattr(p, 'color', 0)
+                            found_colors_in_scan.add(c)
                 else:
                     self.log_signal.emit(f"⚠️ (R{r}C{c}) 未检测到路径")
                     vision_cache[cache_key] = None # Mark as processed
 
-                # Lift Safe Z
-                self._safe_lift_z()
+                # [OPT] Removed _safe_lift_z here to keep efficient Z at Vision Height
+                # self._safe_lift_z()
                 ops_finished += 1
         
+        # Lift Z after Scan Phase Complete
+        self._safe_lift_z()
         self.log_signal.emit("✅ 全矩阵扫描完成，开始按颜色点胶...")
+
+        # [OPT] Filter Sorted Colors based on Found Colors
+        if found_colors_in_scan:
+            # Intersect with initially sorted_colors (which might be 0-3 in mixed mode)
+            new_colors = [c for c in sorted_colors if c in found_colors_in_scan]
+            if new_colors:
+                 sorted_colors = new_colors
+                 self.log_signal.emit(f"🎨 优化颜色队列: 仅处理 {sorted_colors} ...")
+        else:
+             self.log_signal.emit("⚠️ 扫描未发现有效路径颜色，将按原计划处理...")
 
         # --- Outer Loop: Colors ---
         for color_idx in sorted_colors:
@@ -677,6 +695,21 @@ class BatchWorker(QThread):
         for prod_idx, product_paths in enumerate(paths_groups):
             lines.append(f"; --- Product {prod_idx + 1} ---")
             
+        # [Smart Lift] Track last segment end position
+        last_seg_end_x = None
+        last_seg_end_y = None
+
+        for prod_idx, product_paths in enumerate(paths_groups):
+            lines.append(f"; --- Product {prod_idx + 1} ---")
+            
+            # Reset last pos for new product? 
+            # Actually, moving from prod 1 end to prod 2 start is handled by loop end lift.
+            # But inside product, we need this.
+            # So reset is optional, but 'last_seg_end_x' from previous product is irrelevant 
+            # because we already lifted to Product Z at end of loop.
+            last_seg_end_x = None
+            last_seg_end_y = None
+
             for seg_idx, path_obj in enumerate(product_paths):
                 # 统一获取数据 (兼容 PathSegment 对象和旧列表)
                 if hasattr(path_obj, 'points'):
@@ -694,7 +727,6 @@ class BatchWorker(QThread):
                     path_points = path_obj
                     seg_type = 'line' if len(path_points) > 1 else 'dot'
                     seg_color = 0
-                    seg_color = 0
                     dwell_ms = 100 # Default
 
                 # [CRITICAL] Double-check Color (Redundancy)
@@ -708,41 +740,38 @@ class BatchWorker(QThread):
                 
                 # Prepare Valve Commands
                 # Default to A1 if no color info
-                # Prepare Valve Commands
-                # Default to A1 if no color info
                 valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
                 target_valve = valve_macros[seg_color] if 0 <= seg_color < 4 else "A1_VALVE"
 
                 # --- Valve State Logic ---
                 # Check if we need to switch color valve
-                if active_color_valve != target_valve:
-                    # Close previous if open
-                    if active_color_valve is not None:
+                if active_color_valve is None or active_color_valve != target_valve:
+                    # Switch logic
+                    if active_color_valve is not None and active_color_valve != target_valve:
+                        # Close previous
                          # [MOD] Simulation Check
                         is_sim = self.cfg.get('disable_valves', False)
                         if not is_sim:
                              lines.append(f"SET_PIN PIN={active_color_valve} VALUE=0")
                         else:
                              lines.append(f"; [Tag] {active_color_valve} (OFF) - Switch Color")
+                    
+                    if active_color_valve != target_valve:
+                        # Open new
+                        # [MOD] Simulation Check
+                        is_sim = self.cfg.get('disable_valves', False)
+                        color_delay = self.cfg.get('color_delay', 500)
                         
-                        if self.mode == 'real':
-                             pass
-                    
-                    # Open new
-                    # [MOD] Simulation Check
-                    is_sim = self.cfg.get('disable_valves', False)
-                    color_delay = self.cfg.get('color_delay', 500)
-                    
-                    if not is_sim:
-                        lines.append(f"SET_PIN PIN={target_valve} VALUE=1")
-                        if color_delay > 0:
-                            lines.append(f"G4 P{color_delay}")
-                    else:
-                         lines.append(f"; [Tag] {target_valve} (ON)")
-                         if color_delay > 0:
-                            lines.append(f"; [Tag] G4 P{color_delay} (Supply Delay)")
-                    
-                    active_color_valve = target_valve
+                        if not is_sim:
+                            lines.append(f"SET_PIN PIN={target_valve} VALUE=1")
+                            if color_delay > 0:
+                                lines.append(f"G4 P{color_delay}")
+                        else:
+                             lines.append(f"; [Tag] {target_valve} (ON)")
+                             if color_delay > 0:
+                                lines.append(f"; [Tag] G4 P{color_delay} (Supply Delay)")
+                        
+                        active_color_valve = target_valve
                 
                 # Master Valve A Control (Always toggle per segment)
                 master_pin = "VALVE_A_CTRL"
@@ -760,6 +789,9 @@ class BatchWorker(QThread):
                         lines.append(f"; [Tag] {master_pin} ({action})")
 
                 first_pt = True
+                current_seg_end_x = None
+                current_seg_end_y = None
+
                 for (px, py) in path_points:
                     # 像素 -> 相对 mm
                     dx_pix = px - center_x
@@ -772,7 +804,23 @@ class BatchWorker(QThread):
                     target_mach_x = current_x + dx_mm + off_x
                     target_mach_y = current_y + dy_mm + off_y
                     
+                    # Store for next iteration check
+                    current_seg_end_x = target_mach_x
+                    current_seg_end_y = target_mach_y
+
                     if first_pt:
+                        # [Smart Lift] Check distance from last segment end
+                        # Only applicable if we have a valid last position within this product
+                        if last_seg_end_x is not None:
+                             dist = math.hypot(target_mach_x - last_seg_end_x, target_mach_y - last_seg_end_y)
+                             lift_threshold = self.cfg.get('smart_lift_dist', 20.0)
+                             
+                             if dist > lift_threshold:
+                                 lines.append(f"; [Smart Lift] Dist {dist:.1f}mm > {lift_threshold}mm -> Lift to Product Z")
+                                 # We are currently at Safe Z Cavity (from prev segment end)
+                                 # Lift higher to Product Safe Z
+                                 lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
+
                         # 1. 移动到起点上方 (快速 G0)
                         lines.append(f"G0 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
                         # 2. 下降到工作高度 (慢速 G1)
@@ -804,6 +852,10 @@ class BatchWorker(QThread):
                 
                 # ✅ 段结束：抬到腔内安全Z
                 lines.append(f"G1 Z{safe_z_cavity:.2f} F{speed_z}")
+                
+                # Update Last Pos
+                last_seg_end_x = current_seg_end_x
+                last_seg_end_y = current_seg_end_y
             
             # ✅ Product完成：升到产品安全Z
             lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")

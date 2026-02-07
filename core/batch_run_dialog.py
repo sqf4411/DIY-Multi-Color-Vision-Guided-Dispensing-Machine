@@ -761,6 +761,39 @@ class BatchRunDialog(QDialog):
         layout.addWidget(grp_grid)
 
 
+        # --- 2. 换胶位置配置 (Glue Change Position) ---
+        grp_change = QGroupBox("换胶位置 (Glue Change Pos)")
+        form_change = QFormLayout()
+
+        # Coordinates
+        self.spn_change_x = QDoubleSpinBox()
+        self.spn_change_x.setRange(-2000, 2000)
+        self.spn_change_x.valueChanged.connect(lambda: self.save_change_position(silent=True))
+        
+        self.spn_change_y = QDoubleSpinBox()
+        self.spn_change_y.setRange(-2000, 2000)
+        self.spn_change_y.valueChanged.connect(lambda: self.save_change_position(silent=True))
+        
+        self.spn_change_z = QDoubleSpinBox()
+        self.spn_change_z.setRange(-2000, 2000)
+        self.spn_change_z.valueChanged.connect(lambda: self.save_change_position(silent=True))
+
+        btn_teach_change = QPushButton("示教换胶点")
+        btn_teach_change.clicked.connect(self.on_teach_change)
+        
+        h_change = QHBoxLayout()
+        h_change.addWidget(QLabel("X:"))
+        h_change.addWidget(self.spn_change_x)
+        h_change.addWidget(QLabel("Y:"))
+        h_change.addWidget(self.spn_change_y)
+        h_change.addWidget(QLabel("Z:"))
+        h_change.addWidget(self.spn_change_z)
+        h_change.addWidget(btn_teach_change)
+        
+        form_change.addRow("坐标 (Pos):", h_change)
+        grp_change.setLayout(form_change)
+        layout.addWidget(grp_change)
+
 
         # --- 2.5 激光测量参考 (Laser Measurement Reference) ---
         grp_laser = QGroupBox("激光测量参考 (Laser Reference)")
@@ -917,6 +950,30 @@ class BatchRunDialog(QDialog):
         self.log(f"已示教起始点: X{x:.2f}, Y{y:.2f}, Z{z:.2f}")
         # 立即保存
         self.save_settings(silent=True)
+    
+    def on_teach_change(self):
+        """Teach glue change position"""
+        x, y, z = self.mw.machine.get_position()
+        
+        # Temporarily disconnect signals to avoid multiple incomplete saves
+        self.spn_change_x.valueChanged.disconnect()
+        self.spn_change_y.valueChanged.disconnect()
+        self.spn_change_z.valueChanged.disconnect()
+        
+        # Set all values
+        self.spn_change_x.setValue(x)
+        self.spn_change_y.setValue(y)
+        self.spn_change_z.setValue(z)
+        
+        # Reconnect signals
+        self.spn_change_x.valueChanged.connect(lambda: self.save_change_position(silent=True))
+        self.spn_change_y.valueChanged.connect(lambda: self.save_change_position(silent=True))
+        self.spn_change_z.valueChanged.connect(lambda: self.save_change_position(silent=True))
+        
+        self.log(f"已示教换胶点: X{x:.2f}, Y{y:.2f}, Z{z:.2f}")
+        
+        # Save once after all values are set
+        self.save_change_position(silent=True)
 
     def get_config(self):
         return {
@@ -927,6 +984,10 @@ class BatchRunDialog(QDialog):
             'cols': self.spn_cols.value(),
             'space_x': self.spn_space_x.value(),
             'space_y': self.spn_space_y.value(),
+            # Change position (loaded from global but passed to worker)
+            'change_x': self.spn_change_x.value(),
+            'change_y': self.spn_change_y.value(),
+            'change_z': self.spn_change_z.value(),
             # Z-height parameters removed - will be loaded from product config.json
             'disable_valves': self.chk_simulate.isChecked(),
             'mixed_mode': self.chk_mixed_mode.isChecked(),
@@ -1115,6 +1176,32 @@ class BatchRunDialog(QDialog):
             # [NEW] Line speed
             self.spn_line_speed.setValue(get_int('line_speed_xy', 800))
             
+            # [NEW] Load Change Position from GLOBAL config
+            sx = get_float('batch_start_x', 0.0)
+            sy = get_float('batch_start_y', 0.0)
+            sz = get_float('batch_start_z', 0.0)
+            
+            load_x = get_float('batch_change_x', sx)
+            load_y = get_float('batch_change_y', sy)
+            load_z = get_float('batch_change_z', sz)
+            
+            # Temporarily disconnect signals to prevent auto-save during load
+            try:
+                self.spn_change_x.valueChanged.disconnect()
+                self.spn_change_y.valueChanged.disconnect()
+                self.spn_change_z.valueChanged.disconnect()
+            except:
+                pass  # In case not connected yet (first time)
+            
+            self.spn_change_x.setValue(load_x)
+            self.spn_change_y.setValue(load_y)
+            self.spn_change_z.setValue(load_z)
+            
+            # Reconnect signals
+            self.spn_change_x.valueChanged.connect(lambda: self.save_change_position(silent=True))
+            self.spn_change_y.valueChanged.connect(lambda: self.save_change_position(silent=True))
+            self.spn_change_z.valueChanged.connect(lambda: self.save_change_position(silent=True))
+            
         except Exception as e:
             self.log(f"❌ 加载配置失败: {e}")
 
@@ -1150,6 +1237,25 @@ class BatchRunDialog(QDialog):
             self.log(f"❌ 保存失败: {e}")
             if not silent:
                 QMessageBox.warning(self, "保存失败", f"无法保存配置: {e}")
+    
+    def save_change_position(self, silent=False):
+        """Save change position to GLOBAL config (machine-specific)"""
+        try:
+            cfg = self.mw.config
+            x_val = self.spn_change_x.value()
+            y_val = self.spn_change_y.value()
+            z_val = self.spn_change_z.value()
+            
+            cfg.set('batch_change_x', x_val)
+            cfg.set('batch_change_y', y_val)
+            cfg.set('batch_change_z', z_val)
+            cfg.save_app_settings()
+            
+            if not silent:
+                self.log(f"✅ 换胶位置已保存到全局配置: X={x_val:.2f}, Y={y_val:.2f}, Z={z_val:.2f}")
+        except Exception as e:
+            if not silent:
+                self.log(f"保存换胶位置失败: {e}")
 
 class ManualChangeDialog(QDialog):
     """

@@ -3,7 +3,7 @@
     "feedrate_z": 300,
     "accel": 452.0,
     "safe_z_cavity": 105.0,
-    "safe_z_product": 110.0,
+    "safe_z_product": 100.0,
     "work_z": 100.0,
     "jog_step": 1.0,
     "z_base": 52.599999999999966,
@@ -37,5 +37,8 @@
     "batch_space_x": 72.0,
     "batch_space_y": 0.0,
     "vision_optimal_z": 164.0,
-    "line_speed_xy": 800
+    "line_speed_xy": 800,
+    "batch_change_x": 196.62,
+    "batch_change_y": 69.42,
+    "batch_change_z": 164.0
 }

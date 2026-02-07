@@ -221,3 +221,28 @@ class ProductManager:
                 print(f"[Warn] Failed to load path_poly.npy: {e}")
         
         return dots_data, poly_data
+
+    def get_product_config(self, name):
+        """
+        Get product configuration dict
+        """
+        conf = self.load_product_config(name)
+        return conf if conf else {}
+
+    def update_product_config(self, name, new_config):
+        """
+        Update specific keys in product config
+        """
+        # 1. Load existing
+        current_conf = self.get_product_config(name)
+        
+        # 2. Update (Merge)
+        current_conf.update(new_config)
+        
+        # 3. Save back (Preserve paths by not passing them, wait, save_product overwrites?)
+        # save_product writes config.json. 
+        # CAUTION: save_product implementation above writes config.json efficiently 
+        # but also writes path.npy if provided. If path is None, it ignores it.
+        # So we can just call save_product with config only.
+        
+        return self.save_product(name, current_conf, path_points=None, path_polys=None)

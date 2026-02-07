@@ -1,0 +1,86 @@
+{
+  "vision_offset_x": 0.0,
+  "vision_offset_y": 0.0,
+  "exposure": 2.1,
+  "gain": 3.5,
+  "gamma": 3.8,
+  "feedrate_xy": 1000,
+  "feedrate_z": 300,
+  "accel": 452.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 105.0,
+  "safe_z_product": 110.0,
+  "work_z": 100.0,
+  "nozzle_offset_x": -96.9,
+  "nozzle_offset_y": -5.199999999999989,
+  "z_base": 52.599999999999966,
+  "model_file": "test3.shm",
+  "model_row": 1048.5,
+  "model_col": 1548.5,
+  "product_name": "test3",
+  "roi_in_reference": {
+    "x": 888,
+    "y": 414,
+    "width": 1321,
+    "height": 1269
+  },
+  "valve_prefeed_time": 0.1,
+  "valve_a_dispense_time": 0.77,
+  "valve_b_dispense_time": 2.0,
+  "line_speed_xy": 800,
+  "recognized_coordinates": {
+    "segments": [
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1149.8636175493489,
+            1321.3787629827295
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1817.843069536023,
+            1308.501551689543
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1137.5448681006949,
+            660.6117586962212
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1800.5764566303046,
+            644.0917898932712
+          ]
+        ],
+        "dwell_ms": 100
+      }
+    ],
+    "timestamp": 1770446960.8141117,
+    "transform_data": {
+      "cx": 1548.0004054344558,
+      "cy": 1048.0702360517228,
+      "angle": 7.519824246103418e-07,
+      "score": 0.8737666057326656
+    }
+  }
+}

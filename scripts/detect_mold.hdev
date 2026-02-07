@@ -40,18 +40,14 @@
 <c></c>
 <l>if (FileExists == 0)</l>
 <c>    * --- TRAINING PHASE ---</c>
-<l>    tuple_regexp_replace (ModelPath, '\\\\[^\\\\]+\\.shm$', '\\\\reference.png', GoldenImagePath)</l>
+<c>    * Use roi_template.png, which is the user-selected cropped ROI image</c>
+<l>    tuple_regexp_replace (ModelPath, '\\\\[^\\\\]+\\.shm$', '\\\\roi_template.png', GoldenImagePath)</l>
 <l>    file_exists (GoldenImagePath, ImgExists)</l>
 <l>    if (ImgExists)</l>
-<l>        read_image (TrainImage, GoldenImagePath)</l>
-<c>        </c>
-<c>        * ROI definition</c>
-<c>        * ROI definition (Updated identifiers from user)</c>
-<l>        gen_rectangle1 (ModelRegion, 448.829, 936.949, 854.524, 1289.7)</l>
-<l>        reduce_domain (TrainImage, ModelRegion, TemplateImage)</l>
+<l>        read_image (TemplateImage, GoldenImagePath)</l>
 <c>        </c>
 <c>        * Use Standard Shape Model (Robust)</c>
-<c>        * auto, rad(-90), rad(180), auto, auto, auto, auto, 'use_polarity', auto, auto</c>
+<c>        * Metric: 'ignore_global_polarity' - Relaxed polarity to match instances with varying lighting</c>
 <l>        create_scaled_shape_model (TemplateImage, 'auto', rad(0), rad(360), 'auto', 0.9, 1.1, 'auto', 'auto', 'ignore_global_polarity', 'auto', 'auto', ModelID)</l>
 <l>        write_shape_model (ModelID, ModelFile)</l>
 <l>    else</l>
@@ -68,12 +64,11 @@
 <l>endif</l>
 <c></c>
 <c>* Find Scaled Shape Model (Robust to Scale/Height variations)</c>
-<c>* Find Scaled Shape Model (Robust to Scale/Height variations)</c>
 <c>* Optimization: Removed 'emphasize' to match training image characteristics (raw vs raw)</c>
-<c>* MinScore=0.05 (Ultra-low), NumMatches=4, MaxOverlap=0.5</c>
+<c>* MinScore=0.2 (Reliable detection), NumMatches=0 (Find All), MaxOverlap=0.5</c>
 <c>* Scale range: 0.9 to 1.1, NumLevels=0 (No pyramid - fastest)</c>
-<c>* Greediness: 0.5 (Balanced - more thorough search)</c>
-<l>find_scaled_shape_model (Image, ModelID, rad(-45), rad(90), 0.9, 1.1, 0.02, 4, 0.5, 'least_squares', 0, 0.5, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
+<c>* Greediness: 0.1 (Very thorough search - finds even slightly distorted instances)</c>
+<l>find_scaled_shape_model (Image, ModelID, rad(-45), rad(90), 0.9, 1.1, 0.2, 0, 0.5, 'least_squares', 0, 0.1, ResultRow, ResultColumn, ResultAngle, ResultScale, ResultScore)</l>
 <c></c>
 <c>* Cleanup (Halcon handles memory usually, strictly we should clear)</c>
 <l>clear_shape_model (ModelID)</l>

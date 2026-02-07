@@ -444,21 +444,38 @@ class BatchWorker(QThread):
             if is_mixed and color_idx != sorted_colors[-1]:
                  self.log_signal.emit(f"⏸ 等待手动换胶 ({color_name} -> Next)...")
                  
-                 # 1. Return to Start Position (Safety first)
+                 # 1. Return to Change Position (or Start Position if not set)
                  # Z is already safe from _safe_lift_z() above
-                 self.mw.machine.move_to(x=start_x, y=start_y, speed=self.mw.feedrate_xy)
+                 cx = self.cfg.get('change_x', start_x)
+                 cy = self.cfg.get('change_y', start_y)
+                 cz = self.cfg.get('change_z', safe_z)
                  
-                 # 2. Emit Request Signal
+                 self.mw.machine.move_to(x=cx, y=cy, speed=self.mw.feedrate_xy)
+                 self.mw.machine.wait_until_idle()
+                 
+                 # Descend to Change Z if specified
+                 if cz > 0:
+                     self.mw.machine.move_to(z=cz, speed=self.mw.feedrate_z)
+                 
+                 self.log_signal.emit(f"📍 已移动到换胶位置: ({cx:.1f}, {cy:.1f}, {cz:.1f})")
+                 self.mw.machine.wait_until_idle()
+                 
+                 # 2. Pause and emit request signal
+                 # IMPORTANT: Pause before emitting so dialog's resume() works correctly
+                 self.pause()
                  self.request_manual_change_signal.emit(color_name)
                  
-                 # 3. Enter Pause Loop
-                 self.pause()
+                 # 3. Wait for dialog response
                  while self.paused and self.running:
                      self.msleep(100)
                  
                  if not self.running:
                      self.log_signal.emit("⏹ 用户在换胶阶段终止任务")
                      return
+                 
+                 # [NEW] Lift Z after change done before continuing
+                 self.log_signal.emit(f"🔼 换胶完成，抬升到安全高度...")
+                 self._safe_lift_z()
 
         # 结束 - 返回起始点
         self.log_signal.emit("🔙 全部完成，返回起始点...")

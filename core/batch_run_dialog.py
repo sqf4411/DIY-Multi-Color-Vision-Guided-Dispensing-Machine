@@ -729,22 +729,43 @@ class BatchWorker(QThread):
         
         # 4. Filter empty clusters and Construct Result
         final_groups = []
-        # We want to return groups sorted spatially (e.g. Raster Scan order)
-        # Sort centroids by Y then X
-        # Zip clusters with centroids
-        
         valid_clusters = [c for c in clusters if len(c) > 0]
         
-        # Sort clusters by their centroid position
+        # Sort valid_clusters spatially to match User Request:
+        # Clockwise: TL -> TR -> BR -> BL
+        # Assuming Image Coordinates (Y increases Downwards):
+        # TL = Min Y, Min X
+        # TR = Min Y, Max X
+        # BR = Max Y, Max X
+        # BL = Max Y, Min X
+        
         def get_group_center(group):
              xs = [it['center'][0] for it in group]
              ys = [it['center'][1] for it in group]
              return (sum(xs)/len(xs), sum(ys)/len(ys))
+
+        # Sort all by Y first (Max Y = Top for this machine)
+        valid_clusters.sort(key=lambda g: get_group_center(g)[1], reverse=True)
         
-        valid_clusters.sort(key=lambda g: (get_group_center(g)[1], get_group_center(g)[0])) # Sort by Y then X (Machine Coords)
+        # Split into Top Row (First 2) and Bottom Row (Last 2) if k=4
+        # Robustness: works for k=4. For other k, standard sort.
+        if len(valid_clusters) == 4:
+            row1 = valid_clusters[:2] # Top Row (Max Y)
+            row2 = valid_clusters[2:] # Bottom Row (Min Y)
+            
+            # Sort Row 1 by X Ascending (L -> R) -> TL, TR
+            row1.sort(key=lambda g: get_group_center(g)[0])
+            
+            # Sort Row 2 by X Descending (R -> L) -> BR, BL
+            row2.sort(key=lambda g: get_group_center(g)[0], reverse=True)
+            
+            sorted_clusters = row1 + row2
+        else:
+            # Fallback for non-4 counts: Standard Raster (Y then X)
+            valid_clusters.sort(key=lambda g: (get_group_center(g)[1], get_group_center(g)[0]))
+            sorted_clusters = valid_clusters
         
-        for group in valid_clusters:
-            # Sort paths inside group? Optional.
+        for group in sorted_clusters:
             # Append original Path objects
             final_groups.append([paths[it['index']] for it in group])
             

@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 
+import math
 from core.mold_detector import get_calculated_paths, get_paths_and_image
 
 class BatchWorker(QThread):
@@ -646,6 +647,109 @@ class BatchWorker(QThread):
         self.mw.machine.move_to(z=safe_z_move, speed=self.mw.feedrate_z)
 
 
+    def _cluster_paths_by_kmeans(self, paths, M, center_x, center_y, k=4):
+        """
+        使用 K-Means 将路径强制分为 K 类 (默认4类)
+        适用于 2x2 或固定数量的模具阵列
+        """
+        if not paths:
+            return []
+        
+        # 1. Calculate centers for all paths
+        # path_data: list of {'index': i, 'center': (x, y)}
+        path_data = []
+        for i, p in enumerate(paths):
+            points = p.points if hasattr(p, 'points') else p
+            avg_x = sum(pt[0] for pt in points) / len(points)
+            avg_y = sum(pt[1] for pt in points) / len(points)
+            
+            # Convert to relative MM
+            dx_pix = avg_x - center_x
+            dy_pix = avg_y - center_y
+            cx_mm = M[0, 0] * dx_pix + M[0, 1] * dy_pix
+            cy_mm = M[1, 0] * dx_pix + M[1, 1] * dy_pix
+            path_data.append({'index': i, 'center': (cx_mm, cy_mm)})
+
+        n = len(path_data)
+        if n < k:
+            return [paths] # Not enough paths to split
+
+        # 2. Initialize Centroids (K-Means++ Lite: Furthest Point)
+        centroids = []
+        # Pick 1st random
+        centroids.append(path_data[0]['center'])
+        
+        for _ in range(k - 1):
+            # Find point furthest from all current centroids
+            max_dist = -1
+            candidate = None
+            for item in path_data:
+                pt = item['center']
+                # Dist to nearest centroid
+                min_c_dist = min(math.hypot(pt[0]-c[0], pt[1]-c[1]) for c in centroids)
+                if min_c_dist > max_dist:
+                    max_dist = min_c_dist
+                    candidate = pt
+            if candidate:
+                centroids.append(candidate)
+        
+        # 3. Iterate K-Means (10 iterations)
+        for _ in range(10):
+            clusters = [[] for _ in range(k)]
+            # Assign
+            for item in path_data:
+                pt = item['center']
+                # Find nearest centroid
+                dists = [math.hypot(pt[0]-c[0], pt[1]-c[1]) for c in centroids]
+                # argmin
+                nearest_idx = dists.index(min(dists))
+                clusters[nearest_idx].append(item)
+            
+            # Update Centroids
+            new_centroids = []
+            stable = True
+            for i in range(k):
+                group = clusters[i]
+                if not group:
+                    new_centroids.append(centroids[i]) # Keep old if empty
+                    continue
+                
+                # Check bounds to exclude outliers? No, just avg.
+                mean_x = sum(it['center'][0] for it in group) / len(group)
+                mean_y = sum(it['center'][1] for it in group) / len(group)
+                
+                # Check stability
+                if math.hypot(mean_x - centroids[i][0], mean_y - centroids[i][1]) > 0.1:
+                    stable = False
+                new_centroids.append((mean_x, mean_y))
+            
+            centroids = new_centroids
+            if stable:
+                break
+        
+        # 4. Filter empty clusters and Construct Result
+        final_groups = []
+        # We want to return groups sorted spatially (e.g. Raster Scan order)
+        # Sort centroids by Y then X
+        # Zip clusters with centroids
+        
+        valid_clusters = [c for c in clusters if len(c) > 0]
+        
+        # Sort clusters by their centroid position
+        def get_group_center(group):
+             xs = [it['center'][0] for it in group]
+             ys = [it['center'][1] for it in group]
+             return (sum(xs)/len(xs), sum(ys)/len(ys))
+        
+        valid_clusters.sort(key=lambda g: (get_group_center(g)[1], get_group_center(g)[0])) # Sort by Y then X (Machine Coords)
+        
+        for group in valid_clusters:
+            # Sort paths inside group? Optional.
+            # Append original Path objects
+            final_groups.append([paths[it['index']] for it in group])
+            
+        return final_groups
+
     def generate_dispense_gcode(self, paths_groups, current_x, current_y, target_color=None):
         """
         根据识别到的像素路径组，生成绝对坐标 G-code
@@ -658,6 +762,20 @@ class BatchWorker(QThread):
 
         h_img, w_img = self.mw.last_frame.shape[:2]
         center_x, center_y = w_img / 2, h_img / 2
+        
+        # [Smart Clustering] Split single big product into clusters
+        cluster_dist = self.cfg.get('smart_lift_dist', 10.0)
+        
+        if len(paths_groups) == 1:
+            flat_paths = paths_groups[0]
+            # Only cluster if enough paths
+            if len(flat_paths) > 1:
+                # [MOD] Use K-Means with K=4 for 2x2 grid
+                k_val = 4
+                clustered = self._cluster_paths_by_kmeans(flat_paths, M, center_x, center_y, k=k_val)
+                if len(clustered) > 1:
+                    self.log_signal.emit(f"🧩 智能聚类(KMeans): 检测到 {len(flat_paths)} 条路径，强制拆分为 {len(clustered)} 个独立区域 (K={k_val})")
+                    paths_groups = clustered
         
         # 根据模式选择参数（从 self.params 加载，已做 fallback 处理）
         if self.mode == 'camera_dry':
@@ -813,7 +931,7 @@ class BatchWorker(QThread):
                         # Only applicable if we have a valid last position within this product
                         if last_seg_end_x is not None:
                              dist = math.hypot(target_mach_x - last_seg_end_x, target_mach_y - last_seg_end_y)
-                             lift_threshold = self.cfg.get('smart_lift_dist', 20.0)
+                             lift_threshold = self.cfg.get('smart_lift_dist', 5.0)
                              
                              if dist > lift_threshold:
                                  lines.append(f"; [Smart Lift] Dist {dist:.1f}mm > {lift_threshold}mm -> Lift to Product Z")

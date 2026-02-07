@@ -6689,11 +6689,31 @@ class MainWindow(QWidget):
                 
                 try:
                     import shutil
+                    import json
                     old_path = self.product_manager.get_product_path(old_name)
                     new_path = self.product_manager.get_product_path(new_name)
                     
                     if os.path.exists(old_path):
                         shutil.move(old_path, new_path)
+                        
+                        # [FIX] Rename .shm model file inside the new directory
+                        old_model_file = os.path.join(new_path, f"{old_name}.shm")
+                        new_model_file = os.path.join(new_path, f"{new_name}.shm")
+                        if os.path.exists(old_model_file):
+                            os.rename(old_model_file, new_model_file)
+                            self.log(f"✅ 已重命名模型文件: {old_name}.shm -> {new_name}.shm")
+                        
+                        # [FIX] Update config.json to reflect new model_file and product_name
+                        config_path = os.path.join(new_path, "config.json")
+                        if os.path.exists(config_path):
+                            with open(config_path, 'r', encoding='utf-8') as f:
+                                config = json.load(f)
+                            config['model_file'] = f"{new_name}.shm"
+                            config['product_name'] = new_name
+                            with open(config_path, 'w', encoding='utf-8') as f:
+                                json.dump(config, f, indent=2, ensure_ascii=False)
+                            self.log(f"✅ 已更新配置文件: model_file={new_name}.shm")
+                        
                         self.log(f"✅ 已重命名产品: {old_name} -> {new_name}")
                         
                         # Update list
@@ -6709,6 +6729,7 @@ class MainWindow(QWidget):
                         QMessageBox.critical(dialog, "错误", f"产品路径不存在: {old_path}")
                 except Exception as e:
                     QMessageBox.critical(dialog, "重命名失败", f"无法重命名产品: {e}")
+
         
         def do_retrain():
             item = list_widget.currentItem()
@@ -6811,6 +6832,9 @@ class MainWindow(QWidget):
             # [FIX] Force reload from disk to ensure latest paths are loaded
             success, msg = self.halcon_product_manager.load_product(name, force=True)
             
+            # [DEBUG] Log load result
+            self.log(f"[DEBUG] load_product返回: success={success}, msg={msg}")
+            
             if success:
                 self.current_product = name
                 self.lbl_recipe_name.setText(name)
@@ -6821,16 +6845,16 @@ class MainWindow(QWidget):
                 self.model_ref_col = self.halcon_product_manager.model_ref_col
                 self.vision_offset_x = self.halcon_product_manager.vision_offset_x
                 self.vision_offset_y = self.halcon_product_manager.vision_offset_y
-            
-            # 更新UI显示
-            if hasattr(self, 'spn_vision_offset_x'):
-                self.spn_vision_offset_x.blockSignals(True)
-                self.spn_vision_offset_x.setValue(self.vision_offset_x)
-                self.spn_vision_offset_x.blockSignals(False)
-            if hasattr(self, 'spn_vision_offset_y'):
-                self.spn_vision_offset_y.blockSignals(True)
-                self.spn_vision_offset_y.setValue(self.vision_offset_y)
-                self.spn_vision_offset_y.blockSignals(False)
+                
+                # 更新UI显示
+                if hasattr(self, 'spn_vision_offset_x'):
+                    self.spn_vision_offset_x.blockSignals(True)
+                    self.spn_vision_offset_x.setValue(self.vision_offset_x)
+                    self.spn_vision_offset_x.blockSignals(False)
+                if hasattr(self, 'spn_vision_offset_y'):
+                    self.spn_vision_offset_y.blockSignals(True)
+                    self.spn_vision_offset_y.setValue(self.vision_offset_y)
+                    self.spn_vision_offset_y.blockSignals(False)
             
             # 同步路径
             paths = self.halcon_product_manager.get_current_paths()

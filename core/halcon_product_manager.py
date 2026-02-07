@@ -202,6 +202,11 @@ class HalconProductManager:
             model_file = config.get('model_file', f'{product_name}.shm')
             model_path = os.path.join(product_dir, model_file)
             
+            print(f"[DEBUG] product_dir={product_dir}")
+            print(f"[DEBUG] model_file={model_file}")
+            print(f"[DEBUG] model_path={model_path}")
+            print(f"[DEBUG] file exists={os.path.exists(model_path)}")
+            
             if os.path.exists(model_path):
                 ok = self.halcon.set_model_path(model_path)
                 if not ok:

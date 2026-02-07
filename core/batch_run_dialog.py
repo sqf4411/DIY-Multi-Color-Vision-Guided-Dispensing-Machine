@@ -93,13 +93,36 @@ class BatchWorker(QThread):
                 }
                 self.log_signal.emit(f"📂 已加载【{product_name}】的相机参数: {params}")
             else:  # nozzle_dry or real
-                # 加载针头空跑参数
+                # [FIX] 针头批量需要加载两套Z高度：
+                # - 识别时用相机的work_z（保证图像清晰）
+                # - 执行时用针头的work_z（实际工作高度）
+                
+                # Load nozzle execution params
                 params = {
                     'safe_z_cavity': config.get('safe_z_cavity', 0.0),
                     'safe_z_product': config.get('safe_z_product', 0.0),
                     'work_z': config.get('work_z', 0.0)
                 }
-                self.log_signal.emit(f"📂 已加载【{product_name}】的针头参数: {params}")
+                
+                # [NEW] For nozzle_dry, use camera work_z for vision
+                if self.mode == 'nozzle_dry':
+                    # Try to get camera work_z for clear vision
+                    global_cam_work_z = getattr(self.mw, 'cam_work_z', 0.0)
+                    cam_work_z_from_config = config.get('cam_work_z', 0.0)
+                    vision_work_z = cam_work_z_from_config if cam_work_z_from_config > 0 else global_cam_work_z
+                    
+                    if vision_work_z > 0:
+                        params['vision_work_z'] = vision_work_z
+                        self.log_signal.emit(f"📂 已加载【{product_name}】的针头参数: {params}")
+                        self.log_signal.emit(f"🎯 针头批量将使用相机高度({vision_work_z:.1f})识别，针头高度({params['work_z']:.1f})执行")
+                    else:
+                        # Fallback: use nozzle work_z for vision (may defocus)
+                        params['vision_work_z'] = params['work_z']
+                        self.log_signal.emit(f"⚠️ 未找到相机高度，针头批量将使用针头高度({params['work_z']:.1f})识别")
+                else:
+                    # Real mode uses same work_z for both vision and execution
+                    params['vision_work_z'] = params['work_z']
+                    self.log_signal.emit(f"📂 已加载【{product_name}】的针头参数: {params}")
             
             # Validation
             if params['safe_z_cavity'] == 0.0 or params['work_z'] == 0.0:
@@ -243,8 +266,9 @@ class BatchWorker(QThread):
                         # Move Camera
                         self.mw.machine.move_to(x=target_x, y=target_y, speed=self.mw.feedrate_xy)
                         
-                        # Use work_z from product params
-                        self.mw.machine.move_to(z=work_z, speed=self.mw.feedrate_z)
+                        # [FIX] Use vision_work_z for recognition (camera height for nozzle_dry)
+                        vision_z = params.get('vision_work_z', work_z)
+                        self.mw.machine.move_to(z=vision_z, speed=self.mw.feedrate_z)
                         self.mw.machine.wait_until_idle()
                         time.sleep(0.5) 
 
@@ -537,6 +561,10 @@ class BatchWorker(QThread):
             safe_z_product = float(self.params.get('safe_z_product', 100.0))
             work_z = float(self.params.get('work_z', 100.0))
             valve_on = (self.mode == 'real')
+            
+            # [LOG] Confirm offsets
+            if self.mode in ['nozzle_dry', 'real']:
+                 self.log_signal.emit(f"🔧 应用针头偏移: X={off_x:.2f}, Y={off_y:.2f}")
 
         speed_xy = int(self.mw.feedrate_xy)
         speed_z = int(self.mw.feedrate_z)

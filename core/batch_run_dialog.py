@@ -980,10 +980,11 @@ class BatchWorker(QThread):
                         line_speed = self.cfg.get('line_speed_xy', speed_xy)
                         lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{line_speed}")
                 
-                # [FIX] Add end dwell before closing valve
-                if valve_on and dwell_ms > 0:
+                # [FIX] End dwell only for LINE segments, not DOT segments
+                # Dots should only dwell once (at start), lines dwell twice (start + end)
+                if valve_on and dwell_ms > 0 and seg_type == 'line':
                     lines.append(f"; End point dwell")
-                    lines.append(f"G4 P{dwell_ms}")  # 终点延时与起点相同
+                    lines.append(f"G4 P{dwell_ms}")  # 线段终点延时
                 
                 # 一条路径段结束：关阀
                 if valve_on:

@@ -817,7 +817,10 @@ class BatchWorker(QThread):
             safe_z_cavity = float(self.params.get('safe_z_cavity', 100.0))
             safe_z_product = float(self.params.get('safe_z_product', 100.0))
             work_z = float(self.params.get('work_z', 100.0))
-            valve_on = (self.mode == 'real')
+            
+            # [FIX] Enable valve for both nozzle_dry and real modes
+            # The simulation checkbox (disable_valves) controls actual output
+            valve_on = (self.mode in ['nozzle_dry', 'real'])
             
             # [LOG] Confirm offsets
             if self.mode in ['nozzle_dry', 'real']:

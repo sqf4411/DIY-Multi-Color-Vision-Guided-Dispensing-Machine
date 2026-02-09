@@ -4121,6 +4121,11 @@ class MainWindow(QWidget):
                      self.current_segments = self.halcon_product_manager.get_current_segments()
                      self.log(f"🔄 这里的缓存已更新，段数: {len(self.current_segments.segments) if self.current_segments else 0}")
                      
+                     # [DEBUG] Log sample dwell_ms to verify reloading
+                     if self.current_segments and len(self.current_segments.segments) > 0:
+                         sample_seg = self.current_segments.segments[0]
+                         self.log(f"[DEBUG] 首段数据: type={sample_seg.type}, color={sample_seg.color}, dwell_ms={sample_seg.dwell_ms}ms")
+                     
                      # [FIX] 重新计算 Halcon 模板 (关键！否则还是用旧的)
                      # 传入 True 强制刷新
                      self._compute_halcon_template(force_reload=True)

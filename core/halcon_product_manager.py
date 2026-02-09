@@ -614,6 +614,13 @@ class HalconProductManager:
                 # 2.5 创建新段 (保留原有属性)
                 new_pts = [tuple(p) for p in pts_transformed]
                 new_seg = PathSegment(seg.type, seg.color, new_pts, seg.dwell_ms)
+                
+                # [DEBUG] Log segment transformation
+                if len(source_segments) <= 5:  # Only log first few segments to avoid spam
+                    print(f"[_transform_and_draw_paths DEBUG] Transformed segment: "
+                          f"type={seg.type}, color={seg.color}, dwell_ms={seg.dwell_ms}ms → "
+                          f"new_seg.dwell_ms={new_seg.dwell_ms}ms")
+                
                 mold_segments.append(new_seg)
                 
                 # 2.6 绘制 (使用段的颜色)

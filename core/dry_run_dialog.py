@@ -654,6 +654,13 @@ class DryRunDialog(QDialog):
                     # Default to A1 if no color info
                     dwell_ms = getattr(p_px, 'dwell_ms', 0)
                     color_idx = getattr(p_px, 'color', 0)
+                    
+                    # [DEBUG] Log dwell_ms value for troubleshooting
+                    seg_type = getattr(p_px, 'type', 'unknown')
+                    print(f"[DryRunDialog DEBUG] Product {prod_idx+1}, Color {color_idx}, Segment {seg_idx}: "
+                          f"type={seg_type}, dwell_ms={dwell_ms} "
+                          f"(from PathSegment.dwell_ms={getattr(p_px, 'dwell_ms', 'N/A')})")
+                    
                     valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
                     target_valve = valve_macros[color_idx] if 0 <= color_idx < 4 else "A1_VALVE"
 

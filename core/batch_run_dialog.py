@@ -424,6 +424,9 @@ class BatchWorker(QThread):
                                     # 重要：更新主界面模板缓存，否则后续识别会用旧模板
                                     self.mw._compute_halcon_template()
                                     
+                                    # [FIX] 更新参数 (Z轴高度等) 为检测到的新产品参数
+                                    self._load_product_params(best_prod)
+                                    
                                     # [NEW] 发送路径更新信号，动态显示当前产品的路径
                                     # 重新识别获取当前产品的路径
                                     paths_px_preview, _ = self.mw.get_vision_result(gray_img)
@@ -756,13 +759,14 @@ class BatchWorker(QThread):
             # Sort Row 1 by X Ascending (L -> R) -> TL, TR
             row1.sort(key=lambda g: get_group_center(g)[0])
             
-            # Sort Row 2 by X Descending (R -> L) -> BR, BL
-            row2.sort(key=lambda g: get_group_center(g)[0], reverse=True)
+            # Sort Row 2 by X Ascending (L -> R) -> BL, BR
+            # [FIX] Align with DryRunDialog: TL->TR->BL->BR
+            row2.sort(key=lambda g: get_group_center(g)[0]) 
             
             sorted_clusters = row1 + row2
         else:
-            # Fallback for non-4 counts: Standard Raster (Y then X)
-            valid_clusters.sort(key=lambda g: (get_group_center(g)[1], get_group_center(g)[0]))
+            # Fallback: Standard Raster (Y Descending, X Ascending)
+            valid_clusters.sort(key=lambda g: (-get_group_center(g)[1], get_group_center(g)[0]))
             sorted_clusters = valid_clusters
         
         for group in sorted_clusters:
@@ -948,17 +952,11 @@ class BatchWorker(QThread):
                     current_seg_end_y = target_mach_y
 
                     if first_pt:
-                        # [Smart Lift] Check distance from last segment end
-                        # Only applicable if we have a valid last position within this product
-                        if last_seg_end_x is not None:
-                             dist = math.hypot(target_mach_x - last_seg_end_x, target_mach_y - last_seg_end_y)
-                             lift_threshold = self.cfg.get('smart_lift_dist', 5.0)
-                             
-                             if dist > lift_threshold:
-                                 lines.append(f"; [Smart Lift] Dist {dist:.1f}mm > {lift_threshold}mm -> Lift to Product Z")
-                                 # We are currently at Safe Z Cavity (from prev segment end)
-                                 # Lift higher to Product Safe Z
-                                 lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
+                        # [REMOVED] Legacy Smart Lift Logic (Distance based)
+                        # We now rely on K-Means clustering to split products.
+                        # If K-Means splits them, they are separate "products" in the loop,
+                        # and will automatically triggered the "Product Safe Lift" at the end of the outer loop.
+                        # Within a single "product" (cluster), we assume Cavity Safe Z is sufficient.
 
                         # 1. 移动到起点上方 (快速 G0)
                         lines.append(f"G0 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")

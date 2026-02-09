@@ -4,6 +4,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox, QCheckBox
 )
 import numpy as np
+import math
 
 class DryRunDialog(QDialog):
     def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None, use_nozzle_offset=False):
@@ -236,6 +237,308 @@ class DryRunDialog(QDialog):
         self.line_speed_xy = self.spn_line_speed.value()
         self.generate_gcode()
 
+    def _cluster_paths_by_kmeans(self, paths, M, center_x, center_y, k=4):
+        """
+        使用 K-Means 将路径强制分为 K 类 (默认4类)
+        适用于 2x2 或固定数量的模具阵列
+        """
+        if not paths:
+            return []
+        
+        # 1. Calculate centers for all paths
+        # path_data: list of {'index': i, 'center': (x, y)}
+        path_data = []
+        for i, p in enumerate(paths):
+            points = p.points if hasattr(p, 'points') else p
+            # Handle single point or list of points
+            if len(points) > 0:
+                if isinstance(points[0], list) or isinstance(points[0], tuple) or isinstance(points[0], np.ndarray):
+                    # List of points
+                    avg_x = sum(pt[0] for pt in points) / len(points)
+                    avg_y = sum(pt[1] for pt in points) / len(points)
+                else:
+                    # Single point [x, y]
+                    avg_x = points[0]
+                    avg_y = points[1]
+            else:
+                continue
+
+            # Convert to relative MM
+            dx_pix = avg_x - center_x
+            dy_pix = avg_y - center_y
+            cx_mm = M[0, 0] * dx_pix + M[0, 1] * dy_pix
+            cy_mm = M[1, 0] * dx_pix + M[1, 1] * dy_pix
+            path_data.append({'index': i, 'center': (cx_mm, cy_mm)})
+
+        n = len(path_data)
+        if n < k:
+            return [paths] # Not enough paths to split
+
+        # 2. Initialize Centroids (K-Means++ Lite: Furthest Point)
+        centroids = []
+        # Pick 1st random
+        centroids.append(path_data[0]['center'])
+        
+        for _ in range(k - 1):
+            # Find point furthest from all current centroids
+            max_dist = -1
+            candidate = None
+            for item in path_data:
+                pt = item['center']
+                # Dist to nearest centroid
+                min_c_dist = min(math.hypot(pt[0]-c[0], pt[1]-c[1]) for c in centroids)
+                if min_c_dist > max_dist:
+                    max_dist = min_c_dist
+                    candidate = pt
+            # Handle duplicate points or all same
+            if candidate and max_dist > 0.1:
+                centroids.append(candidate)
+            else:
+                 # Fallback: pick random distinct
+                 pass
+
+        # If not enough centroids found (e.g. all points same), return original
+        if len(centroids) < 2:
+             return [paths]
+
+        # 3. Iterate K-Means (10 iterations)
+        current_k = len(centroids)
+        for _ in range(10):
+            clusters = [[] for _ in range(current_k)]
+            # Assign
+            for item in path_data:
+                pt = item['center']
+                # Find nearest centroid
+                dists = [math.hypot(pt[0]-c[0], pt[1]-c[1]) for c in centroids]
+                # argmin
+                nearest_idx = dists.index(min(dists))
+                clusters[nearest_idx].append(item)
+            
+            # Update Centroids
+            new_centroids = []
+            stable = True
+            for i in range(current_k):
+                group = clusters[i]
+                if not group:
+                    new_centroids.append(centroids[i]) # Keep old if empty
+                    continue
+                
+                # Check bounds to exclude outliers? No, just avg.
+                mean_x = sum(it['center'][0] for it in group) / len(group)
+                mean_y = sum(it['center'][1] for it in group) / len(group)
+                
+                # Check stability
+                if math.hypot(mean_x - centroids[i][0], mean_y - centroids[i][1]) > 0.1:
+                    stable = False
+                new_centroids.append((mean_x, mean_y))
+            
+            centroids = new_centroids
+            if stable:
+                break
+        
+        # 4. Filter empty clusters and Construct Result
+        final_groups = []
+        valid_clusters = [c for c in clusters if len(c) > 0]
+        
+        # Sort valid_clusters spatially to match User Request:
+        # Clockwise: TL -> TR -> BR -> BL
+        
+        def get_group_center(group):
+             xs = [it['center'][0] for it in group]
+             ys = [it['center'][1] for it in group]
+             return (sum(xs)/len(xs), sum(ys)/len(ys))
+
+        # Sort all by Y first (Max Y = Top for this machine?)
+        # NOTE: Machine coordinates usually: Y+ is Back?
+        # User said: "TL, TR, BL, BR"
+        # Let's assume Standard Cartesian or Image:
+        # Image: Y+ Down.
+        # Machine: Y+ Back usually.
+        # Let's sort by Y descending (Top to Bottom) then X ascending (Left to Right)
+        # This gives columns or rows.
+        
+        # If we use Image Coords Logic (Y+ Down):
+        # Top Row (Min Y), Bottom Row (Max Y).
+        # But `path_data` is in MACHINE coords.
+        # Machine Coords: Y+ usually back (Top).
+        # So Max Y is Top.
+        
+        valid_clusters.sort(key=lambda g: get_group_center(g)[1], reverse=True) # Max Y first (Top)
+        
+        if len(valid_clusters) == 4:
+            row1 = valid_clusters[:2] # Top Row (Max Y)
+            row2 = valid_clusters[2:] # Bottom Row (Min Y)
+            
+            # Sort Row 1 by X Ascending (L -> R) -> TL, TR
+            row1.sort(key=lambda g: get_group_center(g)[0])
+            
+            # Sort Row 2 by X Descending (R -> L) -> BR, BL? 
+            # User said: TL -> TR -> BL -> BR?
+            # User said: "左上，右上，左下，右下" (TL, TR, BL, BR)
+            # So Row 2 should also be L -> R (BL -> BR)?
+            # Wait, user said "左上，右上，左下，右下" which implies Row 1 L->R, Row 2 L->R.
+            
+            # Re-read User: "左上，右上，左下，右下" -> TL, TR, BL, BR.
+            # My BatchRun logic was: "TL -> TR -> BR -> BL" (Clockwise).
+            
+            # Let's stick to User Request: TL -> TR -> BL -> BR (Row-major Z-order)
+            row2.sort(key=lambda g: get_group_center(g)[0]) # L -> R
+            
+            sorted_clusters = row1 + row2
+        else:
+            # Fallback: Standard Raster (Y Descending, X Ascending)
+            valid_clusters.sort(key=lambda g: (-get_group_center(g)[1], get_group_center(g)[0]))
+            sorted_clusters = valid_clusters
+        
+        for group in sorted_clusters:
+            # Append original Path objects
+            final_groups.append([paths[it['index']] for it in group])
+            
+        return final_groups
+
+    def _cluster_paths_by_kmeans(self, paths, M, center_x, center_y, k=4):
+        """
+        使用 K-Means 将路径强制分为 K 类 (默认4类)
+        适用于 2x2 或固定数量的模具阵列
+        """
+        if not paths:
+            return []
+        
+        # 1. Calculate centers for all paths
+        # path_data: list of {'index': i, 'center': (x, y)}
+        path_data = []
+        for i, p in enumerate(paths):
+            points = p.points if hasattr(p, 'points') else p
+            # Handle single point or list of points
+            if len(points) > 0:
+                if isinstance(points[0], list) or isinstance(points[0], tuple) or isinstance(points[0], np.ndarray):
+                    # List of points
+                    avg_x = sum(pt[0] for pt in points) / len(points)
+                    avg_y = sum(pt[1] for pt in points) / len(points)
+                else:
+                    # Single point [x, y]
+                    avg_x = points[0]
+                    avg_y = points[1]
+            else:
+                continue
+
+            # Convert to relative MM
+            dx_pix = avg_x - center_x
+            dy_pix = avg_y - center_y
+            cx_mm = M[0, 0] * dx_pix + M[0, 1] * dy_pix
+            cy_mm = M[1, 0] * dx_pix + M[1, 1] * dy_pix
+            path_data.append({'index': i, 'center': (cx_mm, cy_mm)})
+
+        n = len(path_data)
+        if n < k:
+            return [paths] # Not enough paths to split
+
+        # 2. Initialize Centroids (K-Means++ Lite: Furthest Point)
+        centroids = []
+        # Pick 1st random
+        centroids.append(path_data[0]['center'])
+        
+        for _ in range(k - 1):
+            # Find point furthest from all current centroids
+            max_dist = -1
+            candidate = None
+            for item in path_data:
+                pt = item['center']
+                # Dist to nearest centroid
+                min_c_dist = min(math.hypot(pt[0]-c[0], pt[1]-c[1]) for c in centroids)
+                if min_c_dist > max_dist:
+                    max_dist = min_c_dist
+                    candidate = pt
+            # Handle duplicate points or all same
+            if candidate and max_dist > 0.1:
+                centroids.append(candidate)
+            else:
+                 # Fallback: pick random distinct
+                 pass
+
+        # If not enough centroids found (e.g. all points same), return original
+        if len(centroids) < 2:
+             return [paths]
+
+        # 3. Iterate K-Means (10 iterations)
+        current_k = len(centroids)
+        for _ in range(10):
+            clusters = [[] for _ in range(current_k)]
+            # Assign
+            for item in path_data:
+                pt = item['center']
+                # Find nearest centroid
+                dists = [math.hypot(pt[0]-c[0], pt[1]-c[1]) for c in centroids]
+                # argmin
+                nearest_idx = dists.index(min(dists))
+                clusters[nearest_idx].append(item)
+            
+            # Update Centroids
+            new_centroids = []
+            stable = True
+            for i in range(current_k):
+                group = clusters[i]
+                if not group:
+                    new_centroids.append(centroids[i]) # Keep old if empty
+                    continue
+                
+                # Check bounds to exclude outliers? No, just avg.
+                mean_x = sum(it['center'][0] for it in group) / len(group)
+                mean_y = sum(it['center'][1] for it in group) / len(group)
+                
+                # Check stability
+                if math.hypot(mean_x - centroids[i][0], mean_y - centroids[i][1]) > 0.1:
+                    stable = False
+                new_centroids.append((mean_x, mean_y))
+            
+            centroids = new_centroids
+            if stable:
+                break
+        
+        # 4. Filter empty clusters and Construct Result
+        final_groups = []
+        valid_clusters = [c for c in clusters if len(c) > 0]
+        
+        # Sort valid_clusters spatially to match User Request:
+        # Clockwise: TL -> TR -> BR -> BL
+        
+        def get_group_center(group):
+             xs = [it['center'][0] for it in group]
+             ys = [it['center'][1] for it in group]
+             return (sum(xs)/len(xs), sum(ys)/len(ys))
+
+        # Sort all by Y first (Max Y = Top for this machine?)
+        # User said: "TL, TR, BL, BR"
+        # Let's assume Standard Cartesian or Image:
+        # Image: Y+ Down.
+        # Machine: Y+ Back usually.
+        # Let's sort by Y descending (Top to Bottom) then X ascending (Left to Right)
+        # This gives columns or rows.
+        
+        valid_clusters.sort(key=lambda g: get_group_center(g)[1], reverse=True) # Max Y first (Top)
+        
+        if len(valid_clusters) == 4:
+            row1 = valid_clusters[:2] # Top Row (Max Y)
+            row2 = valid_clusters[2:] # Bottom Row (Min Y)
+            
+            # Sort Row 1 by X Ascending (L -> R) -> TL, TR
+            row1.sort(key=lambda g: get_group_center(g)[0])
+            
+            # Sort Row 2 by X Ascending (L -> R) -> BL, BR
+            row2.sort(key=lambda g: get_group_center(g)[0]) # L -> R
+            
+            sorted_clusters = row1 + row2
+        else:
+            # Fallback: Standard Raster (Y Descending, X Ascending)
+            valid_clusters.sort(key=lambda g: (-get_group_center(g)[1], get_group_center(g)[0]))
+            sorted_clusters = valid_clusters
+        
+        for group in sorted_clusters:
+            # Append original Path objects
+            final_groups.append([paths[it['index']] for it in group])
+            
+        return final_groups
+
     def generate_gcode(self):
         self.machine_paths = [] # [NEW] Reset paths
         gcode_lines = []
@@ -243,11 +546,36 @@ class DryRunDialog(QDialog):
         # Start with Product Safe Z
         gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
 
+        # [Smart Clustering] Split single big product into clusters if needed
+        # Simulating Batch Logic for Fixed Mold (1 big group -> 4 small groups)
+        process_products = self.products
+        expanded_mode = False
+
+        if len(self.products) == 1:
+            flat_paths = self.products[0]
+            if len(flat_paths) > 1:
+                # Use K-Means with K=4 (TL, TR, BL, BR)
+                k_val = 4
+                clustered = self._cluster_paths_by_kmeans(flat_paths, self.m, self.center_x, self.center_y, k=k_val)
+                if len(clustered) > 1:
+                    # Upgrade to clustered products
+                    process_products = clustered
+                    # We need to handle the checkboxes. 
+                    # If we expanded 1 -> 4, we assume the single checkbox applies to all 4.
+                    expanded_mode = True
+
         # [NEW] Color-First Logic
         all_colors = set()
-        for prod_idx, prod_segments in enumerate(self.products):
-            if not self.chk_products[prod_idx].isChecked():
-                continue
+        for prod_idx, prod_segments in enumerate(process_products):
+            # Checkbox logic
+            if not expanded_mode:
+                if prod_idx < len(self.chk_products) and not self.chk_products[prod_idx].isChecked():
+                    continue
+            else:
+                 # In expanded mode (1 -> 4), check the first (original) checkbox
+                 if len(self.chk_products) > 0 and not self.chk_products[0].isChecked():
+                     continue
+
             for seg in prod_segments:
                 seg_color = getattr(seg, 'color', 0) if hasattr(seg, 'color') else 0
                 all_colors.add(seg_color)
@@ -258,9 +586,14 @@ class DryRunDialog(QDialog):
         for color_idx in sorted_colors:
             gcode_lines.append(f"; ===== Color {color_idx+1} =====")
             
-            for prod_idx, prod_segments in enumerate(self.products):
-                if not self.chk_products[prod_idx].isChecked():
-                    continue
+            for prod_idx, prod_segments in enumerate(process_products):
+                # Checkbox logic
+                if not expanded_mode:
+                    if prod_idx < len(self.chk_products) and not self.chk_products[prod_idx].isChecked():
+                        continue
+                else:
+                     if len(self.chk_products) > 0 and not self.chk_products[0].isChecked():
+                         continue
 
                 gcode_lines.append(f"; --- Product {prod_idx + 1} (Color {color_idx+1}) ---")
                 
@@ -301,8 +634,6 @@ class DryRunDialog(QDialog):
                     })
 
                     gcode_lines.append(f";   Segment {seg_idx + 1}")
-
-                    # [TAG REMOVED] Logic moved to dispense block
 
                     # 2. Move to Start Point
                     start_x, start_y = path_machine[0]
@@ -402,6 +733,8 @@ class DryRunDialog(QDialog):
 
                     # 5. Lift after segment to Cavity Safe Z
                     gcode_lines.append(f"G0 Z{self.safe_z_cavity:.2f} F{self.speed_z}")
+                
+                 
                 
                 # ✅ Product完成：升到产品安全Z
                 if color_segments:

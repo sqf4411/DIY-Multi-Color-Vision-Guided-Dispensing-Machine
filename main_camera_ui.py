@@ -654,6 +654,9 @@ class LaserMeasureWorker(QThread):
                     self.machine.move_z_absolute(init_z, 800)
                     self.machine.wait_until_idle()
                     
+                    # 4. Turn Off Laser
+                    self.machine._post_gcode("HGC_OFF")
+                    
                 except Exception as e:
                     self.log_signal.emit(f"⚠ 自动归位失败: {e}")
 
@@ -739,9 +742,9 @@ class CollapsibleBox(QWidget):
                 color: white;
                 border: none;
                 text-align: left;
-                padding: 10px 15px;
+                padding: 4px 8px;
                 font-weight: bold;
-                font-size: 13px;
+                font-size: 12px;
                 border-radius: 5px;
             }}
             QPushButton:hover {{
@@ -1512,7 +1515,7 @@ class MainWindow(QWidget):
         self.spn_min_score = QDoubleSpinBox()
         self.spn_min_score.setRange(0.1, 1.0)
         self.spn_min_score.setSingleStep(0.05)
-        self.spn_min_score.setValue(0.5) # Default 0.5
+        self.spn_min_score.setValue(0.4) # Default 0.4
         self.spn_min_score.valueChanged.connect(self.on_vision_params_changed)
         lay_vparams.addWidget(self.spn_min_score)
         
@@ -1718,16 +1721,18 @@ class MainWindow(QWidget):
 
         motion_layout.addLayout(grid)
 
-        # ====== ✅ 新增：速度与加速度调节滑块 ======
-        speed_group = QGroupBox("速度 & 加速度调节")
+        # ====== ✅ 优化：速度与加速度调节 (折叠收纳) ======
+        # 使用自定义的 CollapsibleBox 替代 QGroupBox
+        self.speed_box = CollapsibleBox("速度 & 加速度调节 (点击展开)", collapsed=True) # 默认折叠
+        
+        # speed_layout 保持不变
         speed_layout = QVBoxLayout()
 
         # 1. XY 速度
         row_sxy = QHBoxLayout()
         self.lbl_spd_xy = QLabel(f"XY速度: {int(self.feedrate_xy)}")
         self.sld_spd_xy = QSlider(Qt.Horizontal)
-        self.sld_spd_xy.setRange(100, 10000)  # 范围 100 ~ 10000
-        # Block signals to prevent overwriting config during init
+        self.sld_spd_xy.setRange(100, 10000)
         self.sld_spd_xy.blockSignals(True)
         self.sld_spd_xy.setValue(int(self.feedrate_xy))
         self.sld_spd_xy.blockSignals(False)
@@ -1739,7 +1744,7 @@ class MainWindow(QWidget):
         row_sz = QHBoxLayout()
         self.lbl_spd_z = QLabel(f"Z 速度: {int(self.feedrate_z)}")
         self.sld_spd_z = QSlider(Qt.Horizontal)
-        self.sld_spd_z.setRange(100, 2000)  # 范围 100 ~ 2000 (Z轴慢点)
+        self.sld_spd_z.setRange(100, 2000)
         self.sld_spd_z.blockSignals(True)
         self.sld_spd_z.setValue(int(self.feedrate_z))
         self.sld_spd_z.blockSignals(False)
@@ -1747,15 +1752,13 @@ class MainWindow(QWidget):
         row_sz.addWidget(self.lbl_spd_z)
         row_sz.addWidget(self.sld_spd_z)
 
-        # 3. 加速度 (Accel)
+        # 3. 加速度
         row_acc = QHBoxLayout()
         self.lbl_acc = QLabel(f"加速度: {int(self.accel)}")
         self.sld_acc = QSlider(Qt.Horizontal)
-        self.sld_acc.setRange(100, 3000)  # 范围 100 ~ 3000
+        self.sld_acc.setRange(100, 3000)
         self.sld_acc.setValue(int(self.accel))
-        # 加速度需要松开鼠标才发送指令，防止拖动时发送太多指令卡死 Klipper
         self.sld_acc.sliderReleased.connect(self.on_accel_changed)
-        # 同时也连接 valueChanged 只为了更新显示文字
         self.sld_acc.valueChanged.connect(lambda v: self.lbl_acc.setText(f"加速度: {v}"))
 
         row_acc.addWidget(self.lbl_acc)
@@ -1764,9 +1767,12 @@ class MainWindow(QWidget):
         speed_layout.addLayout(row_sxy)
         speed_layout.addLayout(row_sz)
         speed_layout.addLayout(row_acc)
-        speed_group.setLayout(speed_layout)
+        
+        # 添加布局到折叠盒子
+        self.speed_box.add_layout(speed_layout)
 
-        motion_layout.addWidget(speed_group)
+        motion_layout.addWidget(self.speed_box)
+        # =========================================
         # =========================================
 
         motion_group.setLayout(motion_layout)
@@ -2001,8 +2007,9 @@ class MainWindow(QWidget):
         self.spn_work_z.valueChanged.connect(self.on_z_params_changed)
 
     def init_sys_status_group(self):
-        """初始化系统状态（温度监控）组"""
-        group = QGroupBox("系统状态 & 温控")
+        """初始化系统状态（温度监控）组 - 使用折叠盒子"""
+        # [MOD] Use CollapsibleBox
+        group = CollapsibleBox("系统状态 & 温控 (点击收起/展开)", collapsed=False)
         layout = QGridLayout()
         
         # 0. 设置列宽均匀拉伸
@@ -2010,80 +2017,86 @@ class MainWindow(QWidget):
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(2, 1)
         
-        # 1. 标题头（3列）- 加大 "状态/设定" 字体
+        # 1. 标题头（3列）
         lbl_dev = QLabel("设备")
         lbl_cur = QLabel("当前")
         lbl_set = QLabel("状态/设定")
         
-        # 设置字体稍微大一点，加粗
         style_header = "font-weight: bold; font-size: 14px; color: #9CA3AF;"
-        #style_header_big = "font-weight: bold; font-size: 16px; color: #E5E7EB;" # 重点加大
         
         lbl_dev.setStyleSheet(style_header)
         lbl_cur.setStyleSheet(style_header)
-        lbl_set.setStyleSheet("font-weight: bold; font-size: 16px; color: #E5E7EB;") # 特别加大
+        lbl_set.setStyleSheet("font-weight: bold; font-size: 16px; color: #E5E7EB;")
         
         layout.addWidget(lbl_dev, 0, 0)
         layout.addWidget(lbl_cur, 0, 1)
         layout.addWidget(lbl_set, 0, 2)
         
-        # 2. Syringe Heater - 只显示状态
+        # 2. Syringe Heater
         self.lbl_syringe_name = QLabel("针筒加热:")
-        
-        # 当前温度
         self.lbl_syringe_temp = QLabel("0.0°C")
-        self.lbl_syringe_temp.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 15px;") # Amber
+        self.lbl_syringe_temp.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 15px;")
         
-        # 实际目标 (状态)
         self.lbl_syringe_target_status = QLabel("Off")
         self.lbl_syringe_target_status.setStyleSheet("color: #9CA3AF; font-weight: bold;")
         
-        # 布局 Syringe
         layout.addWidget(self.lbl_syringe_name, 1, 0)
         layout.addWidget(self.lbl_syringe_temp, 1, 1)
         layout.addWidget(self.lbl_syringe_target_status, 1, 2)
 
-        # 3. Fly-Super8 (MCU) - 显示温度 + 设定值输入框
+        # 3. Fly-Super8 (MCU)
         layout.addWidget(QLabel("Fly-Super8:"), 2, 0)
         self.lbl_mcu_temp = QLabel("0.0°C")
         layout.addWidget(self.lbl_mcu_temp, 2, 1)
         
-        # 设定值输入框（放在Fly-Super8行）
         self.spn_syringe_target = QDoubleSpinBox()
         self.spn_syringe_target.setRange(0, 80) 
         self.spn_syringe_target.setSuffix("°C")
         self.spn_syringe_target.setDecimals(1)
-        # self.spn_syringe_target.setFixedWidth(70) # [CHANGE] Remove fixed width to fill column
         self.spn_syringe_target.setStyleSheet("font-size: 14px; height: 24px;")
         
-        # 加载上次保存的设定值 (如果存在)
         if hasattr(self, 'saved_params') and 'last_syringe_target' in self.saved_params:
              self.spn_syringe_target.setValue(float(self.saved_params['last_syringe_target']))
         layout.addWidget(self.spn_syringe_target, 2, 2)
-        
-        # 4. FLY-pi (Host) - 显示温度 + 执行按钮
+        # 4. FLY-pi (Host)
         layout.addWidget(QLabel("FLY-pi:"), 3, 0)
         self.lbl_host_temp = QLabel("0.0°C")
         layout.addWidget(self.lbl_host_temp, 3, 1)
+        # 执行 & 关闭按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(2)
         
-        # 执行按钮（放在FLY-pi行）
         self.btn_set_syringe_temp = QPushButton("执行")
-        # self.btn_set_syringe_temp.setFixedWidth(70) # [CHANGE] Remove fixed width
         self.btn_set_syringe_temp.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold; height: 26px;")
         self.btn_set_syringe_temp.clicked.connect(self.on_set_syringe_temp)
-        layout.addWidget(self.btn_set_syringe_temp, 3, 2)
         
-        group.setLayout(layout)
+        self.btn_off_syringe_temp = QPushButton("关闭")
+        self.btn_off_syringe_temp.setStyleSheet("background-color: #EF4444; color: white; font-weight: bold; height: 26px;")
+        self.btn_off_syringe_temp.clicked.connect(self.on_stop_syringe_temp)
+        
+        btn_layout.addWidget(self.btn_set_syringe_temp)
+        btn_layout.addWidget(self.btn_off_syringe_temp)
+        
+        layout.addLayout(btn_layout, 3, 2)
+        
+        # [MOD] Add layout to CollapsibleBox
+        group.add_layout(layout)
         return group
         
     def on_set_syringe_temp(self):
         val = self.spn_syringe_target.value()
         self.machine.set_heater_temp(val)
-        self.log(f"🔥 设置针筒加热目标温度: {val}°C")
+        self.log(f"🔥 设置针筒加热目标温度: {val:.1f}°C")
         
         # 保存用户偏好
         self.saved_params['last_syringe_target'] = val
         self.save_app_settings()
+
+    def on_stop_syringe_temp(self):
+        """关闭加热"""
+        self.machine.set_heater_temp(0)
+        self.log("❄️ 关闭针筒加热 (目标设为 0°C)")
+        # 不保存 0 为偏好，保留上次的设定值以便恢复
         
     def update_temp_ui(self, data):
         """
@@ -4643,6 +4656,10 @@ class MainWindow(QWidget):
             'gain': self.spn_gain.value() if hasattr(self, 'spn_gain') else 10.0,
             'gamma': self.spn_gamma.value() if hasattr(self, 'spn_gamma') else 1.0,
             
+            # [NEW] Vision Params
+            'min_score': self.spn_min_score.value() if hasattr(self, 'spn_min_score') else 0.5,
+            'num_matches': self.spn_num_matches.value() if hasattr(self, 'spn_num_matches') else 0,
+            
             # === ⭐ 运动参数（关键！）===
             'feedrate_xy': self.feedrate_xy,
             'feedrate_z': self.feedrate_z,
@@ -4853,6 +4870,16 @@ class MainWindow(QWidget):
         
         if 'gamma' in config and hasattr(self, 'spn_gamma'):
             self.spn_gamma.setValue(config['gamma'])
+            
+        if 'min_score' in config and hasattr(self, 'spn_min_score'):
+            self.spn_min_score.blockSignals(True)
+            self.spn_min_score.setValue(config['min_score'])
+            self.spn_min_score.blockSignals(False)
+            
+        if 'num_matches' in config and hasattr(self, 'spn_num_matches'):
+            self.spn_num_matches.blockSignals(True)
+            self.spn_num_matches.setValue(int(config['num_matches']))
+            self.spn_num_matches.blockSignals(False)
         
         # === ⭐ 运动参数 ===
         if 'feedrate_xy' in config:

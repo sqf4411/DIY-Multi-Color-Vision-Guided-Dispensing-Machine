@@ -1024,7 +1024,7 @@ class BatchRunDialog(QDialog):
         super().__init__(main_window)
         self.mw = main_window
         self.setWindowTitle("批量运行 (Batch Run)")
-        self.resize(600, 750) # 增加高度
+        self.resize(800, 1200) # 增加高度
         
         self.init_ui()
         self.load_settings()

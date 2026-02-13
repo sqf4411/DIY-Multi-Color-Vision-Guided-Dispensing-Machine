@@ -647,11 +647,11 @@ class LaserMeasureWorker(QThread):
                     # self.machine.wait_until_idle()
                     
                     # 2. Move XY back
-                    self.machine.move_xy_absolute(init_x, init_y, 6000)
+                    self.machine.move_xy_absolute(init_x, init_y, 2000)
                     self.machine.wait_until_idle()
                     
                     # 3. Move Z back
-                    self.machine.move_z_absolute(init_z, 600)
+                    self.machine.move_z_absolute(init_z, 800)
                     self.machine.wait_until_idle()
                     
                 except Exception as e:
@@ -1504,6 +1504,29 @@ class MainWindow(QWidget):
         self.btn_load_halcon = QPushButton("加载 Halcon 脚本")
         self.btn_load_halcon.setEnabled(False)
         # [NEW] Recipe System Controls (3-Button Workflow in one row)
+        # [NEW] Vision Parameters (Min Score, Num Matches)
+        lay_vparams = QHBoxLayout()
+        
+        # Min Score
+        lay_vparams.addWidget(QLabel("最小分数:"))
+        self.spn_min_score = QDoubleSpinBox()
+        self.spn_min_score.setRange(0.1, 1.0)
+        self.spn_min_score.setSingleStep(0.05)
+        self.spn_min_score.setValue(0.5) # Default 0.5
+        self.spn_min_score.valueChanged.connect(self.on_vision_params_changed)
+        lay_vparams.addWidget(self.spn_min_score)
+        
+        # Num Matches
+        lay_vparams.addWidget(QLabel("数量限制:"))
+        self.spn_num_matches = QSpinBox()
+        self.spn_num_matches.setRange(0, 100)
+        self.spn_num_matches.setValue(0) # Default 0 (All)
+        self.spn_num_matches.setToolTip("0 = 自动/全部, 1 = 仅最佳匹配")
+        self.spn_num_matches.valueChanged.connect(self.on_vision_params_changed)
+        lay_vparams.addWidget(self.spn_num_matches)
+        
+        vision_layout.addLayout(lay_vparams)
+
         vision_layout.addWidget(self.chk_use_halcon)
         
         # 配方操作 (3个按钮在一行)
@@ -6488,6 +6511,18 @@ class MainWindow(QWidget):
         
         self.update_button_states()
         self.log(f"Halcon模式: {'启用' if enabled else '禁用'}")
+
+    def on_vision_params_changed(self):
+        """Sync UI params to Halcon Manager"""
+        if not hasattr(self, 'halcon_product_manager'): return
+        
+        min_score = self.spn_min_score.value()
+        num_matches = self.spn_num_matches.value()
+        
+        # Update manager state
+        setattr(self.halcon_product_manager, 'vision_min_score', min_score)
+        setattr(self.halcon_product_manager, 'vision_num_matches', num_matches)
+
     
     def on_train_model(self):
         """训练新模型"""
@@ -6860,6 +6895,30 @@ class MainWindow(QWidget):
                     self.spn_vision_offset_y.blockSignals(True)
                     self.spn_vision_offset_y.setValue(self.vision_offset_y)
                     self.spn_vision_offset_y.blockSignals(False)
+                
+                # [NEW] Load Vision Params
+                # Fetch directly from config or manager attributes
+                if hasattr(self, 'halcon_product_manager'):
+                    # Manager might not have loaded them if they weren't in config during load_product()
+                    # So we check the config object directly
+                    cfg = self.halcon_product_manager.products.load_product_config(name)
+                    if cfg:
+                        min_score = cfg.get('vision_min_score', 0.5)
+                        num_matches = cfg.get('vision_num_matches', 0)
+                        
+                        # Update UI
+                        if hasattr(self, 'spn_min_score'):
+                            self.spn_min_score.blockSignals(True)
+                            self.spn_min_score.setValue(min_score)
+                            self.spn_min_score.blockSignals(False)
+                        
+                        if hasattr(self, 'spn_num_matches'):
+                            self.spn_num_matches.blockSignals(True)
+                            self.spn_num_matches.setValue(num_matches)
+                            self.spn_num_matches.blockSignals(False)
+                        
+                        # Sync to manager
+                        self.on_vision_params_changed()
             
             # 同步路径
             paths = self.halcon_product_manager.get_current_paths()
@@ -7061,6 +7120,8 @@ class MainWindow(QWidget):
         config_data = {
             "vision_offset_x": self.vision_offset_x,
             "vision_offset_y": self.vision_offset_y,
+            "vision_min_score": self.spn_min_score.value() if hasattr(self, 'spn_min_score') else 0.5,
+            "vision_num_matches": self.spn_num_matches.value() if hasattr(self, 'spn_num_matches') else 0,
             "exposure": self.spn_exp.value() if hasattr(self, 'spn_exp') else 4.4,
             "gain": self.spn_gain.value() if hasattr(self, 'spn_gain') else 5.5,
             "gamma": self.spn_gamma.value() if hasattr(self, 'spn_gamma') else 2.6,

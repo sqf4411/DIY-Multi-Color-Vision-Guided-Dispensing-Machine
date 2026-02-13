@@ -459,7 +459,12 @@ class HalconProductManager:
         gray_img_upright = gray_img
         
         # 2. 运行Halcon识别
-        res = self.halcon.process_image(gray_img_upright)
+        # 获取用户设置的参数 (默认0.5, 0)
+        min_score = getattr(self, 'vision_min_score', 0.5)
+        num_matches = getattr(self, 'vision_num_matches', 0)
+        
+        print(f"[HalconPro] Processing with MinScore={min_score}, NumMatches={num_matches}")
+        res = self.halcon.process_image(gray_img_upright, min_score=min_score, num_matches=num_matches)
         debug_img = cv2.cvtColor(gray_img_upright, cv2.COLOR_GRAY2BGR)
         found_paths = []
         

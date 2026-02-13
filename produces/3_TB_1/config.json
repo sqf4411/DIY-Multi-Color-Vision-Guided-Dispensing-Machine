@@ -1,0 +1,112 @@
+{
+  "vision_offset_x": 0.0,
+  "vision_offset_y": 0.0,
+  "vision_min_score": 0.5,
+  "vision_num_matches": 1,
+  "exposure": 2.1,
+  "gain": 3.1,
+  "gamma": 4.0,
+  "feedrate_xy": 1000,
+  "feedrate_z": 300,
+  "accel": 452.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 61.6,
+  "safe_z_product": 72.0,
+  "work_z": 58.6,
+  "laser_data": {
+    "timestamp": 1770964382.6771557,
+    "points": [
+      {
+        "x": 331.17,
+        "y": 107.05,
+        "depth": 3.3658986175115246
+      },
+      {
+        "x": 354.98,
+        "y": 107.15,
+        "depth": 3.332718894009222
+      },
+      {
+        "x": 331.32,
+        "y": 83.34,
+        "depth": 3.2626728110599137
+      },
+      {
+        "x": 354.89,
+        "y": 83.27,
+        "depth": 3.1078341013824886
+      }
+    ],
+    "avg_depth": 3.267281105990787,
+    "avg_z": 55.867281105990756
+  },
+  "model_row": 1009.5,
+  "model_col": 1539.5,
+  "product_name": "3_TB_1",
+  "model_file": "3_TB_1.shm",
+  "roi_in_reference": {
+    "x": 902,
+    "y": 372,
+    "width": 1275,
+    "height": 1275
+  },
+  "valve_prefeed_time": 0.1,
+  "valve_a_dispense_time": 0.77,
+  "valve_b_dispense_time": 2.0,
+  "line_speed_xy": 800,
+  "recognized_coordinates": {
+    "segments": [
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1270.68012436027,
+            703.279350075814
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1932.091548644451,
+            696.8731312890919
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1280.3051708005817,
+            1361.4409263915913
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1935.2711543279972,
+            1359.91726529975
+          ]
+        ],
+        "dwell_ms": 100
+      }
+    ],
+    "timestamp": 1770965769.1160588,
+    "transform_data": {
+      "cx": 1574.8681203781498,
+      "cy": 1004.5638233778899,
+      "angle": 0.004795429365142251,
+      "score": 0.7030612964968483
+    }
+  }
+}

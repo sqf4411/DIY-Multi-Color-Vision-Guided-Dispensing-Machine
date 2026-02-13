@@ -79,7 +79,7 @@ class HalconManager:
             print(f"[HalconManager] 模型文件不存在: {path}")
             return False
 
-    def process_image(self, image_np: np.ndarray):
+    def process_image(self, image_np: np.ndarray, min_score=0.5, num_matches=0):
         """
         运行 'scripts/detect_mold.hdev' 进行检测。
         """
@@ -124,22 +124,23 @@ class HalconManager:
             # 1. 图像
             proc_call.set_input_iconic_param_by_name("Image", h_image)
             
-            # 2. 模型路径 (支持多产品)
-            # 假设 HDev 脚本里定义了一个输入控制参数 "ModelPath"
-            # 如果脚本里还没这个参数，Halcon 可能会报错，所以我们加个 try-catch 或者检查
+            # 2. 模型路径
             if self.current_model_path and os.path.exists(self.current_model_path):
-                # 传入绝对路径
                 abs_model_path = os.path.abspath(self.current_model_path)
-                print(f"[HalconManager] 🔍 使用模型: {abs_model_path}")  # 调试日志
                 try:
                     proc_call.set_input_control_param_by_name("ModelPath", abs_model_path)
-                    print(f"[HalconManager] ✅ ModelPath参数传递成功")  # 调试日志
-                except Exception as e:
-                    # 脚本可能没定义这个参数，忽略警告（兼容旧脚本）
-                    print(f"[HalconManager] ⚠️ ModelPath参数传递失败: {e}")  # 调试日志
+                except:
                     pass
-            else:
-                print(f"[HalconManager] ⚠️ 未设置模型路径或文件不存在: {self.current_model_path}")  # 调试日志
+            
+            # 3. 传入 MinScore 和 NumMatches
+            # 注意：传入 float 和 int
+            try:
+                proc_call.set_input_control_param_by_name("MinScore", float(min_score))
+                proc_call.set_input_control_param_by_name("NumMatches", int(num_matches))
+                print(f"[HalconManager] Params set: MinScore={min_score}, NumMatches={num_matches}")
+            except Exception as e:
+                print(f"[HalconManager] ⚠️ 设置参数失败: {e} (可能是脚本未更新)")
+
             
             # 执行
             proc_call.execute()

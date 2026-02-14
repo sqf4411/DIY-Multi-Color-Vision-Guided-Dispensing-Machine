@@ -462,6 +462,11 @@ class GCodeLineWorker(QThread):
     def pause(self):
         self._is_paused = True
         self.log_signal.emit("已暂停发送下一行指令")
+        # [SAFETY] Close Master Valve on Pause
+        try:
+             self.machine.set_pin("VALVE_A_CTRL", 0)
+        except:
+             pass
 
     def resume(self):
         self._is_paused = False
@@ -470,6 +475,13 @@ class GCodeLineWorker(QThread):
     def stop(self):
         self._is_stopped = True
         self.log_signal.emit("正在停止...")
+        # [SAFETY] Close All Valves on Stop
+        try:
+             self.machine.set_pin("VALVE_A_CTRL", 0)
+             for pin in ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]:
+                 self.machine.set_pin(pin, 0)
+        except:
+             pass
 
 class TempWorker(QThread):
     """

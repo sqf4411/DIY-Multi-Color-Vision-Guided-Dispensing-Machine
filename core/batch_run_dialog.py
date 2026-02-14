@@ -141,6 +141,9 @@ class BatchWorker(QThread):
     def pause(self):
         self.paused = True
         self.log_signal.emit("⏸ 已暂停...")
+        # [SAFETY] Close Master Valve on Pause
+        if not self.cfg.get('disable_valves', False):
+             self.mw.machine.set_pin("VALVE_A_CTRL", 0)
 
     def resume(self):
         self.paused = False
@@ -1015,8 +1018,25 @@ class BatchWorker(QThread):
         
         return lines
 
+    def pause(self):
+        self.paused = True
+        self.log_signal.emit("⏸ 已暂停...")
+        # [SAFETY] Close Master Valve on Pause
+        if not self.cfg.get('disable_valves', False):
+             self.mw.machine.set_pin("VALVE_A_CTRL", 0)
+
+    def resume(self):
+        self.paused = False
+        self.log_signal.emit("▶ 继续运行...")
+
     def stop(self):
         self.running = False
+        # [SAFETY] Close All Valves on Stop
+        if not self.cfg.get('disable_valves', False):
+             self.mw.machine.set_pin("VALVE_A_CTRL", 0)
+             # Close all known color valves just in case
+             for pin in ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]:
+                 self.mw.machine.set_pin(pin, 0)
 
 
 class BatchRunDialog(QDialog):

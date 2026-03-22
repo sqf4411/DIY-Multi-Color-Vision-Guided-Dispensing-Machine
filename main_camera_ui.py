@@ -3251,8 +3251,10 @@ class MainWindow(QWidget):
         # Connect signal (Critical: Connect AFTER start_grabbing where worker is created)
         sig = self.camera_manager.get_frame_signal()
         if sig:
-            try: sig.disconnect() 
-            except: pass
+            try:
+                sig.disconnect()
+            except (TypeError, RuntimeError):
+                pass
             sig.connect(self.update_image)
         
         # 2. Apply saved params
@@ -4008,8 +4010,10 @@ class MainWindow(QWidget):
             # Reconnect signal
             sig = self.camera_manager.get_frame_signal()
             if sig:
-                try: sig.disconnect()
-                except: pass
+                try:
+                    sig.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
                 sig.connect(self.update_image)
             self.log("▶ 相机取流已恢复")
 

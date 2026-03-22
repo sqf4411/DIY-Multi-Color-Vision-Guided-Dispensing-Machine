@@ -87,7 +87,7 @@ class MobileMonitorDialog(QDialog):
                 Qt.FastTransformation  # 快速变换
             )
             self.lbl_camera.setPixmap(scaled)
-        except:
+        except Exception:
             pass
     
     def closeEvent(self, event):
@@ -103,7 +103,7 @@ class MobileMonitorDialog(QDialog):
                         parent.usb_cam_worker.frame_signal.connect(parent.update_usb_image)
                         if hasattr(parent, 'label_usb_cam'):
                             parent.label_usb_cam.show()
-                    except:
+                    except Exception:
                         pass
                 
                 # 更新按钮状态
@@ -113,7 +113,7 @@ class MobileMonitorDialog(QDialog):
                         "background-color: #059669; color: white; "
                         "font-weight: bold; font-size: 16px; border-radius: 6px;"
                     )
-        except:
+        except Exception:
             pass
         
         event.accept()

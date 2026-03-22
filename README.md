@@ -1,404 +1,197 @@
-# 🎯 DIY多色视觉引导点胶机
+# DIY Multi-Color Vision-Guided Dispensing Machine (V3)
 
-<div align="center">
+工业点胶控制项目，支持多颜色路径、视觉定位（Halcon/OpenCV）、Klipper 运动控制、配方管理与批量生产流程。
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python](https://img.shields.io/badge/Python-3.8+-green.svg)
-![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
-![Status](https://img.shields.io/badge/status-Active-success.svg)
+## 1. 项目目标
 
-**一个基于Python的工业级自动化点胶解决方案**
+本项目用于“视觉引导 + 多阀点胶 + 运动平台”一体化控制，核心能力：
 
-[功能特性](#-功能特性) • [快速开始](#-快速开始) • [文档](#-文档) • [演示](#-演示) • [贡献](#-贡献)
+- 多颜色路径编辑与执行（点/线混合）
+- 视觉识别后自动映射点胶路径
+- 通过 Moonraker 接口控制 Klipper 运动平台
+- 配方化管理（模型、参数、路径、标定数据）
+- 支持无硬件环境下 UI 与逻辑联调
 
-</div>
+## 2. V3 版本重点
 
----
+V3 在 V2 基础上继续做了稳定性与可维护性优化：
 
-## 📖 项目简介
+- 清理关键代码中的裸 `except:`（改为显式异常类型）
+- 强化 `mold_detector` 的配置加载与数据形状校验
+- 修复潜在静默失败路径，补充更明确的错误输出
+- 完成完整项目 README 重写
 
-这是一个完整的**视觉引导多色点胶自动化系统**，集成了机器视觉、运动控制和智能路径规划，可用于PCB涂胶、电子封装、精密点胶等工业场景。
+详细修复记录见：
 
-### 核心优势
+- `FIX_README.md`（初次审计）
+- `FIX_README_AFTER.md`（首次修复后复检）
+- `FIX_README_V2.md`（V2 修复）
+- `FIX_README_V3.md`（V3 修复与建议）
 
-- 🎨 **多色支持**：独立控制4路颜色通道（A1-A4），实现复杂配色需求
-- 🎯 **视觉定位**：支持Halcon/OpenCV双引擎，亚像素级精度识别
-- 🤖 **智能控制**：基于Klipper固件，高精度三轴运动控制
-- 🖼️ **可视化路径编辑**：图形化界面设计点胶路径，所见即所得
-- ⚡ **批量生产**：自动识别多产品位置，一键完成阵列化点胶
+## 3. 技术栈
 
----
+- Python 3.10+（建议）
+- PyQt5（桌面 UI）
+- OpenCV + NumPy（视觉与几何计算）
+- Halcon（可选视觉引擎）
+- Moonraker/Klipper（运动控制）
 
-## ✨ 功能特性
+## 4. 快速开始
 
-<table>
-<tr>
-<td width="50%">
+### 4.1 克隆项目
 
-### 🎨 视觉识别
-- Halcon形状匹配（亚像素精度）
-- **ROI抗干扰训练** (自动背景剔除)
-- **动态路径纠偏** (实物坐标映射)
-- 实时畸变校正
-
-</td>
-<td width="50%">
-
-### 🤖 运动控制
-- Klipper固件集成
-- WebSocket实时通信
-- 8点坐标标定
-- Z轴自动对刀 (Auto-Probe)
-- 机械/视觉坐标关联锁定
-
-</td>
-</tr>
-<tr>
-<td width="50%">
-
-### 🌈 多色点胶
-- 4路独立颜色控制
-- 多阀联动逻辑
-- 可视化路径编辑
-- 点/线混合模式
-
-</td>
-<td width="50%">
-
-### 📊 生产管理
-- 配方管理系统
-- 批量运行模式
-- G代码预览
-- 实时状态监控
-
-</td>
-</tr>
-</table>
-
----
-
-## 🧩 核心功能详解: 智能路径匹配
-
-只需一次示教，系统即可自动适应产品在传送带上的任意位置和角度。
-
-### 核心工作流
-
-1.  **🎯 鲁棒模型训练 (Robust Training)**
-    - **ROI关注区域**: 用户框选特征区域，系统自动学习纹理与形状。
-    - **背景剔除**: 自动掩膜技术，忽略传送带背景干扰，仅提取产品特征。
-
-2.  **✏️ 黄金路径示教 (Golden Path Teaching)**
-    - **归一化坐标**: 所有路径点存储为相对于产品模具中心的“黄金坐标”。
-    - **所见即所得**: 在标准模板上绘制点/线路径，与物理位置解耦。
-
-3.  **⚡ 实时动态映射 (Real-time Mapping)**
-    - 生产运行时，视觉系统毫秒级解算当前产品的变换矩阵：
-      ```math
-      P_{real} = M_{translate} \times M_{rotate} \times P_{golden} + \Delta_{vision}
-      ```
-    - **平移补偿**: 自动对齐 X/Y 偏移。
-    - **旋转修正**: 自动跟随产品当前角度旋转路径。
-    - **精度保障**: 结合 9点标定数据，确保落胶精度 < 0.05mm。
-
-## 🚀 快速开始
-
-### 环境要求
-
-| 组件 | 版本要求 | 说明 |
-|------|---------|------|
-| Python | ≥ 3.8 | 推荐3.9+ |
-| PyQt5 | ≥ 5.15 | UI框架 |
-| OpenCV | ≥ 4.5 | 视觉库 |
-| NumPy | ≥ 1.20 | 数值计算 |
-| Klipper | 最新版 | 运动控制固件 |
-
-### 安装步骤
-
-**1. 克隆仓库**
 ```bash
 git clone https://github.com/sqf4411/DIY-Multi-Color-Vision-Guided-Dispensing-Machine.git
 cd DIY-Multi-Color-Vision-Guided-Dispensing-Machine
 ```
 
-**2. 创建虚拟环境**
-```bash
-python -m venv venv
-venv\Scripts\activate  # Windows
-# source venv/bin/activate  # Linux/Mac
+### 4.2 创建虚拟环境
+
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
-**3. 安装依赖**
+### 4.3 安装依赖
+
 ```bash
 pip install -r requirements.txt
 ```
 
-**4. 配置相机（可选）**
+开发测试依赖（可选）：
+
 ```bash
-# 安装Hikrobot MVS SDK
-# 设置环境变量 MVS_DLL_DIR
+pip install -r requirements-dev.txt
 ```
 
-**5. 启动程序**
+### 4.4 启动主程序
+
 ```bash
 python main_camera_ui.py
 ```
 
----
+## 5. 无硬件环境调试（推荐先走这一条）
 
-## 📁 项目结构
+当电脑未连接相机/运动平台时，可以先验证 UI 和业务逻辑：
 
-```
-DIY-Multi-Color-Vision-Guided-Dispensing-Machine/
-├── 📄 main_camera_ui.py          # 主程序入口 (已优化)
-├── 📂 core/                       # 核心模块
-│   ├── camera_manager.py         # 相机管理
-│   ├── machine_client.py         # 运动控制
-│   ├── halcon_manager.py         # Halcon识别引擎
-│   ├── halcon_product_manager.py # Halcon产品管理
-│   ├── mold_detector.py          # OpenCV检测
-│   ├── product_manager.py        # 产品配方管理
-│   ├── path_editor_wrapper.py    # 路径编辑封装
-│   ├── multicolor_path_editor.py # 多色路径编辑器
-│   ├── dry_run_dialog.py         # 空跑模拟
-│   ├── batch_run_dialog.py       # 批量运行
-│   ├── valve_control_dialog.py   # 气阀控制
-│   ├── config_manager.py         # 配置管理
-│   └── ...                       # 其他辅助模块
-├── 📂 tests/                      # 测试文件 (已整理)
-│   ├── test_halcon_*.py          # Halcon相关测试
-│   ├── test_machine_client.py    # 机器客户端测试
-│   └── test_touch_numpad.py      # 触摸键盘测试
-├── 📂 scripts/                    # 脚本工具
-│   ├── detect_mold.hdev          # Halcon脚本
-│   └── utils/                    # 辅助工具 (已整理)
-│       ├── diagnose_path.py      # 路径诊断
-│       ├── fix_halcon_*.py       # Halcon修复工具
-│       └── repair_ui.py          # UI修复工具
-├── 📂 produces/                   # 产品配方
-│   └── {配方名}/
-│       ├── reference.png         # 训练图片
-│       ├── {配方}.shm            # Halcon模型
-│       ├── multicolor_path.json  # 多色路径
-│       └── config.json           # 配方配置
-├── 📂 config/                     # 全局配置
-│   ├── params.json               # 系统参数
-│   └── app_settings.json         # 应用设置
-├── 📂 mobile_ui/                  # 移动端监控
-│   └── mobile_monitor_dialog.py  # 移动监控对话框
-└── 📂 docs/                       # 文档 (已整理)
-    ├── complete_guide.md         # 完整指南
-    ├── coordinate_system_manual.md # 坐标系统
-    ├── HALCON_OPTIMIZATION_LOG.md  # Halcon优化日志
-    └── HALCON_SCRIPT_EXPLAINED.md  # Halcon脚本说明
-```
+1. 启动 `main_camera_ui.py`
+2. 使用“纯模拟模式”（UI 顶部按钮）
+3. 不执行真实运动，先验证：
+   - 配方创建/加载
+   - 路径编辑与保存
+   - 参数加载和日志流程
 
-### 核心模块说明
+说明：
 
-| 模块 | 功能 | 关键类/函数 |
-|------|------|------------|
-| `camera_manager.py` | 相机连接与取流 | `CameraManager` |
-| `machine_client.py` | Klipper通信与运动控制 | `MachineClient` |
-| `halcon_manager.py` | Halcon识别引擎 | `HalconManager` |
-| `halcon_product_manager.py` | Halcon产品逻辑管理 | `HalconProductManager` |
-| `product_manager.py` | 产品配方管理 | `ProductManager` |
-| `mold_detector.py` | OpenCV模具检测 | `detect_mold_and_cells` |
-| `path_editor_wrapper.py` | 路径编辑封装 | `edit_path_halcon_mode` |
-| `multicolor_path_editor.py` | 多色路径规划 | `MultiColorPathEditor` |
-| `dry_run_dialog.py` | G代码生成与模拟 | `DryRunDialog` |
-| `batch_run_dialog.py` | 批量生产控制 | `BatchRunDialog` |
-| `valve_control_dialog.py` | 气阀控制对话框 | `ValveControlDialog` |
-| `config_manager.py` | 配置文件管理 | `ConfigManager` |
+- 未安装 Halcon 时会有告警，但不影响 OpenCV 模式和大多数 UI 调试。
+- 未连接相机或 Klipper 时，相关状态将显示不可用或空帧。
 
----
+## 6. 硬件接入说明（生产环境）
 
-## 📚 文档
+### 6.1 相机
 
-### 新手入门
-- 📖 [完整项目指南](docs/complete_guide.md) - 从零开始学习整个项目
-- 🗺️ [坐标系统详解](docs/coordinate_system_manual.md) - 理解4种坐标系转换
+- 工业相机依赖 Hikrobot MVS SDK（`MvImport`）
+- 若 SDK 不存在，系统会拒绝打开工业相机并安全返回，不会直接崩溃
 
-### Halcon相关
-- 🔧 [Halcon优化日志](docs/HALCON_OPTIMIZATION_LOG.md) - 识别精度优化历程
-- 📜 [Halcon脚本说明](docs/HALCON_SCRIPT_EXPLAINED.md) - 检测脚本详解
+### 6.2 运动控制
 
-### 进阶开发
-- 🔧 API参考手册（见complete_guide.md第7章）
-- 🎨 自定义路径算法（见complete_guide.md第9.1节）
-- ⚡ 性能优化技巧（见complete_guide.md第9.3节）
+- 通过 Moonraker HTTP API 与 Klipper 通信
+- 建议先在 Fluidd/Mainsail 中验证：
+  - 回零（G28）
+  - 基础移动（G0/G1）
+  - 探针对象状态（`probe` 或宏变量）
 
-### 常见问题
-- ❓ [FAQ](docs/complete_guide.md#8-常见问题faq)
-- 🐛 [问题排查指南](docs/complete_guide.md#q1-相机无法连接怎么办)
+### 6.3 视觉引擎
 
----
+- Halcon：高精度工业方案（可选）
+- OpenCV：默认开源方案，可用于大多数联调场景
 
-## 🎬 演示
+## 7. 项目结构
 
-### 主界面
-*实时视频流 + 识别结果叠加显示*
-
-### 多色路径编辑器
-*拖拽式路径设计，支持点和线两种模式*
-
-### 批量运行
-*自动识别4x4阵列，一键完成16个产品点胶*
-
-> 📹 视频演示：[待上传]
-
----
-
-## 🛠️ 技术栈
-
-**前端界面**
-- PyQt5 - 跨平台GUI框架
-- QThread - 多线程管理
-
-**视觉算法**
-- OpenCV - 图像处理
-- Halcon (可选) - 工业视觉库
-- NumPy - 矩阵运算
-
-**运动控制**
-- Klipper - 固件
-- Moonraker - WebSocket API
-- WebSocket - 实时通信
-
-**数据管理**
-- JSON - 配置存储
-- NumPy (.npy) - 数组序列化
-
----
-
-## 🔧 硬件要求
-
-### 必需组件
-- **工业相机**：Hikrobot MV系列（或USB摄像头用于测试）
-- **运动平台**：Klipper兼容主板（如SKR系列）
-- **步进电机**：NEMA17 x 3（XYZ三轴）
-- **气动阀**：24V电磁阀 x 4（多色切换）
-
-### 可选组件
-- Z轴探针（BLTouch/机械探针）
-- 工业光源
-- 专用点胶针头
-
-### 推荐配置
-- CPU: i5或更高
-- RAM: 8GB+
-- 操作系统: Windows 10/11
-
----
-
-## 🌟 特色功能
-
-### 1. 智能多阀控制
-采用"主路+分路"气路设计，确保无气压倒灌：
-```
-开启序列: 颜色阀 → 主路A → 主路B
-关闭序列: 主路B → 主路A → 颜色阀（逆序安全）
+```text
+.
+├─ main_camera_ui.py
+├─ core/
+│  ├─ machine_client.py
+│  ├─ camera_manager.py
+│  ├─ mold_detector.py
+│  ├─ product_manager.py
+│  ├─ halcon_manager.py
+│  ├─ halcon_product_manager.py
+│  ├─ batch_run_dialog.py
+│  └─ ...
+├─ mobile_ui/
+├─ scripts/
+│  └─ utils/
+├─ tests/
+├─ config/
+├─ produces/
+└─ docs/
 ```
 
-### 2. 4种坐标系统
-- **Raw**: 相机原始图像
-- **Warped**: 透视校正后
-- **Cell**: 单产品区域
-- **Machine**: 机器物理坐标
+## 8. 测试与质量检查
 
-完整的坐标转换链，保证微米级精度。
+### 8.1 编译检查
 
-### 3. 双视觉引擎
-- **Halcon模式**：商业级精度，适合工业生产
-- **OpenCV模式**：开源免费，适合学习开发
+```bash
+python -m compileall -q .
+```
 
-### 4. 配方管理
-每个产品独立配方，包含：
-- 训练图片
-- 识别模型
-- 点胶路径
-- 工艺参数
+### 8.2 运行测试
 
-一键切换，互不干扰。
+```bash
+python -m pytest -q
+```
 
-### 5. 触摸屏原生支持
-针对工业触摸屏优化：
-- 内置虚拟数字键盘
-- 大尺寸控件设计
-- 可以在无键鼠环境下全功能操作
+当前测试基线为无硬件 smoke tests，重点覆盖：
 
----
+- 产品路径读写安全
+- 探针状态解析逻辑
+- 关键格式兼容逻辑
 
-## 📈 开发路线图
+## 9. 关键设计约束
 
-- [x] 基础视觉引导功能
-- [x] 多色点胶支持
-- [x] 批量生产模式
-- [x] 配方管理系统
-- [x] 完整文档
-- [ ] 云端配方库
-- [ ] 机器学习优化
-- [ ] Web远程监控
-- [ ] 移动端APP
+- 不信任外部文件输入：`.npy` 加载禁用 pickle
+- 产品名与路径严格校验，避免路径穿越
+- UI/设备异常尽量显式处理，减少静默失败
+- 默认以“无硬件可调试”作为开发体验基线
 
----
+## 10. 常见问题
 
-## 🤝 贡献
+### Q1: `ModuleNotFoundError: No module named 'OpenGL'`
 
-欢迎贡献代码！请遵循以下步骤：
+安装依赖：
 
-1. **Fork** 本仓库
-2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交修改 (`git commit -m 'Add: AmazingFeature'`)
-4. 推送分支 (`git push origin feature/AmazingFeature`)
-5. 创建 **Pull Request**
+```bash
+pip install PyOpenGL PyOpenGL_accelerate
+```
 
-### 代码规范
-- 遵循PEP8
-- 添加类型注解
-- 编写文档字符串
-- 包含单元测试
+并确认你正在虚拟环境中运行程序。
 
----
+### Q2: PowerShell 已显示 `(.venv)`，但包仍找不到
 
-## 📄 许可证
+请确认实际执行器是虚拟环境解释器：
 
-本项目采用 [MIT License](LICENSE) 开源协议。
+```powershell
+python -c "import sys; print(sys.executable)"
+```
 
-您可以自由地：
-- ✅ 商业使用
-- ✅ 修改
-- ✅ 分发
-- ✅ 私人使用
+应指向项目内 `.venv\Scripts\python.exe`。
 
-但需要：
-- 📝 保留版权声明
-- 📝 包含许可证副本
+### Q3: UI 能打开但没有图像
 
----
+无硬件时属于正常现象。可先验证 UI 和配置流程，不影响代码调试。
 
-## 🙏 致谢
+## 11. 开发协作建议
 
-感谢以下开源项目和团队：
+- 分支建议：`codex/*`、`feature/*`、`fix/*`
+- 提交建议：单一主题、附带测试结果
+- 合并前建议至少执行：
+  - `compileall`
+  - `pytest -q`
 
-- [Klipper](https://github.com/Klipper3d/klipper) - 高性能3D打印固件
-- [OpenCV](https://opencv.org/) - 计算机视觉库
-- [PyQt5](https://www.riverbankcomputing.com/software/pyqt/) - Python GUI框架
-- [NumPy](https://numpy.org/) - 科学计算库
-- MVTec公司 - Halcon工业视觉库
+## 12. 许可证
 
----
-
-## 📮 联系方式
-
-- **作者**: sqf4411
-- **仓库**: [GitHub](https://github.com/sqf4411/DIY-Multi-Color-Vision-Guided-Dispensing-Machine)
-- **问题反馈**: [Issues](https://github.com/sqf4411/DIY-Multi-Color-Vision-Guided-Dispensing-Machine/issues)
-
----
-
-<div align="center">
-
-**⭐ 如果这个项目对你有帮助，请给一个Star！⭐**
-
-Made with ❤️ by sqf4411
-
-</div>
+MIT License。

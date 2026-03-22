@@ -259,7 +259,7 @@ class MobileMonitorDialog(QDialog):
                 if hasattr(parent, 'btn_ipad'):
                     parent.btn_ipad.setText("📱 启动 iPad 监控副屏")
                     parent.btn_ipad.setStyleSheet("background-color: #059669; color: white; font-weight: bold; font-size: 16px; border-radius: 6px;")
-        except:
+        except Exception:
             pass
         
         event.accept()
@@ -293,7 +293,7 @@ class MobileMonitorDialog(QDialog):
             else:
                 self.lbl_valve_status.setText("CLOSED")
                 self.lbl_valve_status.setStyleSheet("color: #9CA3AF; background-color: #374151; border-radius: 12px; padding: 10px;")
-        except:
+        except Exception:
             pass
     
     def poll_status(self):

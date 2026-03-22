@@ -987,13 +987,17 @@ class BatchRunDialog(QDialog):
             # Helper to get float/int
             def get_float(key, default=0.0):
                 val = cfg.get(key, default)
-                try: return float(val)
-                except: return default
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    return default
 
             def get_int(key, default=0):
                 val = cfg.get(key, default)
-                try: return int(val)
-                except: return default
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    return default
 
             # 加载阵列参数
             self.spn_start_x.setValue(get_float('batch_start_x', 0.0))

@@ -19,6 +19,14 @@ _CORE_TEMPLATE = None
 _CORE_REF_TL = None
 
 
+def _safe_load_npy(path: str, dtype=None):
+    """Load numeric .npy safely with pickle disabled."""
+    arr = np.load(path, allow_pickle=False)
+    if dtype is not None:
+        arr = np.asarray(arr, dtype=dtype)
+    return arr
+
+
 def _order_points(pts: np.ndarray) -> np.ndarray:
     """
     Helper function: Sorts the four points of a quadrilateral in a fixed order: TL, TR, BR, BL.
@@ -133,11 +141,20 @@ def _load_golden_and_paths():
     # --- 1. Load Basic Data ---
     if _TEMPLATES is None:
         try:
-            _TEMPLATES = np.load(path_templates)
-            _WARP_SIZE = np.load(path_warp).astype(int)
+            templates = _safe_load_npy(path_templates, dtype=np.float32)
+            warp_raw = np.asarray(_safe_load_npy(path_warp), dtype=np.float32).reshape(-1)
+            if templates.ndim != 3 or templates.shape[1:] != (4, 2):
+                raise ValueError(f"invalid template shape: {templates.shape}")
+            if warp_raw.size < 2:
+                raise ValueError(f"invalid warp size data: {warp_raw}")
+            warp_w, warp_h = int(warp_raw[0]), int(warp_raw[1])
+            if warp_w <= 0 or warp_h <= 0:
+                raise ValueError(f"invalid warp size values: ({warp_w}, {warp_h})")
+            _TEMPLATES = templates
+            _WARP_SIZE = np.array([warp_w, warp_h], dtype=int)
             print(f"[mold_detector] Golden data loaded: {_TEMPLATES.shape}")
-        except:
-            print("[mold_detector] Missing config/slot_templates.npy")
+        except Exception as e:
+            print(f"[mold_detector] Failed to load template config: {e}")
             return
 
     # --- 2. Load Path Files ---
@@ -160,26 +177,32 @@ def _load_golden_and_paths():
                     if arr.ndim == 2 and arr.shape[1] == 2:
                         parsed.append(arr)
                 _PATH_POLY = parsed if parsed else None
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[mold_detector] Failed to load {path_poly_json}: {e}")
         elif os.path.exists(path_poly):
             try:
                 # Legacy fallback: numeric npy only (pickle disabled).
-                arr = np.load(path_poly, allow_pickle=False)
+                arr = _safe_load_npy(path_poly, dtype=np.float32)
                 arr = np.asarray(arr, dtype=np.float32)
                 if arr.ndim == 2 and arr.shape[1] == 2 and arr.size > 0:
                     _PATH_POLY = [arr]
                 else:
                     _PATH_POLY = None
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[mold_detector] Failed to load legacy path poly: {e}")
 
     if _PATH_DOTS is None and os.path.exists(path_dots):
         try:
-            arr = np.load(path_dots).astype(np.float32)
+            arr = _safe_load_npy(path_dots, dtype=np.float32)
+            if arr.ndim == 1:
+                if arr.shape[0] != 2:
+                    raise ValueError(f"invalid dot path shape: {arr.shape}")
+                arr = arr.reshape(1, 2)
+            elif arr.ndim != 2 or arr.shape[1] != 2:
+                raise ValueError(f"invalid dot path shape: {arr.shape}")
             _PATH_DOTS = arr if arr.size > 0 else None
-        except:
-            pass
+        except Exception as e:
+            print(f"[mold_detector] Failed to load dot path: {e}")
 
     # --- 3. Key Logic: Extract Core Template ---
     if _CORE_TEMPLATE is None and os.path.exists(path_mold2):
@@ -214,9 +237,16 @@ def _load_golden_and_paths():
             core_y0 = max(0, y0 + margin_y)
             core_x1 = min(goldW, x1 - margin_x)
             core_y1 = min(goldH, y1 - margin_y)
+            if core_x1 <= core_x0 or core_y1 <= core_y0:
+                print("[mold_detector] Invalid core crop area, skip core template update.")
+                return
 
             # Save this clean template
-            _CORE_TEMPLATE = gold_warped[core_y0:core_y1, core_x0:core_x1].copy()
+            core = gold_warped[core_y0:core_y1, core_x0:core_x1]
+            if core.size == 0:
+                print("[mold_detector] Empty core template after crop, skip update.")
+                return
+            _CORE_TEMPLATE = core.copy()
             # Record its absolute coord in golden image (Reference point for offsets)
             _CORE_REF_TL = np.array([core_x0, core_y0], dtype=np.float32)
 

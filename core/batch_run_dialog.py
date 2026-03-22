@@ -24,6 +24,7 @@ class BatchWorker(QThread):
     current_line_signal = pyqtSignal(str)   # 新增：发送当前执行的 G-code 行
     current_index_signal = pyqtSignal(int)  # 新增：发送当前执行的 G-code 行号 (用于准确高亮)
     path_update_signal = pyqtSignal(list)   # 新增：发送当前产品的路径数据用于实时显示
+    color_change_request_signal = pyqtSignal(str, str, float, float)  # finished_color, next_color, park_x, park_y
 
     def __init__(self, main_window, grid_config, mode='real'):
         super().__init__()
@@ -32,6 +33,7 @@ class BatchWorker(QThread):
         self.mode = mode  # 'real', 'camera_dry', 'nozzle_dry'
         self.running = True
         self.paused = False
+        self._color_change_decision = None
 
     def pause(self):
         self.paused = True
@@ -40,6 +42,48 @@ class BatchWorker(QThread):
     def resume(self):
         self.paused = False
         self.log_signal.emit("▶ 继续运行...")
+
+    def confirm_color_change_continue(self):
+        self._color_change_decision = "continue"
+
+    def confirm_color_change_stop(self):
+        self._color_change_decision = "stop"
+
+    def _color_name(self, color_idx: int) -> str:
+        return ["红色(A1)", "绿色(A2)", "蓝色(A3)", "黄色(A4)"][color_idx] if 0 <= color_idx < 4 else f"Color {color_idx}"
+
+    def _await_color_change_confirmation(self, finished_color: str, next_color: str) -> bool:
+        """
+        Color-change checkpoint:
+        1) Move to configured XY park position.
+        2) Ask UI thread to show dialog: test-dispense / continue / stop.
+        """
+        park_x = float(self.cfg.get('color_change_park_x', self.cfg.get('start_x', 0.0)))
+        park_y = float(self.cfg.get('color_change_park_y', self.cfg.get('start_y', 0.0)))
+
+        # Ensure safe lift before moving to park point
+        self._safe_lift_z()
+        self.mw.machine.move_to(x=park_x, y=park_y, speed=self.mw.feedrate_xy)
+        self.mw.machine.wait_until_idle()
+
+        self.log_signal.emit(
+            f"🔁 {finished_color} 已完成，停靠到换胶位 X={park_x:.2f}, Y={park_y:.2f}，等待确认..."
+        )
+
+        self._color_change_decision = None
+        self.color_change_request_signal.emit(finished_color, next_color, park_x, park_y)
+
+        while self.running and self._color_change_decision is None:
+            self.msleep(100)
+
+        if not self.running:
+            return False
+        if self._color_change_decision != "continue":
+            self.running = False
+            return False
+
+        self.log_signal.emit(f"▶ 继续执行下一颜色：{next_color}")
+        return True
 
     def run(self):
         rows = self.cfg['rows']
@@ -112,8 +156,8 @@ class BatchWorker(QThread):
         self.log_signal.emit(f"🔼 抬升至安全高度 Z={safe_z}")
 
         # --- Outer Loop: Colors ---
-        for color_idx in sorted_colors:
-            color_name = ["红色(A1)", "绿色(A2)", "蓝色(A3)", "黄色(A4)"][color_idx] if 0 <= color_idx < 4 else f"Color {color_idx}"
+        for color_pos, color_idx in enumerate(sorted_colors):
+            color_name = self._color_name(color_idx)
             self.log_signal.emit(f"🎨 正在处理颜色: {color_name} ...")
             
             # --- Inner Loop: Grid ---
@@ -321,6 +365,19 @@ class BatchWorker(QThread):
             # Maybe return to Safe Z or Origin?
             self._safe_lift_z()
             self.log_signal.emit(f"✅ {color_name} 批次完成")
+
+            # Optional color-change checkpoint for nozzle/real modes.
+            # camera_dry mode keeps running continuously.
+            need_checkpoint = (
+                self.mode != 'camera_dry'
+                and bool(self.cfg.get('enable_color_change_pause', True))
+                and color_pos < (len(sorted_colors) - 1)
+            )
+            if need_checkpoint:
+                next_color_name = self._color_name(sorted_colors[color_pos + 1])
+                if not self._await_color_change_confirmation(color_name, next_color_name):
+                    self.finished_signal.emit(False, "用户停止")
+                    return
 
         # 结束 - 返回起始点
         self.log_signal.emit("🔙 全部完成，返回起始点...")
@@ -531,8 +588,9 @@ class BatchWorker(QThread):
         # End of Processing: Close Color Valve if open
         if active_color_valve is not None:
             lines.append(f"; [Tag] {active_color_valve} (OFF) - End Batch Item")
-            if self.mode == 'real':
-                lines.append(active_color_valve)
+            is_sim = self.cfg.get('disable_valves', False)
+            if not is_sim:
+                lines.append(f"SET_PIN PIN={active_color_valve} VALUE=0")
             active_color_valve = None
 
         # 最后确保在最高安全高度
@@ -699,6 +757,27 @@ class BatchRunDialog(QDialog):
         self.chk_mixed_mode.setToolTip("开启后，每个位置都会尝试匹配所有已训练的产品，\n并自动加载最佳匹配的产品路径。")
         layout.addWidget(self.chk_mixed_mode)
 
+        # [NEW V3.1] Color-change checkpoint
+        self.chk_color_change_pause = QCheckBox("颜色切换停靠确认（测试出胶后继续）")
+        self.chk_color_change_pause.setChecked(True)
+        self.chk_color_change_pause.setStyleSheet("color: #F97316; font-weight: bold;")
+        self.chk_color_change_pause.setToolTip("每种颜色完成后，自动停靠到换胶位并弹窗确认。")
+        layout.addWidget(self.chk_color_change_pause)
+
+        h_color_park = QHBoxLayout()
+        h_color_park.addWidget(QLabel("换胶停靠 X:"))
+        self.spn_color_change_x = QDoubleSpinBox()
+        self.spn_color_change_x.setRange(-2000, 2000)
+        self.spn_color_change_x.setDecimals(3)
+        h_color_park.addWidget(self.spn_color_change_x)
+        h_color_park.addWidget(QLabel("Y:"))
+        self.spn_color_change_y = QDoubleSpinBox()
+        self.spn_color_change_y.setRange(-2000, 2000)
+        self.spn_color_change_y.setDecimals(3)
+        h_color_park.addWidget(self.spn_color_change_y)
+        h_color_park.addStretch()
+        layout.addLayout(h_color_park)
+
         # [NEW] Color Supply Delay
         h_color_delay = QHBoxLayout()
         h_color_delay.addWidget(QLabel("供料延时 (ms):"))
@@ -788,6 +867,9 @@ class BatchRunDialog(QDialog):
         self.spn_start_x.setValue(x)
         self.spn_start_y.setValue(y)
         self.spn_start_z.setValue(z) 
+        # V3.1 default: keep color-change park point aligned with taught start.
+        self.spn_color_change_x.setValue(x)
+        self.spn_color_change_y.setValue(y)
         self.log(f"已示教起始点: X{x:.2f}, Y{y:.2f}, Z{z:.2f}")
         # 立即保存
         self.save_settings(silent=True)
@@ -811,6 +893,9 @@ class BatchRunDialog(QDialog):
             # [NEW] Simulation
             'disable_valves': self.chk_simulate.isChecked(),
             'mixed_mode': self.chk_mixed_mode.isChecked(),
+            'enable_color_change_pause': self.chk_color_change_pause.isChecked(),
+            'color_change_park_x': self.spn_color_change_x.value(),
+            'color_change_park_y': self.spn_color_change_y.value(),
             'color_delay': self.spn_color_delay.value(),
             'line_speed_xy': self.spn_line_speed.value()
         }
@@ -865,6 +950,7 @@ class BatchRunDialog(QDialog):
         self.worker.gcode_signal.connect(self.update_gcode_display)
         self.worker.current_index_signal.connect(self.highlight_current_line)
         self.worker.path_update_signal.connect(self.mw.on_batch_path_update)  # [NEW] Dynamic path visualization
+        self.worker.color_change_request_signal.connect(self.on_color_change_request)  # [NEW V3.1]
         
         # 关闭实时识别 (防止卡顿和Z轴变化导致的误识别)
         self.mw.live_detect = False
@@ -926,6 +1012,43 @@ class BatchRunDialog(QDialog):
                 self.log(f"❌ 测试出胶失败: {e}")
         else:
             QMessageBox.warning(self, "错误", "主窗口未找到测试出胶功能")
+
+    def on_color_change_request(self, finished_color, next_color, park_x, park_y):
+        """
+        V3.1: Called by worker at color checkpoints.
+        Shows a modal dialog with:
+        - 测试出胶
+        - 继续执行
+        - 停止任务
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("颜色切换确认")
+        box.setText(
+            f"{finished_color} 已完成。\n"
+            f"当前停靠位: X={park_x:.2f}, Y={park_y:.2f}\n\n"
+            f"请完成换胶/排胶后继续执行 {next_color}。"
+        )
+        btn_test = box.addButton("测试出胶", QMessageBox.ActionRole)
+        btn_continue = box.addButton("继续执行", QMessageBox.AcceptRole)
+        btn_stop = box.addButton("停止任务", QMessageBox.DestructiveRole)
+        box.setDefaultButton(btn_continue)
+
+        while True:
+            box.exec_()
+            clicked = box.clickedButton()
+
+            if clicked == btn_test:
+                self.on_test_dispense()
+                continue
+
+            if hasattr(self, 'worker'):
+                if clicked == btn_continue:
+                    self.worker.confirm_color_change_continue()
+                else:
+                    # Includes explicit stop button and close-window fallback.
+                    self.worker.confirm_color_change_stop()
+            break
 
     def on_finished(self, success, msg):
         self.btn_cam_dry.setEnabled(True)
@@ -1007,6 +1130,10 @@ class BatchRunDialog(QDialog):
             self.spn_cols.setValue(get_int('batch_cols', 1))
             self.spn_space_x.setValue(get_float('batch_space_x', 0.0))
             self.spn_space_y.setValue(get_float('batch_space_y', 0.0))
+
+            self.spn_color_change_x.setValue(get_float('batch_color_change_x', self.spn_start_x.value()))
+            self.spn_color_change_y.setValue(get_float('batch_color_change_y', self.spn_start_y.value()))
+            self.chk_color_change_pause.setChecked(bool(get_int('batch_color_change_pause', 1)))
             
             # Z轴参数 (从 Config 读取，若无则使用 MainWindow 变量)
             self.spn_cam_safe_cavity.setValue(get_float('cam_safe_z_cavity', self.mw.cam_safe_z_cavity or 0.0))
@@ -1038,6 +1165,9 @@ class BatchRunDialog(QDialog):
             cfg.set('batch_cols', self.spn_cols.value())
             cfg.set('batch_space_x', self.spn_space_x.value())
             cfg.set('batch_space_y', self.spn_space_y.value())
+            cfg.set('batch_color_change_x', self.spn_color_change_x.value())
+            cfg.set('batch_color_change_y', self.spn_color_change_y.value())
+            cfg.set('batch_color_change_pause', 1 if self.chk_color_change_pause.isChecked() else 0)
 
             # 2. 保存高度参数
             val_csc = self.spn_cam_safe_cavity.value()

@@ -1,4 +1,4 @@
-# DIY Multi-Color Vision-Guided Dispensing Machine (V3)
+# DIY Multi-Color Vision-Guided Dispensing Machine (V3.1)
 
 工业点胶控制项目，支持多颜色路径、视觉定位（Halcon/OpenCV）、Klipper 运动控制、配方管理与批量生产流程。
 
@@ -12,9 +12,15 @@
 - 配方化管理（模型、参数、路径、标定数据）
 - 支持无硬件环境下 UI 与逻辑联调
 
-## 2. V3 版本重点
+## 2. V3.1 版本重点
 
-V3 在 V2 基础上继续做了稳定性与可维护性优化：
+V3.1 在 V3 基础上新增了批量颜色切换工艺检查点：
+
+- 每种颜色完成后可自动停靠到“换胶停靠 XY”
+- 自动弹出确认对话框：`测试出胶 / 继续执行 / 停止任务`
+- 支持配置是否启用该流程（相机批量默认不触发）
+
+V3 的稳定性与可维护性优化继续保留：
 
 - 清理关键代码中的裸 `except:`（改为显式异常类型）
 - 强化 `mold_detector` 的配置加载与数据形状校验
@@ -27,6 +33,7 @@ V3 在 V2 基础上继续做了稳定性与可维护性优化：
 - `FIX_README_AFTER.md`（首次修复后复检）
 - `FIX_README_V2.md`（V2 修复）
 - `FIX_README_V3.md`（V3 修复与建议）
+- `FIX_README_V3_1.md`（V3.1 工艺流程增强）
 
 ## 3. 技术栈
 

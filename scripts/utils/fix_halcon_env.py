@@ -14,7 +14,7 @@ def fix():
         print("Slot templates not found.")
         return
 
-    slots = np.load(slot_path, allow_pickle=True)
+    slots = np.load(slot_path, allow_pickle=False)
     if len(slots) == 0:
         print("Slots empty.")
         return

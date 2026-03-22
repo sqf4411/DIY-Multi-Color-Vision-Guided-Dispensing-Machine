@@ -209,10 +209,20 @@ def edit_path_opencv_mode(parent, cell_index=0, img_path="config/mold2.png", sav
         with open(data_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         
-        # 兼容旧格式
+        # 兼容旧格式（安全JSON，不再写 object npy）
         polylines, dots = path_list.get_legacy_format()
-        np.save(os.path.join(save_dir, f"cell_{cell_index}_polylines.npy"),
-               np.array(polylines, dtype=object) if polylines else np.array([]))
+        poly_json_file = os.path.join(save_dir, f"cell_{cell_index}_polylines.json")
+        poly_payload = {
+            "version": 2,
+            "segments": [np.asarray(seg, dtype=np.float32).tolist() for seg in polylines if len(seg) > 0]
+        }
+        with open(poly_json_file, "w", encoding="utf-8") as f:
+            json.dump(poly_payload, f, ensure_ascii=False, indent=2)
+
+        legacy_poly_npy = os.path.join(save_dir, f"cell_{cell_index}_polylines.npy")
+        if os.path.exists(legacy_poly_npy):
+            os.remove(legacy_poly_npy)
+
         np.save(os.path.join(save_dir, f"cell_{cell_index}_dots.npy"),
                np.array(dots, dtype=np.float32) if dots else np.array([]))
         
@@ -275,10 +285,19 @@ def edit_path_halcon_mode(parent, product_name, product_dir):
         
         print(f"[Halcon Editor] ✅ 已保存 {path_list.count()} 个路径段（ROI 坐标系）")
         
-        # 兼容旧格式（.npy文件）
+        # 兼容旧格式（安全JSON + 数值npy）
         polylines, dots = path_list.get_legacy_format()
-        np.save(os.path.join(product_dir, "path_poly.npy"),
-                np.array(polylines, dtype=object) if polylines else np.array([]))
+        poly_payload = {
+            "version": 2,
+            "segments": [np.asarray(seg, dtype=np.float32).tolist() for seg in polylines if len(seg) > 0]
+        }
+        with open(os.path.join(product_dir, "path_poly.json"), "w", encoding="utf-8") as f:
+            json.dump(poly_payload, f, ensure_ascii=False, indent=2)
+
+        legacy_poly_npy = os.path.join(product_dir, "path_poly.npy")
+        if os.path.exists(legacy_poly_npy):
+            os.remove(legacy_poly_npy)
+
         np.save(os.path.join(product_dir, "path.npy"),
                 np.array(dots, dtype=np.float32) if dots else np.array([]))
         

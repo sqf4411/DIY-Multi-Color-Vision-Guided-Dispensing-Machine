@@ -19,7 +19,6 @@ class BatchWorker(QThread):
     """
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)
-    finished_signal = pyqtSignal(bool, str)
     progress_signal = pyqtSignal(int, int)  # current, total
     gcode_signal = pyqtSignal(str)          # 新增：发送生成的完整 G-code
     current_line_signal = pyqtSignal(str)   # 新增：发送当前执行的 G-code 行
@@ -167,17 +166,6 @@ class BatchWorker(QThread):
                         if len(img.shape) == 3: gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                         else: gray_img = img
 
-                        paths_groups, _ = self.mw.get_vision_result(gray_img)
-                        
-                        if not paths_groups:
-                            self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})")
-                            vision_cache[cache_key] = None # Mark as processed but empty
-                        else:
-                            # Store in cache (including product name for mixed mode)
-                            current_product = getattr(self.mw.halcon_product_manager, 'current_product', None)
-                            vision_cache[cache_key] = (paths_groups, target_x, target_y, current_product)
-                            
-
                         # [NEW] Mixed Mode Logic: Detect Product First
                         is_mixed = self.cfg.get('mixed_mode', False)
                         if is_mixed:
@@ -192,12 +180,6 @@ class BatchWorker(QThread):
                                 if ok:
                                     # 重要：更新主界面模板缓存，否则后续识别会用旧模板
                                     self.mw._compute_halcon_template()
-                                    
-                                    # [NEW] 发送路径更新信号，动态显示当前产品的路径
-                                    # 重新识别获取当前产品的路径
-                                    paths_px_preview, _ = self.mw.get_vision_result(gray_img)
-                                    if paths_px_preview:
-                                        self.path_update_signal.emit(paths_px_preview)
                                 else:
                                     self.log_signal.emit(f"❌ 加载产品失败: {msg}")
                             else:
@@ -210,6 +192,7 @@ class BatchWorker(QThread):
                             self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})")
                             vision_cache[cache_key] = None # Mark as processed but empty
                         else:
+                            self.path_update_signal.emit(paths_groups)
                             # Store in cache (including product name for mixed mode)
                             current_product = getattr(self.mw.halcon_product_manager, 'current_product', None)
                             vision_cache[cache_key] = (paths_groups, target_x, target_y, current_product)

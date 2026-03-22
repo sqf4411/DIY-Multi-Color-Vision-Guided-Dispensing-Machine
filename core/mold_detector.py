@@ -2,6 +2,7 @@
 import cv2
 import numpy as np
 import os
+import json
 
 # ====== Global Cache ======
 # These variables store data across calls to avoid re-computation.
@@ -124,6 +125,7 @@ def _load_golden_and_paths():
     
     path_templates = os.path.join(config_dir, "slot_templates.npy")
     path_warp = os.path.join(config_dir, "warp_size.npy")
+    path_poly_json = os.path.join(config_dir, "disp_poly_cell0.json")
     path_poly = os.path.join(config_dir, "disp_poly_cell0.npy")
     path_dots = os.path.join(config_dir, "disp_dots_cell0.npy")
     path_mold2 = os.path.join(config_dir, "mold2.png")
@@ -139,24 +141,38 @@ def _load_golden_and_paths():
             return
 
     # --- 2. Load Path Files ---
-    # IMPORTANT: Use disp_poly_cell0.npy (Golden Coord) not cell_0_polylines.npy (Local Coord)
-    if _PATH_POLY is None and os.path.exists(path_poly):
-        try:
-            # Allow pickle to load object arrays
-            arr = np.load(path_poly, allow_pickle=True)
-            
-            if arr.dtype == object:
-                # New format: list of polylines
-                _PATH_POLY = [seg.astype(np.float32) for seg in arr]
-            else:
-                # Old format: single big array -> convert to single element list
-                arr = arr.astype(np.float32)
-                if arr.size > 0:
+    # IMPORTANT: Use global golden-coordinate path files.
+    if _PATH_POLY is None:
+        if os.path.exists(path_poly_json):
+            try:
+                with open(path_poly_json, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                segments = data.get("segments", [])
+                parsed = []
+                for seg in segments:
+                    arr = np.asarray(seg, dtype=np.float32)
+                    if arr.size == 0:
+                        continue
+                    if arr.ndim == 1:
+                        if arr.shape[0] != 2:
+                            continue
+                        arr = arr.reshape(1, 2)
+                    if arr.ndim == 2 and arr.shape[1] == 2:
+                        parsed.append(arr)
+                _PATH_POLY = parsed if parsed else None
+            except Exception:
+                pass
+        elif os.path.exists(path_poly):
+            try:
+                # Legacy fallback: numeric npy only (pickle disabled).
+                arr = np.load(path_poly, allow_pickle=False)
+                arr = np.asarray(arr, dtype=np.float32)
+                if arr.ndim == 2 and arr.shape[1] == 2 and arr.size > 0:
                     _PATH_POLY = [arr]
                 else:
                     _PATH_POLY = None
-        except:
-            pass
+            except Exception:
+                pass
 
     if _PATH_DOTS is None and os.path.exists(path_dots):
         try:

@@ -72,7 +72,7 @@ def fix_v2():
     print(f"Minv:\n{Minv}")
     
     # 2. Transform Slot Box
-    slots = np.load(slot_path, allow_pickle=True)
+    slots = np.load(slot_path, allow_pickle=False)
     if len(slots) == 0:
         print("Error: No slots")
         return

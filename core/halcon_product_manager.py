@@ -237,7 +237,6 @@ class HalconProductManager:
             self.roi_in_reference = config.get('roi_in_reference', None)
             
             # 4.5 ⭐ 应用阀门参数到全局配置
-            from pathlib import Path
             from datetime import datetime
             
             valve_params = {
@@ -257,6 +256,17 @@ class HalconProductManager:
             print(f"[HalconProductManager]   阀A时间: {valve_params['parameters']['valve_a_dispense_time']}")
             print(f"[HalconProductManager]   阀B时间: {valve_params['parameters']['valve_b_dispense_time']}")
             print(f"[HalconProductManager]   画线速度: {valve_params['parameters']['line_speed_xy']} mm/min")
+
+            # Persist to global config/valve_dispense_params.json so runtime dialogs use latest product settings.
+            try:
+                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                config_dir = os.path.join(project_root, "config")
+                os.makedirs(config_dir, exist_ok=True)
+                valve_params_file = os.path.join(config_dir, "valve_dispense_params.json")
+                with open(valve_params_file, "w", encoding="utf-8") as f:
+                    json.dump(valve_params, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                print(f"[HalconProductManager] ⚠ 阀门参数写入全局配置失败: {e}")
             
             # [CRITICAL Fix for Mixed Mode]
             # Ensure MainWindow state is consistent with the loaded product.

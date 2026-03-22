@@ -112,6 +112,26 @@ class MachineClient:
             return {"X-Api-Key": self.api_key}
         return {}
 
+    @staticmethod
+    def _parse_switch_state(value) -> Optional[bool]:
+        """
+        Normalize Klipper switch-like values (0/1, true/false, on/off, open/triggered).
+        Returns None when value cannot be interpreted.
+        """
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(int(value))
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if text in {"1", "true", "on", "triggered"}:
+                return True
+            if text in {"0", "false", "off", "open"}:
+                return False
+        return None
+
     def _post_gcode(self, script: str, timeout: int = 20):
         """
         向 /printer/gcode/script 发送一段 G-code 脚本
@@ -208,11 +228,9 @@ class MachineClient:
                 state = macro_status.get("state")
                 # 用户配置: 1=Triggered, 0=Open
                 if state is not None:
-                    try:
-                        val = int(state)
-                        return 'triggered' if val == 1 else 'open'
-                    except:
-                        pass
+                    normalized = self._parse_switch_state(state)
+                    if normalized is not None:
+                        return 'triggered' if normalized else 'open'
         except Exception:
             pass
 
@@ -228,8 +246,9 @@ class MachineClient:
             probe_data = data.get("result", {}).get("status", {}).get("probe", {})
             if probe_data:
                 last_query = probe_data.get("last_query")
-                if last_query is not None:
-                    return 'triggered' if last_query else 'open'
+                normalized = self._parse_switch_state(last_query)
+                if normalized is not None:
+                    return 'triggered' if normalized else 'open'
         except Exception:
             pass
             
@@ -253,7 +272,12 @@ class MachineClient:
             data = r.json()
             status = data.get("result", {}).get("status", {}).get("probe", {})
             # last_query: 1 (triggered) / 0 (open)
-        except:
+            last_query = status.get("last_query")
+            normalized = self._parse_switch_state(last_query)
+            if normalized is None:
+                return "unknown"
+            return "triggered" if normalized else "open"
+        except Exception:
             pass
         return 'unknown'
 
@@ -270,9 +294,11 @@ class MachineClient:
             r = self.session.get(url, params=params, headers=self._headers(), timeout=1)
             data = r.json()
             val = data.get("result", {}).get("status", {}).get("probe", {}).get("last_query")
-            if val is None: return 'unknown'
-            return 'triggered' if val else 'open'
-        except:
+            normalized = self._parse_switch_state(val)
+            if normalized is None:
+                return 'unknown'
+            return 'triggered' if normalized else 'open'
+        except Exception:
             return 'unknown'
 
     def get_output_pin_status(self, pin_name: str) -> bool:
@@ -295,8 +321,10 @@ class MachineClient:
             data = r.json()
             val = data.get("result", {}).get("status", {}).get(obj_name, {}).get("value")
             # value 通常是 0.0 或 1.0
-            return bool(val and val > 0.001)
-        except:
+            if val is None:
+                return False
+            return float(val) > 0.001
+        except Exception:
             return False
 
     # ------------------------------------------------------------------ #
@@ -597,7 +625,7 @@ class MachineClient:
                         # usually in 'cpu_temp'
                         res['host'] = s_data.get("cpu_temp", 0.0)
                         # print(f"[DEBUG] Fallback to proc_stats: {res['host']}")
-                except:
+                except Exception:
                     pass
             
             return res

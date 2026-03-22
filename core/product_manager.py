@@ -1,9 +1,12 @@
-import os
 import json
-import shutil
-import numpy as np
+import os
+import re
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable, List, Optional
+
+import numpy as np
+
 
 class ProductManager:
     """
@@ -11,35 +14,112 @@ class ProductManager:
     Structure:
     produces/
       product_A/
-        config.json  (Params, Offsets, Model Path)
-        path.npy     (Dispensing Path)
-        path_poly.npy (Poly Path)
+        config.json   (Params, Offsets, Model Path)
+        path.npy      (Dispensing dots)
+        path_poly.json (Dispensing polylines, safe JSON format)
         product_A.shm (Halcon Model)
         reference.png (Training Image)
     """
 
-    def __init__(self, products_dir="produces"):
-        # 确保使用绝对路径
+    PRODUCT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]{1,64}$")
+
+    def __init__(self, products_dir: str = "produces"):
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.base_dir = os.path.abspath(base_dir)
+        self.config_dir = os.path.join(self.base_dir, "config")
+
+        # Ensure absolute, normalized products root.
         if not os.path.isabs(products_dir):
-            # 相对于项目根目录（product_manager.py在core/目录下）
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            self.products_dir = os.path.join(base_dir, products_dir)
-        else:
-            self.products_dir = products_dir
-        
-        if not os.path.exists(self.products_dir):
-            os.makedirs(self.products_dir)
+            products_dir = os.path.join(self.base_dir, products_dir)
+        self.products_dir = os.path.realpath(os.path.abspath(products_dir))
+        os.makedirs(self.products_dir, exist_ok=True)
 
-    def get_product_path(self, name):
-        """获取产品目录的绝对路径"""
-        return os.path.abspath(os.path.join(self.products_dir, name))
+    # ---------- Name/Path safety ----------
+    def normalize_product_name(self, name: str) -> str:
+        return (name or "").strip()
 
+    def is_valid_product_name(self, name: str) -> bool:
+        return bool(self.PRODUCT_NAME_RE.fullmatch(self.normalize_product_name(name)))
+
+    def _assert_valid_product_name(self, name: str):
+        if not self.is_valid_product_name(name):
+            raise ValueError(
+                "Invalid product name. Use 1-64 chars from: letters, numbers, _, -, Chinese."
+            )
+
+    def get_product_path(self, name: str) -> str:
+        """Get safe absolute product directory path."""
+        normalized = self.normalize_product_name(name)
+        self._assert_valid_product_name(normalized)
+
+        product_path = os.path.realpath(os.path.join(self.products_dir, normalized))
+        if os.path.commonpath([self.products_dir, product_path]) != self.products_dir:
+            raise ValueError("Unsafe product path.")
+        return product_path
+
+    # ---------- IO helpers ----------
+    def _safe_load_npy(self, path: str):
+        """Load numeric .npy safely (pickle disabled)."""
+        return np.load(path, allow_pickle=False)
+
+    def _normalize_poly_segments(self, path_polys) -> List[List[List[float]]]:
+        segments: List[List[List[float]]] = []
+        if path_polys is None:
+            return segments
+
+        for seg in path_polys:
+            if seg is None:
+                continue
+            arr = np.asarray(seg, dtype=np.float32)
+            if arr.size == 0:
+                continue
+            if arr.ndim == 1:
+                if arr.shape[0] != 2:
+                    continue
+                arr = arr.reshape(1, 2)
+            elif arr.ndim != 2 or arr.shape[1] != 2:
+                continue
+            segments.append(arr.tolist())
+        return segments
+
+    def _load_poly_segments(self, product_dir: str):
+        """
+        Safe poly path loader:
+        1) Prefer JSON path format.
+        2) Fallback to legacy .npy ONLY when it is numeric (pickle disabled).
+        """
+        json_path = os.path.join(product_dir, "path_poly.json")
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            raw_segments = data.get("segments", [])
+            return [np.asarray(seg, dtype=np.float32) for seg in raw_segments if seg]
+
+        legacy_path = os.path.join(product_dir, "path_poly.npy")
+        if not os.path.exists(legacy_path):
+            return None
+
+        arr = self._safe_load_npy(legacy_path)
+        if isinstance(arr, np.ndarray) and arr.ndim == 2 and arr.shape[1] == 2:
+            return [arr.astype(np.float32)]
+
+        raise ValueError(
+            "Unsafe or unsupported legacy path_poly.npy format. "
+            "Please re-save product to migrate to path_poly.json."
+        )
+
+    # ---------- Public APIs ----------
     def list_products(self):
-        """Returns a list of available product names."""
+        """Returns a list of available (valid) product names."""
         if not os.path.exists(self.products_dir):
             return []
-        return [d for d in os.listdir(self.products_dir) 
-                if os.path.isdir(os.path.join(self.products_dir, d))]
+
+        names = []
+        for d in os.listdir(self.products_dir):
+            full = os.path.join(self.products_dir, d)
+            if os.path.isdir(full) and self.is_valid_product_name(d):
+                names.append(d)
+        return sorted(names)
 
     def save_product(self, name, config_data, path_points=None, path_polys=None, source_model_path=None):
         """
@@ -47,24 +127,26 @@ class ProductManager:
         :param name: Product Name (Folder Name)
         :param config_data: Dict of parameters
         :param path_points: List or Array of DOT points (path.npy)
-        :param path_polys: List or Array of LINE segments (path_poly.npy)
+        :param path_polys: List/Array of LINE segments (saved as path_poly.json)
         """
-        product_dir = self.get_product_path(name)
-        if not os.path.exists(product_dir):
-            os.makedirs(product_dir)
+        try:
+            product_dir = self.get_product_path(name)
+        except ValueError as e:
+            return False, str(e)
 
-        # 2. Load current valve parameters and add to config
-        valve_params_file = Path("config") / "valve_dispense_params.json"
+        os.makedirs(product_dir, exist_ok=True)
+
+        # Load current valve parameters and add to config
+        valve_params_file = Path(self.config_dir) / "valve_dispense_params.json"
         if valve_params_file.exists():
             try:
-                with open(valve_params_file, 'r', encoding='utf-8') as f:
+                with open(valve_params_file, "r", encoding="utf-8") as f:
                     valve_params = json.load(f)
-                # Add valve parameters to config_data
                 params = valve_params.get("parameters", {})
                 config_data["valve_prefeed_time"] = params.get("prefeed_time", 0.10)
                 config_data["valve_a_dispense_time"] = params.get("valve_a_dispense_time", 0.50)
                 config_data["valve_b_dispense_time"] = params.get("valve_b_dispense_time", 0.50)
-                config_data["line_speed_xy"] = params.get("line_speed_xy", 800)  # [NEW] 画线速度
+                config_data["line_speed_xy"] = params.get("line_speed_xy", 800)
             except Exception as e:
                 print(f"[Warn] Could not load valve params, using defaults: {e}")
                 config_data["valve_prefeed_time"] = 0.10
@@ -72,60 +154,65 @@ class ProductManager:
                 config_data["valve_b_dispense_time"] = 0.50
                 config_data["line_speed_xy"] = 800
         else:
-            # Use default values
             config_data["valve_prefeed_time"] = 0.10
             config_data["valve_a_dispense_time"] = 0.50
             config_data["valve_b_dispense_time"] = 0.50
             config_data["line_speed_xy"] = 800
-        
-        # 3. Save Config JSON
+
+        # Save Config JSON
         config_path = os.path.join(product_dir, "config.json")
         try:
-            with open(config_path, 'w', encoding='utf-8') as f:
+            with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(config_data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             return False, f"Failed to save config: {e}"
 
-        # 3. Save Path (Dots -> path.npy)
+        # Save dots path
         if path_points is not None:
             npy_path = os.path.join(product_dir, "path.npy")
             try:
-                np.save(npy_path, np.array(path_points))
+                np.save(npy_path, np.asarray(path_points, dtype=np.float32))
             except Exception as e:
                 return False, f"Failed to save path(dots): {e}"
-                
-        # 4. Save Path (Polys -> path_poly.npy)
+
+        # Save polylines as JSON (safe, no pickle required)
         if path_polys is not None:
-            poly_path = os.path.join(product_dir, "path_poly.npy")
+            poly_path = os.path.join(product_dir, "path_poly.json")
             try:
-                np.save(poly_path, np.array(path_polys, dtype=object))
+                payload = {"version": 2, "segments": self._normalize_poly_segments(path_polys)}
+                with open(poly_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
             except Exception as e:
                 return False, f"Failed to save path(poly): {e}"
 
-        return True, f"Product '{name}' saved successfully."
+        return True, f"Product '{self.normalize_product_name(name)}' saved successfully."
 
     def load_product(self, name):
         """
         Load product data.
         :return: (config_dict, dots_data, polys_data, msg)
         """
-        product_dir = self.get_product_path(name)
+        try:
+            product_dir = self.get_product_path(name)
+        except ValueError as e:
+            return None, None, None, str(e)
+
         if not os.path.exists(product_dir):
             return None, None, None, f"Product '{name}' not found."
 
-        # 1. Load Config
+        # Load config
         config_path = os.path.join(product_dir, "config.json")
         config_data = {}
         if os.path.exists(config_path):
             try:
-                with open(config_path, 'r', encoding='utf-8') as f:
+                with open(config_path, "r", encoding="utf-8") as f:
                     config_data = json.load(f)
             except Exception as e:
                 return None, None, None, f"Error loading config.json: {e}"
         else:
             return None, None, None, "config.json missing."
-        
-        # 1.5 Apply valve parameters from config to global valve params file
+
+        # Apply valve params to global config
         valve_params = {
             "version": "1.0",
             "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -133,91 +220,71 @@ class ProductManager:
                 "prefeed_time": config_data.get("valve_prefeed_time", 0.10),
                 "valve_a_dispense_time": config_data.get("valve_a_dispense_time", 0.50),
                 "valve_b_dispense_time": config_data.get("valve_b_dispense_time", 0.50),
-                "line_speed_xy": config_data.get("line_speed_xy", 800)  # [NEW] 画线速度
+                "line_speed_xy": config_data.get("line_speed_xy", 800),
             },
-            "notes": f"Loaded from product '{name}'"
+            "notes": f"Loaded from product '{name}'",
         }
-        
-        print(f"[ProductManager] 加载产品 '{name}' 的点胶参数:")
-        print(f"[ProductManager]   供料提前: {valve_params['parameters']['prefeed_time']}")
-        print(f"[ProductManager]   阀A时间: {valve_params['parameters']['valve_a_dispense_time']}")
-        print(f"[ProductManager]   阀B时间: {valve_params['parameters']['valve_b_dispense_time']}")
-        print(f"[ProductManager]   画线速度: {valve_params['parameters']['line_speed_xy']} mm/min")
-        
-        valve_params_dir = Path("config")
+
+        valve_params_dir = Path(self.config_dir)
         valve_params_dir.mkdir(exist_ok=True)
         valve_params_file = valve_params_dir / "valve_dispense_params.json"
-        
-        print(f"[ProductManager] 写入参数文件: {valve_params_file.absolute()}")
-        
         try:
-            with open(valve_params_file, 'w', encoding='utf-8') as f:
+            with open(valve_params_file, "w", encoding="utf-8") as f:
                 json.dump(valve_params, f, indent=2, ensure_ascii=False)
-            print(f"[ProductManager] ✅ 已应用产品'{name}'的阀门参数到全局配置")
         except Exception as e:
             print(f"[Warn] Could not save valve params: {e}")
 
-        # 2. Load Path (Dots)
-        npy_path = os.path.join(product_dir, "path.npy")
-        dots_data = None
-        if os.path.exists(npy_path):
-            try:
-                dots_data = np.load(npy_path)
-            except Exception as e:
-                print(f"[Warn] Failed to load path.npy: {e}")
-                
-        # 3. Load Path (Polys)
-        poly_path = os.path.join(product_dir, "path_poly.npy")
-        poly_data = None
-        if os.path.exists(poly_path):
-            try:
-                poly_data = np.load(poly_path, allow_pickle=True)
-            except Exception as e:
-                print(f"[Warn] Failed to load path_poly.npy: {e}")
-
+        # Load paths
+        dots_data, poly_data = self.load_product_paths(name)
         return config_data, dots_data, poly_data, f"Loaded '{name}'."
-    
+
     def load_product_config(self, name):
         """
-        Load only config data from product
+        Load only config data from product.
         :return: config_dict or None
         """
-        product_dir = self.get_product_path(name)
+        try:
+            product_dir = self.get_product_path(name)
+        except ValueError as e:
+            print(f"[Warn] Invalid product name: {e}")
+            return None
+
         config_path = os.path.join(product_dir, "config.json")
-        
         if not os.path.exists(config_path):
             return None
-        
+
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             print(f"[Warn] Failed to load config: {e}")
             return None
-    
+
     def load_product_paths(self, name):
         """
-        Load only paths from product
+        Load only paths from product.
         :return: (dots_data, poly_data)
         """
-        product_dir = self.get_product_path(name)
-        
-        # Load dots
+        try:
+            product_dir = self.get_product_path(name)
+        except ValueError as e:
+            print(f"[Warn] Invalid product name: {e}")
+            return None, None
+
+        # Dots
         dots_path = os.path.join(product_dir, "path.npy")
         dots_data = None
         if os.path.exists(dots_path):
             try:
-                dots_data = np.load(dots_path)
+                dots_data = self._safe_load_npy(dots_path)
             except Exception as e:
                 print(f"[Warn] Failed to load path.npy: {e}")
-        
-        # Load polys
-        poly_path = os.path.join(product_dir, "path_poly.npy")
+
+        # Polylines
         poly_data = None
-        if os.path.exists(poly_path):
-            try:
-                poly_data = np.load(poly_path, allow_pickle=True)
-            except Exception as e:
-                print(f"[Warn] Failed to load path_poly.npy: {e}")
-        
+        try:
+            poly_data = self._load_poly_segments(product_dir)
+        except Exception as e:
+            print(f"[Warn] Failed to load poly path: {e}")
+
         return dots_data, poly_data

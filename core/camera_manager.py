@@ -11,11 +11,12 @@ from PyQt5.QtCore import QThread, pyqtSignal
 # 目前，我们假设 MvImport 可直接导入。
 try:
     from MvImport.MvCameraControl_class import *
-except ImportError:
+    MV_IMPORT_AVAILABLE = True
+except Exception:
     # 如果标准导入失败，尝试附加相对于此文件的路径
     # 但通常依赖高效的环境更好。
     # 让我们尝试匹配 main_camera_ui.py 所做的，但更干净。
-    pass
+    MV_IMPORT_AVAILABLE = False
 
 class CameraWorker(QThread):
     frame_received = pyqtSignal(np.ndarray)
@@ -68,6 +69,8 @@ class CameraManager:
         self.is_open = False
 
     def open_camera(self) -> bool:
+        if not MV_IMPORT_AVAILABLE:
+            return False
         if self.cam:
             return True
 
@@ -101,7 +104,7 @@ class CameraManager:
         self.cam.MV_CC_SetEnumValue("PixelFormat", PixelType_Gvsp_Mono8)
         try:
             self.cam.MV_CC_SetBoolValue("GammaEnable", True)
-        except:
+        except Exception:
             pass
             
         self._read_ranges()
@@ -152,7 +155,7 @@ class CameraManager:
         if not self.cam: return
         try:
             self.cam.MV_CC_SetFloatValue("Gamma", float(val))
-        except:
+        except Exception:
             pass
 
     def get_param_ranges(self):
@@ -164,19 +167,19 @@ class CameraManager:
             v = MVCC_FLOATVALUE()
             self.cam.MV_CC_GetFloatValue("ExposureTime", v)
             self.exp_range = (v.fMin, v.fMax)
-        except: pass
+        except Exception: pass
         
         try:
             v = MVCC_FLOATVALUE()
             self.cam.MV_CC_GetFloatValue("Gain", v)
             self.gain_range = (v.fMin, v.fMax)
-        except: pass
+        except Exception: pass
 
         try:
             v = MVCC_FLOATVALUE()
             self.cam.MV_CC_GetFloatValue("Gamma", v)
             self.gamma_range = (v.fMin, v.fMax)
-        except: pass
+        except Exception: pass
     
     def get_params(self):
         # 从相机读取当前参数
@@ -210,7 +213,7 @@ class CameraManager:
             h_val = MVCC_INTVALUE()
             self.cam.MV_CC_GetIntValue("Height", h_val)
             info['height'] = h_val.nCurValue
-        except: pass
+        except Exception: pass
         
         try:
             fps_val = MVCC_FLOATVALUE()
@@ -218,7 +221,7 @@ class CameraManager:
             if ret != 0:
                 self.cam.MV_CC_GetFloatValue("ResultingFrameRate", fps_val)
             info['fps'] = fps_val.fCurValue
-        except: pass
+        except Exception: pass
         
         try:
             enum_val = MVCC_ENUMVALUE()
@@ -228,6 +231,6 @@ class CameraManager:
                     info['pixel_format_str'] = "Mono8"
                 else:
                     info['pixel_format_str'] = f"0x{enum_val.nCurValue:X}"
-        except: pass
+        except Exception: pass
         
         return info

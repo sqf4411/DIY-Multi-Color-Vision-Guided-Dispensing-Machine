@@ -59,7 +59,7 @@ def diagnose(product_name="opt1"):
     npy_path_poly = os.path.join(product_dir, "path_poly.npy")
     if os.path.exists(npy_path_poly):
         try:
-            polys = np.load(npy_path_poly, allow_pickle=True)
+            polys = np.load(npy_path_poly, allow_pickle=False)
             print(f"\n[NPY Polys] Count: {len(polys)}")
             if len(polys) > 0:
                 print(f"  First poly shape: {len(polys[0])}")

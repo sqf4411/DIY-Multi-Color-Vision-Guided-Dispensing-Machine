@@ -233,22 +233,31 @@ class AutoLaserBaselineWorker(QThread):
         self.safe_z = safe_z
         self.read_func = read_func # Function to read laser value
 
+    def _log(self, msg):
+        logger = getattr(self.machine, "logger", None)
+        if callable(logger):
+            logger(msg)
+            return
+        fallback = getattr(self.machine, "_log", None)
+        if callable(fallback):
+            fallback(msg)
+
     def run(self):
         try:
             # 1. Move Z to Safe Height (100mm)
-            self.machine.logger(f"🚀 [激光基准] 抬升 Z 到 {self.safe_z}...")
+            self._log(f"🚀 [激光基准] 抬升 Z 到 {self.safe_z}...")
             self.machine.move_z_absolute(self.safe_z, 600)
             self.machine.wait_until_idle()
             time.sleep(0.5)
 
             # 2. Move XY to Target (Tool Setter - Laser Offset)
-            self.machine.logger(f"🚀 [激光基准] 移动激光到对刀仪 ({self.target_x:.2f}, {self.target_y:.2f})...")
+            self._log(f"🚀 [激光基准] 移动激光到对刀仪 ({self.target_x:.2f}, {self.target_y:.2f})...")
             self.machine.move_xy_absolute(self.target_x, self.target_y, 3000)
             self.machine.wait_until_idle()
             time.sleep(1.0) # Wait for stabilization
 
             # 3. Read Laser Value
-            self.machine.logger(f"🔍 [激光基准] 读取传感器数据...")
+            self._log(f"🔍 [激光基准] 读取传感器数据...")
             # Take average of 10 readings
             samples = []
             for _ in range(10):
@@ -282,6 +291,15 @@ class AutoToolSetWorker(QThread):
         self.z_base = z_base  # 上次对刀的精确Z基准
         self.safety_margin = safety_margin  # 安全余量
 
+    def _log(self, msg):
+        logger = getattr(self.machine, "logger", None)
+        if callable(logger):
+            logger(msg)
+            return
+        fallback = getattr(self.machine, "_log", None)
+        if callable(fallback):
+            fallback(msg)
+
     def run(self):
         try:
             # 1. 抬升到安全高度
@@ -295,7 +313,7 @@ class AutoToolSetWorker(QThread):
 
             # 3. 快速下降到对刀仪上方 (对刀仪粗略Z + 7mm余量)
             start_z = self.rough_z + 7.0
-            self.machine.logger(f"🚀 快速下降到 Z={start_z:.1f} (粗略Z={self.rough_z:.1f})...")
+            self._log(f"🚀 快速下降到 Z={start_z:.1f} (粗略Z={self.rough_z:.1f})...")
             self.machine.move_z_absolute(start_z, 600)
             self.machine.wait_until_idle()
             time.sleep(0.5)
@@ -308,10 +326,10 @@ class AutoToolSetWorker(QThread):
             # ⚠️ 安全检查：确保不会探测过深
             safe_limit = self.rough_z - self.safety_margin
             if end_z < safe_limit:
-                self.machine.logger(f"⚠️ 安全限制：探测下限调整为 {safe_limit:.1f}mm (粗略Z-{self.safety_margin:.1f}mm)")
+                self._log(f"⚠️ 安全限制：探测下限调整为 {safe_limit:.1f}mm (粗略Z-{self.safety_margin:.1f}mm)")
                 end_z = safe_limit
             
-            self.machine.logger(f"🔍 第一阶段粗探 (Z={start_z:.1f}->{end_z:.1f}, step=0.5)...")
+            self._log(f"🔍 第一阶段粗探 (Z={start_z:.1f}->{end_z:.1f}, step=0.5)...")
             trigger_z = None
             current_z = start_z
             found = False
@@ -325,17 +343,17 @@ class AutoToolSetWorker(QThread):
                 
                 # 再检测当前位置的探针状态
                 status = self.machine.query_probe_status()
-                self.machine.logger(f"  Z={current_z:.2f} | 探针={status}")  # 调试输出
+                self._log(f"  Z={current_z:.2f} | 探针={status}")  # 调试输出
                 
                 if status == 'triggered':
                     found = True
                     trigger_z = current_z
-                    self.machine.logger(f"✅ 粗探触发于 Z={current_z:.2f}")
+                    self._log(f"✅ 粗探触发于 Z={current_z:.2f}")
                     break
 
             if not found:
-                self.machine.logger(f"❌ 粗探失败：已达 Z={end_z:.1f}mm 仍未触发！")
-                self.machine.logger(f"⚠️ 可能原因：XY位置偏移，未对准对刀仪")
+                self._log(f"❌ 粗探失败：已达 Z={end_z:.1f}mm 仍未触发！")
+                self._log(f"⚠️ 可能原因：XY位置偏移，未对准对刀仪")
                 # 失败后立即抬起 Z，防止误操作
                 self.machine.move_z_absolute(self.safe_z, 600)
                 self.finished_signal.emit(False, 0.0, "粗探未检测到信号 (已归位)\n⚠️ 请检查XY位置是否对准对刀仪")
@@ -350,7 +368,7 @@ class AutoToolSetWorker(QThread):
             # 恢复双次探测取平均，保证精度
             results = []
             for i in range(2):
-                self.machine.logger(f"🔍 精探第 {i+1} 次 (step=0.1)...")
+                self._log(f"🔍 精探第 {i+1} 次 (step=0.1)...")
                 
                 # 既然是手动精探，我们需要从当前位置慢慢往下挪
                 # 当前位置应该是 粗探点 + 3mm (第一次) 或 上次精探点 + 2mm (第二次)
@@ -371,7 +389,7 @@ class AutoToolSetWorker(QThread):
                     if status == 'triggered':
                         hit = True
                         results.append(curr_z)
-                        self.machine.logger(f"✅ 第 {i+1} 次结果: {curr_z:.3f}")
+                        self._log(f"✅ 第 {i+1} 次结果: {curr_z:.3f}")
                         break
                 
                 if not hit:
@@ -386,7 +404,7 @@ class AutoToolSetWorker(QThread):
 
             # 7. 计算平均值
             avg_z = sum(results) / len(results)
-            self.machine.logger(f"📊 双次精探平均值: {avg_z:.3f}")
+            self._log(f"📊 双次精探平均值: {avg_z:.3f}")
 
             # 8. 抬起并完成
             self.machine.move_z_absolute(self.safe_z, 600)
@@ -911,10 +929,11 @@ class MainWindow(QWidget):
         """)
 
         self.cam = None
-        self.config_dir = "config"
+        self.project_root = os.path.dirname(os.path.abspath(__file__))
+        self.config_dir = os.path.join(self.project_root, "config")
         if not os.path.exists(self.config_dir):
             os.makedirs(self.config_dir)
-        self.config_path = "config/app_settings.json"  # ✅ Fixed: Use separate file from camera params
+        self.config_path = os.path.join(self.config_dir, "app_settings.json")  # ✅ Fixed: Use separate file from camera params
         self.thread = None
         self.last_frame = None
         self.freeze_display = False  # 是否冻结画面
@@ -1126,8 +1145,82 @@ class MainWindow(QWidget):
         """
         if args:
             msg = f"{msg} " + " ".join(str(a) for a in args)
-        print(f"[LOG] {msg}") # Enable console logging
+        text = f"[LOG] {msg}"
+        try:
+            print(text)  # Enable console logging
+        except UnicodeEncodeError:
+            # Keep logging from crashing on non-UTF8 consoles.
+            encoding = (getattr(sys.stdout, "encoding", None) or "utf-8")
+            safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+            print(safe_text)
         self.log_signal.emit(str(msg))
+
+    def _safe_load_npy(self, path):
+        """Load numeric npy data with pickle disabled."""
+        return np.load(path, allow_pickle=False)
+
+    def _load_dots_file(self, dots_path):
+        if not os.path.exists(dots_path):
+            return np.empty((0, 2), dtype=np.float32)
+
+        dots = self._safe_load_npy(dots_path)
+        dots = np.asarray(dots, dtype=np.float32)
+        if dots.size == 0:
+            return np.empty((0, 2), dtype=np.float32)
+        if dots.ndim == 1 and dots.shape[0] == 2:
+            return dots.reshape(1, 2)
+        if dots.ndim == 2 and dots.shape[1] == 2:
+            return dots
+        raise ValueError(f"Unsupported dots format: {dots_path}")
+
+    def _load_poly_segments_file(self, json_path, npy_path):
+        """
+        Prefer safe JSON format. Legacy .npy is accepted only when it is
+        plain numeric (pickle disabled).
+        """
+        if json_path and os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            segments = []
+            for seg in data.get("segments", []):
+                arr = np.asarray(seg, dtype=np.float32)
+                if arr.size == 0:
+                    continue
+                if arr.ndim == 1:
+                    if arr.shape[0] != 2:
+                        continue
+                    arr = arr.reshape(1, 2)
+                if arr.ndim == 2 and arr.shape[1] == 2:
+                    segments.append(arr)
+            return segments
+
+        if npy_path and os.path.exists(npy_path):
+            arr = self._safe_load_npy(npy_path)
+            arr = np.asarray(arr, dtype=np.float32)
+            if arr.ndim == 2 and arr.shape[1] == 2:
+                return [arr]
+            raise ValueError(
+                f"Unsupported legacy poly format: {npy_path}. "
+                "Please re-save path data to JSON format."
+            )
+
+        return []
+
+    def _save_poly_segments_file(self, json_path, segments):
+        payload = {"version": 2, "segments": []}
+        for seg in segments or []:
+            arr = np.asarray(seg, dtype=np.float32)
+            if arr.size == 0:
+                continue
+            if arr.ndim == 1:
+                if arr.shape[0] != 2:
+                    continue
+                arr = arr.reshape(1, 2)
+            if arr.ndim == 2 and arr.shape[1] == 2:
+                payload["segments"].append(arr.tolist())
+
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
 
     # ================== Tool Set Group (New) ==================
     def init_tool_set_group(self):
@@ -3301,9 +3394,10 @@ class MainWindow(QWidget):
     def load_golden_templates(self):
         try:
             # ✅ OpenCV Mode: Load slot templates
-            if os.path.exists("config/slot_templates.npy"):
-                self.slot_templates = np.load("config/slot_templates.npy")
-                self.log(f"✅ 黄金模板 config/slot_templates.npy 加载成功，形状：{self.slot_templates.shape}")
+            slot_templates_path = os.path.join(self.config_dir, "slot_templates.npy")
+            if os.path.exists(slot_templates_path):
+                self.slot_templates = self._safe_load_npy(slot_templates_path)
+                self.log(f"✅ 黄金模板 {slot_templates_path} 加载成功，形状：{self.slot_templates.shape}")
             else:
                 self.log("⚠ 未找到 config/slot_templates.npy，暂时无法做黄金对位")
                 self.slot_templates = None
@@ -3314,8 +3408,10 @@ class MainWindow(QWidget):
             
             if not use_halcon:
                 # OpenCV Mode: Load global paths
-                if os.path.exists("config/disp_poly_cell0.npy"):
-                    self.golden_path_cache = np.load("config/disp_poly_cell0.npy", allow_pickle=True)
+                global_poly_json = os.path.join(self.config_dir, "disp_poly_cell0.json")
+                global_poly_npy = os.path.join(self.config_dir, "disp_poly_cell0.npy")
+                if os.path.exists(global_poly_json) or os.path.exists(global_poly_npy):
+                    self.golden_path_cache = self._load_poly_segments_file(global_poly_json, global_poly_npy)
                     self.log(f"✅ 加载点胶路径缓存: {len(self.golden_path_cache)} 个路径段")
                 else:
                     self.golden_path_cache = None
@@ -4061,7 +4157,11 @@ class MainWindow(QWidget):
             return
             
         # 3. 获取产品目录
-        product_dir = self.product_manager.get_product_path(current_recipe)
+        try:
+            product_dir = self.product_manager.get_product_path(current_recipe)
+        except ValueError as e:
+            QMessageBox.critical(self, "错误", f"产品名非法: {e}")
+            return
         if not product_dir or not os.path.exists(product_dir):
             QMessageBox.critical(self, "错误", f"产品目录不存在: {product_dir}")
             return
@@ -4175,7 +4275,11 @@ class MainWindow(QWidget):
         if use_halcon:
             current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
             if "未加载" not in current_recipe:
-                save_directory = self.product_manager.get_product_path(current_recipe)
+                try:
+                    save_directory = self.product_manager.get_product_path(current_recipe)
+                except ValueError as e:
+                    self.log(f"❌ 配方路径非法: {e}")
+                    return
                 # ⭐ 关键修复：使用配方的training图片（reference.png）
                 # 这样路径编辑器和Halcon使用完全相同的图片，坐标系统一致
                 ref_img_path = os.path.join(save_directory, "reference.png")
@@ -4214,7 +4318,7 @@ class MainWindow(QWidget):
                 # 加载dots
                 dots_path = os.path.join(load_dir, f"disp_dots_cell{cell_idx}.npy")
                 if os.path.exists(dots_path):
-                    self.dots = np.load(dots_path)
+                    self.dots = self._load_dots_file(dots_path)
                     self.log(f"✅ 已重新加载点路径: {len(self.dots)} points")
                 else:
                     self.dots = []
@@ -4222,8 +4326,9 @@ class MainWindow(QWidget):
                 
                 # 加载polys
                 polys_path = os.path.join(load_dir, f"disp_poly_cell{cell_idx}.npy")
-                if os.path.exists(polys_path):
-                    self.polys = np.load(polys_path, allow_pickle=True)
+                polys_json_path = os.path.join(load_dir, f"disp_poly_cell{cell_idx}.json")
+                if os.path.exists(polys_path) or os.path.exists(polys_json_path):
+                    self.polys = self._load_poly_segments_file(polys_json_path, polys_path)
                     self.log(f"✅ 已重新加载线路径: {len(self.polys)} lines")
                 else:
                     self.polys = []
@@ -4551,8 +4656,9 @@ class MainWindow(QWidget):
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             poly_path_file = os.path.join(base_dir, "config", "disp_poly_cell0.npy")
-            if os.path.exists(poly_path_file):
-                self.polys = np.load(poly_path_file, allow_pickle=True)
+            poly_json_file = os.path.join(base_dir, "config", "disp_poly_cell0.json")
+            if os.path.exists(poly_path_file) or os.path.exists(poly_json_file):
+                self.polys = self._load_poly_segments_file(poly_json_file, poly_path_file)
                 self.log(f"✅ Loaded polys for save: {len(self.polys)} lines")
         except Exception as e:
             self.log(f"⚠ Failed to reload polys: {e}")
@@ -4831,7 +4937,10 @@ class MainWindow(QWidget):
             use_halcon = config.get('use_halcon', False)
             if not use_halcon:
                 # OpenCV mode: save to global
-                np.save(os.path.join(self.config_dir, "disp_poly_cell0.npy"), self.polys)
+                self._save_poly_segments_file(
+                    os.path.join(self.config_dir, "disp_poly_cell0.json"),
+                    self.polys,
+                )
             self.log(f"✅ 线路径已加载 ({len(self.polys)} lines)")
         
         self.lbl_recipe_name.setText(name)
@@ -5964,7 +6073,7 @@ class MainWindow(QWidget):
                 self.btn_load_halcon.setEnabled(False)
 
     def on_load_halcon_script(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Load Halcon Script", "config", "Halcon Scripts (*.hdev *.shm)")
+        path, _ = QFileDialog.getOpenFileName(self, "Load Halcon Script", self.config_dir, "Halcon Scripts (*.hdev *.shm)")
         if path:
             if self.halcon_manager.load_script(path):
                 self.log(f"✅ Halcon script loaded: {os.path.basename(path)}")
@@ -6050,8 +6159,11 @@ class MainWindow(QWidget):
                 path_dir = config_dir
                 current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
                 if current_recipe and "未加载" not in current_recipe:
-                    path_dir = self.product_manager.get_product_path(current_recipe)
-                    print(f"[Halcon] Loading paths from product (disk): {path_dir}")
+                    try:
+                        path_dir = self.product_manager.get_product_path(current_recipe)
+                        print(f"[Halcon] Loading paths from product (disk): {path_dir}")
+                    except ValueError as e:
+                        print(f"[Halcon] Invalid product path, fallback to config: {e}")
                 else:
                     print(f"[Halcon] Loading paths from global config: {path_dir}")
                 
@@ -6074,27 +6186,22 @@ class MainWindow(QWidget):
                     # Fallback: Load legacy .npy files (NO COLOR)
                     print(f"[Halcon] No multicolor_path.json found, loading legacy .npy files")
                     poly_path = os.path.join(path_dir, "disp_poly_cell0.npy")
-                    if os.path.exists(poly_path):
-                        raw = np.load(poly_path, allow_pickle=True)
-                        if isinstance(raw, np.ndarray):
-                            if raw.dtype == object: 
-                                segments.extend([s.astype(np.float32) for s in raw if s is not None])
-                            elif raw.ndim == 2:
-                                segments.append(raw.astype(np.float32))
-                        elif isinstance(raw, list):
-                            segments.extend([np.array(s, dtype=np.float32) for s in raw])
-                    else:
-                        print(f"[Halcon] Poly file not found: {poly_path}")
+                    poly_json = os.path.join(path_dir, "disp_poly_cell0.json")
+                    try:
+                        loaded_polys = self._load_poly_segments_file(poly_json, poly_path)
+                        segments.extend([np.array(seg, dtype=np.float32) for seg in loaded_polys])
+                    except Exception as e:
+                        print(f"[Halcon] Failed to load poly path safely: {e}")
                 
                 # Dots
                 dots_path = os.path.join(path_dir, "disp_dots_cell0.npy")
                 if os.path.exists(dots_path):
-                    dots = np.load(dots_path, allow_pickle=True)
+                    dots = self._load_dots_file(dots_path)
                     if dots.size > 0:
                         # Treat each dot as a 1-point segment (1, 2)
-                         if dots.ndim == 2:
-                             for d in dots:
-                                 segments.append(d.reshape(1, 2).astype(np.float32))
+                        if dots.ndim == 2:
+                            for d in dots:
+                                segments.append(d.reshape(1, 2).astype(np.float32))
 
             if not segments:
                 print("[Halcon] ERR: No paths loaded. Stopping template computation.")
@@ -6110,13 +6217,16 @@ class MainWindow(QWidget):
             # This is CRITICAL for getting the correct Minv aligned with the Model
             current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
             if current_recipe and "未加载" not in current_recipe:
-                recipe_img_path = os.path.join(self.product_manager.get_product_path(current_recipe), "reference.png")
-                if os.path.exists(recipe_img_path):
-                    print(f"[Halcon] Using Product Image: {recipe_img_path}")
-                    img_raw = cv2.imread(recipe_img_path)
-                    if img_raw is not None:
-                        gray_gold = cv2.cvtColor(img_raw, cv2.COLOR_BGR2GRAY)
-                        used_path = recipe_img_path
+                try:
+                    recipe_img_path = os.path.join(self.product_manager.get_product_path(current_recipe), "reference.png")
+                    if os.path.exists(recipe_img_path):
+                        print(f"[Halcon] Using Product Image: {recipe_img_path}")
+                        img_raw = cv2.imread(recipe_img_path)
+                        if img_raw is not None:
+                            gray_gold = cv2.cvtColor(img_raw, cv2.COLOR_BGR2GRAY)
+                            used_path = recipe_img_path
+                except ValueError as e:
+                    print(f"[Halcon] Invalid product path for image: {e}")
 
             # 1. Try latest capture first (User Request)
             # latest_capture_path is likely absolute if from QFileDialog, but let's be safe
@@ -6280,6 +6390,14 @@ class MainWindow(QWidget):
         if not ok or not name.strip():
             return
         name = name.strip()
+
+        if not self.product_manager.is_valid_product_name(name):
+            QMessageBox.warning(
+                self,
+                "名称不合法",
+                "产品名称仅支持 1-64 位：中文、英文、数字、下划线(_)和短横线(-)。",
+            )
+            return
         
         # 3. 检查是否已存在
         if name in self.product_manager.list_products():
@@ -6448,17 +6566,21 @@ class MainWindow(QWidget):
             self.log(f"📂 正在加载产品: {name}")
             
             success, msg = self.halcon_product_manager.load_product(name)
+
+            if not success:
+                QMessageBox.critical(self, "加载失败", msg)
+                self.log(f"❌ {msg}")
+                return
+
+            self.current_product = name
+            self.lbl_recipe_name.setText(name)
+            self.lbl_recipe_name.setStyleSheet("color: #10B981; font-weight: bold;")
             
-            if success:
-                self.current_product = name
-                self.lbl_recipe_name.setText(name)
-                self.lbl_recipe_name.setStyleSheet("color: #10B981; font-weight: bold;")
-                
-                # 同步参数到UI
-                self.model_ref_row = self.halcon_product_manager.model_ref_row
-                self.model_ref_col = self.halcon_product_manager.model_ref_col
-                self.vision_offset_x = self.halcon_product_manager.vision_offset_x
-                self.vision_offset_y = self.halcon_product_manager.vision_offset_y
+            # 同步参数到UI
+            self.model_ref_row = self.halcon_product_manager.model_ref_row
+            self.model_ref_col = self.halcon_product_manager.model_ref_col
+            self.vision_offset_x = self.halcon_product_manager.vision_offset_x
+            self.vision_offset_y = self.halcon_product_manager.vision_offset_y
             
             # 更新UI显示
             if hasattr(self, 'spn_vision_offset_x'):
@@ -6573,9 +6695,6 @@ class MainWindow(QWidget):
                 if 'work_z' in config:
                     self.work_z = config['work_z']
                 
-                if 'work_z' in config:
-                    self.work_z = config['work_z']
-                
                 # [NEW] Load Laser Params (All Global now)
                 # No product specific load needed for Ref or K.
                 # Only Depth Map (loaded elsewhere)
@@ -6619,9 +6738,6 @@ class MainWindow(QWidget):
             self.update_button_states()
             self.log(f"✅ 产品加载成功")
             self.log(f"📊 路径: {len(self.dots)} 点, {len(self.polys)} 线")
-        else:
-            QMessageBox.critical(self, "加载失败", msg)
-            self.log(f"❌ {msg}")
     
     def on_save_recipe(self):
         """保存产品（保持方法名兼容性）"""
@@ -6843,7 +6959,16 @@ class MainWindow(QWidget):
     #     self.mobile_monitor.activateWindow()
 
 if __name__ == "__main__":
-    print("🚀 App Starting...")
+    # Keep console output resilient on non-UTF8 terminals (e.g. GBK on Windows).
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+    print("App Starting...")
     
     # 1. 告诉 Windows 这是一个独立的应用程序，以便在任务栏显示图标
     if sys.platform == 'win32':
@@ -6861,10 +6986,11 @@ if __name__ == "__main__":
         w = MainWindow()
         w.resize(1600, 950)
         w.show()
-        print("✅ App Window Shown. Entering Event Loop...")
+        print("App Window Shown. Entering Event Loop...")
         sys.exit(app.exec_())
     except Exception as e:
-        print(f"❌ Critical Error: {e}")
+        print(f"Critical Error: {e}")
         import traceback
         traceback.print_exc()
-        input("Press Enter to exit...")
+        if sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+            input("Press Enter to exit...")

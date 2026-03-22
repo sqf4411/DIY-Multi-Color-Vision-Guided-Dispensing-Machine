@@ -1,6 +1,7 @@
 # path_teach.py
 import cv2
 import numpy as np
+import json
 
 WINDOW_NAME = "Edit Path" # Avoid Chinese encoding issues on Windows for now, or use English
 # If user really insists on Chinese and it breaks, we might need a specific fix like .encode('gbk').decode('latin1') trick or similar.
@@ -155,10 +156,12 @@ def run_path_teach(cell_index: int = 0,
     
     # 1. 本地坐标文件 (用于编辑，最准确)
     local_poly_file = os.path.join(save_dir, f"cell_{cell_index}_polylines.npy")
+    local_poly_json = os.path.join(save_dir, f"cell_{cell_index}_polylines.json")
     local_dots_file = os.path.join(save_dir, f"cell_{cell_index}_dots.npy")
     
     # 2. 显示文件 (用于主界面显示，需要逆转换)
     disp_poly_file = os.path.join(save_dir, f"disp_poly_cell{cell_index}.npy")
+    disp_poly_json = os.path.join(save_dir, f"disp_poly_cell{cell_index}.json")
     disp_dots_file = os.path.join(save_dir, f"disp_dots_cell{cell_index}.npy")
 
     polylines = []  # list of (N,2)
@@ -172,32 +175,51 @@ def run_path_teach(cell_index: int = 0,
     entity_history = []  # ['dot', 'line', 'dot', ...]
     
     # --- 加载 Polylines ---
-    if os.path.exists(local_poly_file):
+    if os.path.exists(local_poly_json):
         try:
-            raw = np.load(local_poly_file, allow_pickle=True)
-            if isinstance(raw, np.ndarray):
-                if raw.dtype == object:
-                    polylines = list(raw)
-                elif raw.ndim == 2:
-                    polylines = [raw]
-            elif isinstance(raw, list):
-                polylines = raw
-            print(f"✅ 从本地文件载入折线, 条数 = {len(polylines)}")
+            with open(local_poly_json, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for seg in data.get("segments", []):
+                arr = np.asarray(seg, dtype=np.float32)
+                if arr.size == 0:
+                    continue
+                if arr.ndim == 1:
+                    if arr.shape[0] != 2:
+                        continue
+                    arr = arr.reshape(1, 2)
+                if arr.ndim == 2 and arr.shape[1] == 2:
+                    polylines.append(arr)
+            print(f"✅ 从本地 JSON 载入折线, 条数 = {len(polylines)}")
+        except Exception as e:
+            print(f"⚠ 加载本地 JSON 折线失败: {e}")
+
+    elif os.path.exists(local_poly_file):
+        try:
+            raw = np.load(local_poly_file, allow_pickle=False)
+            if isinstance(raw, np.ndarray) and raw.ndim == 2 and raw.shape[1] == 2:
+                polylines = [raw.astype(np.float32)]
+            print(f"✅ 从本地 NPY 载入折线, 条数 = {len(polylines)}")
         except Exception as e:
             print(f"⚠ 加载本地折线失败: {e}")
-            
-    elif os.path.exists(disp_poly_file):
+             
+    elif os.path.exists(disp_poly_json) or os.path.exists(disp_poly_file):
         # Fallback: 尝试从显示文件加载并转换
         try:
-            print(f"ℹ️ 本地记录不存在，尝试从旧版文件恢复: {disp_poly_file}")
-            raw = np.load(disp_poly_file, allow_pickle=True)
-            if isinstance(raw, np.ndarray) and raw.size > 0:
-                if raw.dtype == object:
-                    for seg_gold in raw:
-                        if seg_gold is not None and len(seg_gold) > 0:
-                            seg_local = golden_to_local(seg_gold)
-                            polylines.append(seg_local)
-                else:
+            if os.path.exists(disp_poly_json):
+                print(f"ℹ️ 本地记录不存在，尝试从 JSON 恢复: {disp_poly_json}")
+                with open(disp_poly_json, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                raw_segments = data.get("segments", [])
+                for seg_gold in raw_segments:
+                    seg_arr = np.asarray(seg_gold, dtype=np.float32)
+                    if seg_arr.size == 0:
+                        continue
+                    seg_local = golden_to_local(seg_arr)
+                    polylines.append(seg_local)
+            else:
+                print(f"ℹ️ 本地记录不存在，尝试从旧版文件恢复: {disp_poly_file}")
+                raw = np.load(disp_poly_file, allow_pickle=False)
+                if isinstance(raw, np.ndarray) and raw.size > 0 and raw.ndim == 2 and raw.shape[1] == 2:
                     seg_local = golden_to_local(raw)
                     polylines.append(seg_local)
             print(f"✅ 从显示文件恢复折线, 条数 = {len(polylines)}")
@@ -207,7 +229,7 @@ def run_path_teach(cell_index: int = 0,
     # --- 加载 Dots ---
     if os.path.exists(local_dots_file):
         try:
-            dots_arr = np.load(local_dots_file, allow_pickle=True)
+            dots_arr = np.load(local_dots_file, allow_pickle=False)
             if dots_arr.size > 0:
                 dots = dots_arr.tolist()
                 print(f"✅ 从本地文件载入点集, 点数 = {len(dots)}")
@@ -400,7 +422,17 @@ def run_path_teach(cell_index: int = 0,
 
             # A) 保存小格局部坐标数据（用于下次编辑，最准确，无损）
             try:
-                np.save(local_poly_file, np.array(polylines, dtype=object))
+                local_payload = {
+                    "version": 2,
+                    "segments": [np.asarray(seg, dtype=np.float32).tolist() for seg in polylines if len(seg) > 0]
+                }
+                with open(local_poly_json, "w", encoding="utf-8") as f:
+                    json.dump(local_payload, f, ensure_ascii=False, indent=2)
+
+                # Remove unsafe legacy object npy if present.
+                if os.path.exists(local_poly_file):
+                    os.remove(local_poly_file)
+
                 if dots:
                     np.save(local_dots_file, np.array(dots, dtype=np.float32))
                 else:
@@ -417,9 +449,17 @@ def run_path_teach(cell_index: int = 0,
                     for seg in polylines:
                         seg_gold = local_to_golden(seg)
                         poly_disp_list.append(seg_gold)
-                
-                # 保存为对象数组
-                np.save(disp_poly_file, np.array(poly_disp_list, dtype=object))
+
+                disp_payload = {
+                    "version": 2,
+                    "segments": [np.asarray(seg, dtype=np.float32).tolist() for seg in poly_disp_list if len(seg) > 0]
+                }
+                with open(disp_poly_json, "w", encoding="utf-8") as f:
+                    json.dump(disp_payload, f, ensure_ascii=False, indent=2)
+
+                # Remove unsafe legacy object npy if present.
+                if os.path.exists(disp_poly_file):
+                    os.remove(disp_poly_file)
 
                 if dots:
                     dots_arr = np.array(dots, dtype=np.float32)

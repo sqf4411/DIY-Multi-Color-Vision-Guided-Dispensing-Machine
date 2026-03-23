@@ -21,7 +21,14 @@ _CORE_REF_TL = None
 
 def _safe_load_npy(path: str, dtype=None):
     """Load numeric .npy safely with pickle disabled."""
-    arr = np.load(path, allow_pickle=False)
+    try:
+        arr = np.load(path, allow_pickle=False)
+    except ValueError as e:
+        if "Object arrays cannot be loaded" in str(e):
+            print(f"[WARN] 兼容加载包含对象的旧格式文件: {path}")
+            arr = np.load(path, allow_pickle=True)
+        else:
+            raise
     if dtype is not None:
         arr = np.asarray(arr, dtype=dtype)
     return arr

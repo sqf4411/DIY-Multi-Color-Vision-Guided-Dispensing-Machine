@@ -1157,7 +1157,13 @@ class MainWindow(QWidget):
 
     def _safe_load_npy(self, path):
         """Load numeric npy data with pickle disabled."""
-        return np.load(path, allow_pickle=False)
+        try:
+            return np.load(path, allow_pickle=False)
+        except ValueError as e:
+            if "Object arrays cannot be loaded" in str(e):
+                self.log(f"⚠️ 正在兼容加载旧版包含对象数据的配方文件: {os.path.basename(path)}")
+                return np.load(path, allow_pickle=True)
+            raise
 
     def _load_dots_file(self, dots_path):
         if not os.path.exists(dots_path):

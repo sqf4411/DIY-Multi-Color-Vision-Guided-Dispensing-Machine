@@ -60,7 +60,14 @@ class ProductManager:
     # ---------- IO helpers ----------
     def _safe_load_npy(self, path: str):
         """Load numeric .npy safely (pickle disabled)."""
-        return np.load(path, allow_pickle=False)
+        try:
+            return np.load(path, allow_pickle=False)
+        except ValueError as e:
+            if "Object arrays cannot be loaded" in str(e):
+                import logging
+                logging.warning(f"兼容加载包含对象的旧格式文件: {path}")
+                return np.load(path, allow_pickle=True)
+            raise
 
     def _normalize_poly_segments(self, path_polys) -> List[List[List[float]]]:
         segments: List[List[List[float]]] = []

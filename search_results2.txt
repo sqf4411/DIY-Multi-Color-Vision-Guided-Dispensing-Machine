@@ -1,0 +1,3 @@
+2308:     def on_btn_laser_measure_clicked(self):
+2582:     def on_laser_measure_result(self, idx, x, y, depth):
+2598:     def on_laser_measure_finished(self, success, msg):

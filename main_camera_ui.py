@@ -644,10 +644,14 @@ class LaserMeasureWorker(QThread):
                 self.progress_signal.emit(i + 1, total)
 
             # 结束
-            # self.machine._post_gcode("HGC_OFF") # 测量完是否关激光？还是留着？为了安全可以关掉
+            self.machine._post_gcode("HGC_OFF") # 测量完毕自动关闭激光
             self.finished_signal.emit(True, "所有点测量完成")
 
         except Exception as e:
+            try:
+                self.machine._post_gcode("HGC_OFF") # 发生异常时也关闭激光
+            except:
+                pass
             self.finished_signal.emit(False, str(e))
 
 ######## 滚轮
@@ -2239,10 +2243,6 @@ class MainWindow(QWidget):
         self.btn_laser_measure.setStyleSheet("background-color: #D97706; color: white; font-weight: bold;")
         self.btn_laser_measure.clicked.connect(self.on_btn_laser_measure_clicked)
         laser_layout.addWidget(self.btn_laser_measure, 4, 0, 1, 4)
-        self.btn_laser_measure.setStyleSheet("background-color: #D97706; color: white; font-weight: bold;")
-        self.btn_laser_measure.clicked.connect(self.on_btn_laser_measure_clicked)
-        laser_layout.addWidget(self.btn_laser_measure, 3, 0, 1, 4)
-
         laser_group.setLayout(laser_layout)
         return laser_group
 
@@ -2307,13 +2307,28 @@ class MainWindow(QWidget):
             self.log(f"❌ 获取激光读数失败: {e}")
 
     def on_btn_laser_measure_clicked(self):
-        """开始激光测高"""
+        """开始激光测高 (包装器以防静默崩溃)"""
+        try:
+            self._do_btn_laser_measure_clicked()
+        except Exception as e:
+            import traceback
+            err = traceback.format_exc()
+            self.log(f"💥 激光测高代码崩溃: {e}")
+            with open("laser_measure_crash.txt", "w", encoding='utf-8') as f:
+                f.write(err)
+            QMessageBox.critical(self, "测高触发失败", f"程序在准备测高时发生内部错误！\n\n{e}\n\n已尝试把日志写入 laser_measure_crash.txt")
+
+    def _do_btn_laser_measure_clicked(self):
+        """真实的测高逻辑"""
+        self.log(f"[DEBUG Laser] on_btn_laser_measure_clicked triggered.")
+        
         if self.laser_worker and self.laser_worker.isRunning():
             self.log("⚠ 测高任务正在运行中...")
             return
 
         # ✅ 尝试加载识别坐标
         recognized_segments = self._load_recognized_coordinates()
+        self.log(f"[DEBUG Laser] Recognized Segments Loaded: {bool(recognized_segments)}")
         
         # 收集所有点 (从识别坐标或模板坐标)
         if recognized_segments:
@@ -2343,19 +2358,20 @@ class MainWindow(QWidget):
         points_to_measure = []
         
         for seg in segments_list:
-            if seg.type == 'dot':
-                for pt_px in seg.points:
-                    # pt_px 是图像坐标，暂时直接使用
-                    # TODO: 添加像素→机器坐标转换
+            # 判断 seg 是 dict 还是 PathSegment 对象
+            seg_type = seg.get('type') if isinstance(seg, dict) else getattr(seg, 'type', '')
+            seg_points = seg.get('points', []) if isinstance(seg, dict) else getattr(seg, 'points', [])
+            
+            if seg_type == 'dot':
+                for pt_px in seg_points:
                     points_to_measure.append(pt_px)
         
         if not points_to_measure:
+             self.log("[DEBUG Laser] points_to_measure is empty!")
              QMessageBox.warning(self, "无点", "当前路径中没有 'dot' 类型的点。")
              return
 
-        # [REVERTED] Use simple Camera + Laser Offset logic.
-        # If direction is wrong, User should flip sign in UI.
-        
+        self.log(f"[DEBUG Laser] Prepared {len(points_to_measure)} points, showing msg box.")
         # 确认
         ret = QMessageBox.question(self, "确认测高", 
                                    f"即将对 {len(points_to_measure)} 个点进行激光测高。\n"
@@ -2370,6 +2386,14 @@ class MainWindow(QWidget):
             return
 
         self.btn_laser_measure.setEnabled(False)
+        
+        # 保存当前机器位置
+        self.laser_initial_pos = None
+        if self.machine:
+            pos = self.machine.get_position()
+            if pos:
+                self.laser_initial_pos = pos
+                self.log(f"📍 已记录初始位置: X={pos[0]:.2f}, Y={pos[1]:.2f}, Z={pos[2]:.2f}")
         
         self.laser_worker = LaserMeasureWorker(
             self.machine, 
@@ -2657,7 +2681,34 @@ class MainWindow(QWidget):
             except Exception as e:
                 self.log(f"❌ 保存激光数据失败: {e}")
 
-            QMessageBox.information(self, "完成", f"激光测高完成！\n{msg}\n数据已保存到配方。")
+            # [新增] 测量完成后回到初始位置
+            if hasattr(self, 'laser_initial_pos') and self.laser_initial_pos:
+                ix, iy, iz = self.laser_initial_pos
+                self.log(f"🔄 正在返回初始位置: X={ix:.2f}, Y={iy:.2f}, Z={iz:.2f}")
+                # 先抬升到测高安全高度
+                self.machine.send_gcode(f"G0 Z{self.laser_measure_z:.2f}")
+                self.machine.wait_idle()
+                # 移动XY
+                self.machine.send_gcode(f"G0 X{ix:.2f} Y{iy:.2f}")
+                self.machine.wait_idle()
+                # 降下Z
+                self.machine.send_gcode(f"G0 Z{iz:.2f}")
+                self.machine.wait_idle()
+                self.laser_initial_pos = None
+
+            # 提取上面计算好的结果（如果在except里失败也能显示默认值）
+            total_pts = count if 'count' in locals() else 0
+            adpth = avg_depth if 'avg_depth' in locals() else 0.0
+            az = avg_z if 'avg_z' in locals() else 0.0
+
+            msg_box_text = (
+                f"激光测高完成！\n\n"
+                f"所有点测量完毕：共 {total_pts} 点\n"
+                f"平均深度：{adpth:.3f} mm\n"
+                f"平均Z高度：{az:.3f} mm\n\n"
+                f"数据已保存到配方，机器已返回初始位置。"
+            )
+            QMessageBox.information(self, "完成", msg_box_text)
             self.log("✅ 激光测高全部完成")
         else:
             QMessageBox.warning(self, "中断", f"测量中断: {msg}")
@@ -6740,9 +6791,11 @@ class MainWindow(QWidget):
                 
                 self.log(f"✅ 已加载配方参数: 曝光={config.get('exposure', '?')}, XY速度={int(self.feedrate_xy)}, Z={self.safe_z_product:.1f}")
             
-            # 清除缓存
-            if hasattr(self, 'halcon_path_template'):
-                self.halcon_path_template = None
+            # [修复] 自动重新计算路径模板缓存 (旧版代码是将其置空，导致不画路径)
+            try:
+                self._compute_halcon_template()
+            except Exception as e:
+                self.log(f"⚠ 自动计算路径模板失败: {e}")
             
             self.update_button_states()
             self.log(f"✅ 产品加载成功")

@@ -1,0 +1,8 @@
+3355:     def load_saved_params(self):
+3442:     def load_golden_templates(self):
+3509:     def load_app_settings(self):
+4232:                      self.halcon_product_manager.load_product(current_recipe, force=True)
+6513:         self.on_load_product()
+6515:     def on_load_product(self):
+6617:             success, msg = self.halcon_product_manager.load_product(name)
+6666:             config = self.product_manager.load_product_config(name)

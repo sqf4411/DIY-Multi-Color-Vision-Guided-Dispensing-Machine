@@ -1,0 +1,10 @@
+516:     激光测高后台线程
+579:         self.log_signal.emit(f"🚀 开始激光测高，共 {total} 个点")
+2172:     # ================== ✅ 激光测高相关 ==================
+2237:         self.btn_laser_measure = QPushButton("📏 激光测高")
+2309:         """开始激光测高"""
+2360:                                    f"即将对 {len(points_to_measure)} 个点进行激光测高。\n"
+2388:         self.progress_dlg = ProcessingDialog("激光测高中", self)
+2659:             QMessageBox.information(self, "完成", f"激光测高完成！\n{msg}\n数据已保存到配方。")
+2660:             self.log("✅ 激光测高全部完成")
+6728:                     self.log(f"✅ 已加载激光测高数据: {len(self.laser_depth_map)} 点")

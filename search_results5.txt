@@ -1,0 +1,15 @@
+2211:         self.btn_laser_zero = QPushButton("设为基准")
+2212:         self.btn_laser_zero.clicked.connect(self.on_btn_laser_set_zero)
+2213:         laser_layout.addWidget(self.btn_laser_zero, 2, 0)
+2219:         laser_layout.addWidget(self.btn_auto_set_ref, 2, 1)
+2237:         self.btn_laser_measure = QPushButton("📏 激光测高")
+2238:         self.btn_laser_measure.setStyleSheet("background-color: #D97706; color: white; font-weight: bold;")
+2239:         self.btn_laser_measure.clicked.connect(self.on_btn_laser_measure_clicked)
+2240:         laser_layout.addWidget(self.btn_laser_measure, 4, 0, 1, 4)
+2241:         self.btn_laser_measure.setStyleSheet("background-color: #D97706; color: white; font-weight: bold;")
+2242:         self.btn_laser_measure.clicked.connect(self.on_btn_laser_measure_clicked)
+2243:         laser_layout.addWidget(self.btn_laser_measure, 3, 0, 1, 4)
+2272:     def on_btn_laser_set_zero(self):
+2308:     def on_btn_laser_measure_clicked(self):
+2371:         self.btn_laser_measure.setEnabled(False)
+2607:         self.btn_laser_measure.setEnabled(True)

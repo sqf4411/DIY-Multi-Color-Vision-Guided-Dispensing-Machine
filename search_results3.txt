@@ -1,0 +1,108 @@
+233:         self.read_func = read_func # Function to read laser value
+252:             # 2. Move XY to Target (Tool Setter - Laser Offset)
+978:         self.laser_offset_x = 0.0
+979:         self.laser_offset_y = 0.0
+983:         self.laser_worker = None
+2179:         laser_layout.addWidget(QLabel("Offset X:"), 0, 0)
+2180:         self.spn_laser_offset_x = QDoubleSpinBox()
+2181:         self.spn_laser_offset_x.setRange(-200.0, 200.0)
+2182:         self.spn_laser_offset_x.setValue(getattr(self, 'laser_offset_x', 0.0))
+2183:         self.spn_laser_offset_x.valueChanged.connect(self.on_laser_param_changed)
+2184:         laser_layout.addWidget(self.spn_laser_offset_x, 0, 1)
+2186:         laser_layout.addWidget(QLabel("Offset Y:"), 0, 2)
+2187:         self.spn_laser_offset_y = QDoubleSpinBox()
+2188:         self.spn_laser_offset_y.setRange(-200.0, 200.0)
+2189:         self.spn_laser_offset_y.setValue(getattr(self, 'laser_offset_y', 0.0))
+2190:         self.spn_laser_offset_y.valueChanged.connect(self.on_laser_param_changed)
+2191:         laser_layout.addWidget(self.spn_laser_offset_y, 0, 3)
+2198:         self.spn_laser_measure_z.valueChanged.connect(self.on_laser_param_changed)
+2207:         self.spn_laser_k.valueChanged.connect(self.on_laser_param_changed)
+2211:         self.btn_laser_zero = QPushButton("设为基准")
+2212:         self.btn_laser_zero.clicked.connect(self.on_btn_laser_set_zero)
+2223:         self.lbl_laser_ref.setStyleSheet("color: #FBBF24; font-weight: bold;")
+2228:         self.lbl_laser_val.setStyleSheet("color: #60A5FA; font-weight: bold;")
+2233:         self.lbl_laser_depth.setStyleSheet("color: #10B981; font-weight: bold; font-size: 14px;")
+2237:         self.btn_laser_measure = QPushButton("📏 激光测高")
+2238:         self.btn_laser_measure.setStyleSheet("background-color: #D97706; color: white; font-weight: bold;")
+2239:         self.btn_laser_measure.clicked.connect(self.on_btn_laser_measure_clicked)
+2241:         self.btn_laser_measure.setStyleSheet("background-color: #D97706; color: white; font-weight: bold;")
+2242:         self.btn_laser_measure.clicked.connect(self.on_btn_laser_measure_clicked)
+2248:     def on_laser_param_changed(self):
+2250:         if hasattr(self, 'spn_laser_offset_x'):
+2251:             self.laser_offset_x = self.spn_laser_offset_x.value()
+2252:             self.laser_offset_y = self.spn_laser_offset_y.value()
+2257:             self.config.set('laser_offset_x', self.laser_offset_x)
+2258:             self.config.set('laser_offset_y', self.laser_offset_y)
+2259:             self.config.set('laser_measure_z', self.laser_measure_z)
+2260:             self.config.set('laser_scale_k', self.laser_scale_k)
+2263:             self.log(f"✅ 激光参数已保存 (X={self.laser_offset_x:.2f}, Y={self.laser_offset_y:.2f}, Z={self.laser_measure_z:.1f}, K={self.laser_scale_k:.4f})")
+2272:     def on_btn_laser_set_zero(self):
+2297:                 self.config.set('laser_ref_val', self.laser_ref_val)
+2308:     def on_btn_laser_measure_clicked(self):
+2355:         # [REVERTED] Use simple Camera + Laser Offset logic.
+2363:                                    f"偏移 X={self.laser_offset_x:.1f}, Y={self.laser_offset_y:.1f}\n"
+2374:         self.laser_initial_pos = None
+2385:             self.laser_offset_x,
+2386:             self.laser_offset_y,
+2391:         self.laser_worker.log_signal.connect(self.log)
+2392:         self.laser_worker.result_signal.connect(self.on_laser_measure_result)
+2393:         self.laser_worker.finished_signal.connect(self.on_laser_measure_finished)
+2400:         self.laser_worker.progress_signal.connect(self.progress_dlg.update_progress)
+2401:         self.laser_worker.log_signal.connect(self.progress_dlg.update_status) # Sync status text
+2404:         self.progress_dlg.pause_signal.connect(self.laser_worker.pause)
+2405:         self.progress_dlg.resume_signal.connect(self.laser_worker.resume)
+2406:         self.progress_dlg.stop_signal.connect(self.laser_worker.stop)
+2443:         # 2. Calculate Target Position for LASER
+2444:         # Goal: Move MACHINE so that LASER is at TOOL_SETTER position.
+2448:         # - Laser Offset = Laser - Cam
+2450:         # - Laser relative to Nozzle = Laser Offset - Nozzle Offset
+2453:         # Target = Tool Setter - (Laser Offset - Nozzle Offset)
+2454:         # Target = Tool Setter - Laser Offset + Nozzle Offset
+2456:         # Wait, if Laser Offset (e.g. -166) means Laser is LEFT of Camera.
+2459:         # Vector_Nozzle_To_Laser = Laser_Offset - Nozzle_Offset
+2461:         # Target_Nozzle_Pos = Tool_Setter - (Laser_Offset - Nozzle_Offset)
+2462:         # Target = Tool_Setter - Laser_Offset + Nozzle_Offset
+2464:         # User said: "Need to ADD needle and laser offset".
+2465:         # If Laser Offset is negative (-166), then - (-166) = +166.
+2469:         # If Laser is physically to the RIGHT of Nozzle/Camera (Offset > 0 normally? but here -166).
+2470:         # If Laser is LEFT of Camera (Offset < 0).
+2473:         # `Tool - (-166)` = Tool + 166. Correct direction for Left-side Laser.
+2475:         # BUT User has Laser Offset = -166.
+2480:         # `Tool + (-166)` = Tool - 166. Correct direction for Right-side Laser.
+2483:         target_x = self.tool_setter_x + self.laser_offset_x - self.nozzle_offset_x
+2484:         target_y = self.tool_setter_y + self.laser_offset_y - self.nozzle_offset_y
+2490:             f"激光偏移: ({self.laser_offset_x:.2f}, {self.laser_offset_y:.2f})\n"
+2517:                 self.config_mgr.set("laser_ref_val", val)
+2539:         # [MODIFIED] Load from laser_points.json
+2540:         points_file = os.path.join(product_dir, "laser_points.json")
+2562:                         # [FIX] Handle nested list structure found in laser_points.json
+2580:                     self.log(f"✅ 从 laser_points.json 加载 {len(segments)} 个测高点")
+2584:             self.log(f"❌ 加载 laser_points.json 失败: {str(e)}")
+2590:     def on_laser_measure_result(self, idx, x, y, depth):
+2606:     def on_laser_measure_finished(self, success, msg):
+2649:                             config["laser_data"] = {
+2680:                 self.laser_initial_pos = None
+3597:             self.laser_offset_x = self.config.get('laser_offset_x', 0.0)
+3598:             self.laser_offset_y = self.config.get('laser_offset_y', 0.0)
+3599:             self.laser_measure_z = self.config.get('laser_measure_z', 100.0)
+3600:             self.laser_scale_k = self.config.get('laser_scale_k', 0.5425)
+3601:             self.laser_ref_val = self.config.get('laser_ref_val', 0.0)
+3604:             if hasattr(self, 'spn_laser_offset_x'):
+3605:                 self.spn_laser_offset_x.blockSignals(True)
+3606:                 self.spn_laser_offset_x.setValue(self.laser_offset_x)
+3607:                 self.spn_laser_offset_x.blockSignals(False)
+3609:             if hasattr(self, 'spn_laser_offset_y'):
+3610:                 self.spn_laser_offset_y.blockSignals(True)
+3611:                 self.spn_laser_offset_y.setValue(self.laser_offset_y)
+3612:                 self.spn_laser_offset_y.blockSignals(False)
+3628:             self.log(f"✅ 已加载应用参数 (速度XY={int(self.feedrate_xy)}, 偏移X={self.nozzle_offset_x:.2f}, Y={self.nozzle_offset_y:.2f}, 视觉高度={self.vision_optimal_z:.1f}, 激光偏移={self.laser_offset_x:.2f}/{self.laser_offset_y:.2f})")
+5311:         """[NEW] Helper to save machine coordinates to laser_points.json"""
+5319:             # [MODIFIED] Save to laser_points.json separate from config.json
+5320:             points_file = os.path.join(product_dir, "laser_points.json")
+5332:             self.log(f"✅ 机器坐标已保存至: laser_points.json (共 {len(machine_paths)} 个段)")
+5335:             self.log(f"❌ 保存 laser_points.json 失败: {e}")
+5357:             # All Laser Params (Offset, K, Ref) are now GLOBAL.
+6744:                 if 'laser_data' in config:
+6745:                     ld = config['laser_data']
+6773:                 # 注意：nozzle_offset, z_base, tool_setter, LASER_OFFSET, LASER_K, LASER_REF 已改为全局配置
+6830:              config_data["laser_data"] = {

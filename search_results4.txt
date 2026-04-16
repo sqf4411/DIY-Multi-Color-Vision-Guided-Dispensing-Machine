@@ -1,0 +1,39 @@
+978:         self.laser_offset_x = 0.0
+979:         self.laser_offset_y = 0.0
+2180:         self.spn_laser_offset_x = QDoubleSpinBox()
+2181:         self.spn_laser_offset_x.setRange(-200.0, 200.0)
+2182:         self.spn_laser_offset_x.setValue(getattr(self, 'laser_offset_x', 0.0))
+2183:         self.spn_laser_offset_x.valueChanged.connect(self.on_laser_param_changed)
+2184:         laser_layout.addWidget(self.spn_laser_offset_x, 0, 1)
+2187:         self.spn_laser_offset_y = QDoubleSpinBox()
+2188:         self.spn_laser_offset_y.setRange(-200.0, 200.0)
+2189:         self.spn_laser_offset_y.setValue(getattr(self, 'laser_offset_y', 0.0))
+2190:         self.spn_laser_offset_y.valueChanged.connect(self.on_laser_param_changed)
+2191:         laser_layout.addWidget(self.spn_laser_offset_y, 0, 3)
+2250:         if hasattr(self, 'spn_laser_offset_x'):
+2251:             self.laser_offset_x = self.spn_laser_offset_x.value()
+2252:             self.laser_offset_y = self.spn_laser_offset_y.value()
+2257:             self.config.set('laser_offset_x', self.laser_offset_x)
+2258:             self.config.set('laser_offset_y', self.laser_offset_y)
+2263:             self.log(f"✅ 激光参数已保存 (X={self.laser_offset_x:.2f}, Y={self.laser_offset_y:.2f}, Z={self.laser_measure_z:.1f}, K={self.laser_scale_k:.4f})")
+2363:                                    f"偏移 X={self.laser_offset_x:.1f}, Y={self.laser_offset_y:.1f}\n"
+2385:             self.laser_offset_x,
+2386:             self.laser_offset_y,
+2459:         # Vector_Nozzle_To_Laser = Laser_Offset - Nozzle_Offset
+2461:         # Target_Nozzle_Pos = Tool_Setter - (Laser_Offset - Nozzle_Offset)
+2462:         # Target = Tool_Setter - Laser_Offset + Nozzle_Offset
+2483:         target_x = self.tool_setter_x + self.laser_offset_x - self.nozzle_offset_x
+2484:         target_y = self.tool_setter_y + self.laser_offset_y - self.nozzle_offset_y
+2490:             f"激光偏移: ({self.laser_offset_x:.2f}, {self.laser_offset_y:.2f})\n"
+3597:             self.laser_offset_x = self.config.get('laser_offset_x', 0.0)
+3598:             self.laser_offset_y = self.config.get('laser_offset_y', 0.0)
+3604:             if hasattr(self, 'spn_laser_offset_x'):
+3605:                 self.spn_laser_offset_x.blockSignals(True)
+3606:                 self.spn_laser_offset_x.setValue(self.laser_offset_x)
+3607:                 self.spn_laser_offset_x.blockSignals(False)
+3609:             if hasattr(self, 'spn_laser_offset_y'):
+3610:                 self.spn_laser_offset_y.blockSignals(True)
+3611:                 self.spn_laser_offset_y.setValue(self.laser_offset_y)
+3612:                 self.spn_laser_offset_y.blockSignals(False)
+3628:             self.log(f"✅ 已加载应用参数 (速度XY={int(self.feedrate_xy)}, 偏移X={self.nozzle_offset_x:.2f}, Y={self.nozzle_offset_y:.2f}, 视觉高度={self.vision_optimal_z:.1f}, 激光偏移={self.laser_offset_x:.2f}/{self.laser_offset_y:.2f})")
+6773:                 # 注意：nozzle_offset, z_base, tool_setter, LASER_OFFSET, LASER_K, LASER_REF 已改为全局配置

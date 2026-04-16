@@ -1,0 +1,3 @@
+4240:                      self._compute_halcon_template(force_reload=True)
+6160:     def _compute_halcon_template(self, force_reload=False):
+6650:             # 用于 _compute_halcon_template 和 G-code 生成

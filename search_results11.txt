@@ -1,0 +1,73 @@
+186:         x, y, z = self.machine.get_position()
+194:     pos_signal = pyqtSignal(float, float, float)
+207:                     x, y, z = self.machine.get_position()
+208:                     self.pos_signal.emit(x, y, z)
+374:                 start_z = self.machine.get_position()[2]
+505:                 data = self.machine.get_temp_status()
+661:     clicked_pos = pyqtSignal(int, int)  # <--- ✅ 新增：点击位置信号
+675:             self.clicked_pos.emit(event.x(), event.y())
+1034:         self.pos_x = 0.0
+1035:         self.pos_y = 0.0
+1109:         self.poll_worker.pos_signal.connect(self.update_xyz_display)
+1650:         self.lbl_pos_x = QLabel("X: 0.00")
+1651:         self.lbl_pos_y = QLabel("Y: 0.00")
+1653:         coord_layout.addWidget(self.lbl_pos_x)
+1654:         coord_layout.addWidget(self.lbl_pos_y)
+1655:         coord_layout.addWidget(self.lbl_pos_z)
+2392:             pos = self.machine.get_current_position()
+2549:         product_name = self.halcon_product_manager.get_current_product_name()
+2633:                     prod_name = self.halcon_product_manager.get_current_product_name()
+2685:                 ix, iy, iz = self.laser_initial_pos
+2734:         self.camera_manager.set_exposure(float_val * 1000.0)
+2739:         self.camera_manager.set_exposure(val * 1000.0)
+2790:         self.update_xyz_display(self.pos_x, self.pos_y, self.pos_z)
+2830:             mx, my, mz = self.machine.get_position()
+2939:         self.pos_x, self.pos_y, self.pos_z = self.machine.get_position()
+2945:             f"X={self.pos_x:.2f}, Y={self.pos_y:.2f}, Z={self.pos_z:.2f}"
+2952:         if x is not None: self.pos_x = float(x)
+2953:         if y is not None: self.pos_y = float(y)
+2957:         self.lbl_pos_x.setText(f"X: {self.pos_x:.2f}")
+2958:         self.lbl_pos_x.setStyleSheet("color: #F59E0B; font-weight: bold;")  # 橙色
+2960:         self.lbl_pos_y.setText(f"Y: {self.pos_y:.2f}")
+2961:         self.lbl_pos_y.setStyleSheet("color: #F59E0B; font-weight: bold;")  # 橙色
+2963:         self.lbl_pos_z.setText(f"Z: {self.pos_z:.2f}")
+2964:         self.lbl_pos_z.setStyleSheet("color: #F59E0B; font-weight: bold;")  # 橙色
+2968:              self.lbl_z_ref.setText(f"当前 Z 基准: {self.pos_z:.2f} mm")
+2972:              real_x = self.pos_x + self.nozzle_offset_x
+2973:              real_y = self.pos_y + self.nozzle_offset_y
+2975:              self.vis3d.update_position(real_x, real_y, real_z)
+3369:         if "ExposureTime" in params:
+3370:             val = float(params["ExposureTime"])
+3493:         if "ExposureTime" in self.saved_params:
+3494:             self.set_exposure(float(self.saved_params["ExposureTime"]))
+3503:                 "ExposureTime": float(self.spn_exp.value()),
+4245:                      self.current_segments = self.halcon_product_manager.get_current_segments()
+4482:             mx, my, mz = self.machine.get_position()
+4543:         # Since HalconManager.run_training_script logic is not fully exposed here, 
+4598:                     'exposure': self.spn_exp.value() if hasattr(self, 'spn_exp') else 200.0,
+4670:             'exposure': self.spn_exp.value() if hasattr(self, 'spn_exp') else 200.0,
+4875:         if 'exposure' in config:
+4876:             self.cam_exp_time = config['exposure'] 
+4878:                 self.spn_exp.setValue(config['exposure'])
+5106:             cur_x, cur_y, _ = self.machine.get_position()
+5321:              # We should modify _prepare_dry_run to return the dialog or accept a post-run callback.
+5322:              # OR better: Insert the saving logic directly into the specific block in _prepare_dry_run if possible, 
+5331:             product_name = self.halcon_product_manager.get_current_product_name()
+5477:             origin_pos = self.machine.get_position()
+5489:                     prod_name = self.halcon_product_manager.get_current_product_name()
+5638:             origin_pos = self.machine.get_position()
+5748:         Exposure: us -> ms -> Slider(int)
+5754:         if 'ExposureTime' in params:
+5755:             val = float(params['ExposureTime']) # us
+5767:             self.sld_exp.setValue(pos)
+5853:             mx, my, mz = self.machine.get_position()
+5969:             mx, my, mz = self.machine.get_position()
+6477:             'exposure': self.spn_exp.value() if hasattr(self, 'spn_exp') else 4.4,
+6655:             paths = self.halcon_product_manager.get_current_paths()
+6661:             self.current_segments = self.halcon_product_manager.get_current_segments()
+6679:                 if 'exposure' in config:
+6680:                     exp_ms = config['exposure']  # 单位：ms
+6692:                     self.camera_manager.set_exposure(exp_ms * 1000.0)
+6791:                 self.log(f"✅ 已加载配方参数: 曝光={config.get('exposure', '?')}, XY速度={int(self.feedrate_xy)}, Z={self.safe_z_product:.1f}")
+6819:             "exposure": self.spn_exp.value() if hasattr(self, 'spn_exp') else 4.4,
+6869:   • 曝光: {config_data['exposure']:.1f} ms

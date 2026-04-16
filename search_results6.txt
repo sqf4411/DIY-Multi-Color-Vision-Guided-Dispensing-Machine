@@ -1,0 +1,1 @@
+2672:                 self.machine.send_gcode(f"G0 Z{self.laser_measure_z:.2f}")

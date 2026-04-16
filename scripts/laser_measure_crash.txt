@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "h:\CodeForGithub\DIY-Multi-Color-Vision-Guided-Dispensing-Machine\main_camera_ui.py", line 2312, in on_btn_laser_measure_clicked
+    self._do_btn_laser_measure_clicked()
+  File "h:\CodeForGithub\DIY-Multi-Color-Vision-Guided-Dispensing-Machine\main_camera_ui.py", line 2393, in _do_btn_laser_measure_clicked
+    pos = self.machine.get_current_position()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MachineClient' object has no attribute 'get_current_position'

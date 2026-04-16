@@ -2,7 +2,7 @@
   "vision_offset_x": 0.0,
   "vision_offset_y": 5.0,
   "exposure": 2.3,
-  "gain": 5.4,
+  "gain": 3.3,
   "gamma": 2.0,
   "feedrate_xy": 1000,
   "feedrate_z": 300,
@@ -12,7 +12,7 @@
   "safe_z_product": 70.0,
   "work_z": 100.0,
   "laser_data": {
-    "timestamp": 1769593390.571663,
+    "timestamp": 1776322549.5239956,
     "points": [
       {
         "x": 316.67,
@@ -185,126 +185,5 @@
   "valve_prefeed_time": 0.1,
   "valve_a_dispense_time": 0.77,
   "valve_b_dispense_time": 2.0,
-  "line_speed_xy": 800,
-  "recognized_coordinates": {
-    "segments": [
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1540.3166335571698,
-            996.9775031000527
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1838.502785072589,
-            978.9693089301104
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1849.7505459752913,
-            1293.8333134541117
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1542.8951634142522,
-            1314.788188939224
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1681.9338277678637,
-            1056.5831578441969
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1628.7985583266473,
-            1141.3316297308122
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1656.152291963,
-            1212.7501919431727
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1702.8608790085875,
-            1217.8135539516763
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1769.7152303251282,
-            1139.9033231713088
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1777.1751257414933,
-            1201.3732652304143
-          ]
-        ],
-        "dwell_ms": 100
-      }
-    ],
-    "timestamp": 1776321313.2686422,
-    "transform_data": {
-      "cx": 1856.322944940247,
-      "cy": 1337.0860588837527,
-      "angle": 0.00958716302504326,
-      "score": 0.30659089699160624
-    }
-  }
+  "line_speed_xy": 800
 }

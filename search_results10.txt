@@ -1,0 +1,35 @@
+984:         self.laser_measure_z = 50.0
+985:         self.laser_scale_k = 0.5425
+986:         self.laser_ref_val = 0.0   
+2199:         self.spn_laser_measure_z = QDoubleSpinBox()
+2200:         self.spn_laser_measure_z.setRange(0.0, 300.0)
+2201:         self.spn_laser_measure_z.setValue(getattr(self, 'laser_measure_z', 50.0))
+2202:         self.spn_laser_measure_z.valueChanged.connect(self.on_laser_param_changed)
+2203:         laser_layout.addWidget(self.spn_laser_measure_z, 1, 1)
+2210:         self.spn_laser_k.setValue(getattr(self, 'laser_scale_k', 0.5425))
+2226:         self.lbl_laser_ref = QLabel(f"基准: {getattr(self, 'laser_ref_val', 0.0):.3f}")
+2257:             self.laser_measure_z = self.spn_laser_measure_z.value()
+2258:             self.laser_scale_k = self.spn_laser_k.value()
+2263:             self.config.set('laser_measure_z', self.laser_measure_z)
+2264:             self.config.set('laser_scale_k', self.laser_scale_k)
+2267:             self.log(f"✅ 激光参数已保存 (X={self.laser_offset_x:.2f}, Y={self.laser_offset_y:.2f}, Z={self.laser_measure_z:.1f}, K={self.laser_scale_k:.4f})")
+2295:                 self.laser_ref_val = float(val)
+2301:                 self.config.set('laser_ref_val', self.laser_ref_val)
+2304:                 self.log(f"✅ 激光基准已设定: {self.laser_ref_val:.3f} (当前原始读数)")
+2368:                                    f"安全高度 Z={self.laser_measure_z:.1f}\n"
+2370:                                    f"K系数={self.laser_scale_k:.4f}, 基准={self.laser_ref_val:.3f}\n\n"
+2390:             self.laser_measure_z, 
+2393:             self.laser_scale_k,
+2394:             self.laser_ref_val,
+2514:             self.laser_ref_val = val
+2523:                 self.config_mgr.set("laser_ref_val", val)
+2678:                 self.machine.send_gcode(f"G0 Z{self.laser_measure_z:.2f}")
+3605:             self.laser_measure_z = self.config.get('laser_measure_z', 100.0)
+3606:             self.laser_scale_k = self.config.get('laser_scale_k', 0.5425)
+3607:             self.laser_ref_val = self.config.get('laser_ref_val', 0.0)
+3620:             if hasattr(self, 'spn_laser_measure_z'):
+3621:                 self.spn_laser_measure_z.blockSignals(True)
+3622:                 self.spn_laser_measure_z.setValue(self.laser_measure_z)
+3623:                 self.spn_laser_measure_z.blockSignals(False)
+3627:                 self.spn_laser_k.setValue(self.laser_scale_k)
+3631:                 self.lbl_laser_ref.setText(f"基准: {self.laser_ref_val:.3f}")

@@ -1,0 +1,2 @@
+2329:         recognized_segments = self._load_recognized_coordinates()
+2544:     def _load_recognized_coordinates(self):

@@ -680,10 +680,10 @@ class HalconProductManager:
             "segments": [seg.to_dict() for seg in segments],
             "timestamp": time.time(),
             "transform_data": {
-                "cx": float(cx),
-                "cy": float(cy),
-                "angle": float(angle),
-                "score": float(score)
+                "cx": round(float(cx), 2),
+                "cy": round(float(cy), 2),
+                "angle": round(float(angle), 4),
+                "score": round(float(score), 4)
             }
         }
         

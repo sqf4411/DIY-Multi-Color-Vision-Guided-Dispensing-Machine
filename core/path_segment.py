@@ -61,10 +61,15 @@ class PathSegment:
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典保存"""
+        # 优化：坐标保留2位小数，避免污染配置文件的git diff
+        rounded_points = []
+        for p in self.points:
+            rounded_points.append([round(float(p[0]), 2), round(float(p[1]), 2)])
+            
         return {
             'type': self.type,
             'color': self.color,
-            'points': self.points,
+            'points': rounded_points,
             'dwell_ms': self.dwell_ms
         }
     

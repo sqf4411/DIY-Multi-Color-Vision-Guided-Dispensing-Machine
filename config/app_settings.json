@@ -3,7 +3,7 @@
     "feedrate_z": 300,
     "accel": 452.0,
     "safe_z_cavity": 59.0,
-    "safe_z_product": 100.0,
+    "safe_z_product": 70.0,
     "work_z": 100.0,
     "jog_step": 1.0,
     "z_base": 52.599999999999966,
@@ -11,7 +11,7 @@
     "nozzle_offset_y": -5.199999999999989,
     "nozzle_offset_z": 0.0,
     "vision_offset_x": 0.0,
-    "vision_offset_y": 0.0,
+    "vision_offset_y": 5.0,
     "cam_safe_z_cavity": 166.0,
     "cam_safe_z_product": 168.0,
     "cam_work_z": 164.0,
@@ -37,5 +37,8 @@
     "batch_space_x": 72.0,
     "batch_space_y": 0.0,
     "vision_optimal_z": 164.0,
-    "line_speed_xy": 800
+    "line_speed_xy": 800,
+    "batch_color_change_x": 195.08,
+    "batch_color_change_y": 98.04,
+    "batch_color_change_pause": 1
 }

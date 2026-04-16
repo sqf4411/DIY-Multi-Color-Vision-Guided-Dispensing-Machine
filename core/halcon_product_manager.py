@@ -509,78 +509,34 @@ class HalconProductManager:
         mold_segments = []
         
         try:
-            # 1. 确定源路径 (优先使用 rich segments)
+            # 1. 确定源路径 (优先使用 Main Camera 预计算的 Relative Template)
             source_segments = []
-            if self.current_segments and self.current_segments.count() > 0:
-                source_segments = self.current_segments.get_all()
+            if hasattr(self, 'mw') and self.mw and getattr(self.mw, 'halcon_path_template', None):
+                # halcon_path_template 里面可能已经是 PathSegment 的混合体，或者 np.ndarray (针对老数据)
+                # 这都在 _compute_halcon_template 里统算过，已经是 Relative 到 origin 的坐标了。
+                source_segments = self.mw.halcon_path_template
             else:
-                # Legacy fallback (create dummy segments)
-                if self.current_paths.get('polys'):
-                    for p in self.current_paths['polys']:
-                        # p is numpy array (N,2) => Convert to List[Tuple]
-                        pts = [tuple(x) for x in p]
-                        source_segments.append(PathSegment('line', 0, pts))
-                if self.current_paths.get('dots') and len(self.current_paths['dots']) > 0:
-                    for p in self.current_paths['dots']:
-                        # p is dot (x,y)
-                        if isinstance(p, np.ndarray): p = tuple(p)
-                        else: p = tuple(p)
-                        source_segments.append(PathSegment('dot', 0, [p]))
+                print(f"[HalconProductManager] ❌ No halcon_path_template found!")
+                return []
             
             if not source_segments:
-                # Return center point as dummy dot?
-                return [PathSegment('dot', 2, [(cx, cy)])] # Color 2=Blue
+                return [PathSegment('dot', 2, [(cx, cy)])]
             
-            # 2. 转换每个段
+            # 2. 转换每个段 (此时源段的坐标已经是相对 model origin 的 relative 坐标)
             for seg in source_segments:
-                pts = np.array(seg.points, dtype=np.float32)
-                if len(pts) == 0: continue
+                # 兼容旧 np.ndarray 和 PathSegment 对象
+                is_obj = hasattr(seg, 'points_np') or hasattr(seg, 'points')
+                if is_obj:
+                     if hasattr(seg, 'points_np') and seg.points_np is not None:
+                         pts_centered = seg.points_np
+                     else:
+                         pts_centered = np.array(seg.points, dtype=np.float32)
+                else:
+                     pts_centered = np.array(seg, dtype=np.float32)
                 
-                # ⭐ ROI 坐标系转换
-                # 路径现在保存在 ROI 坐标系（编辑器使用 roi_template.png）
-                # 需要转换：ROI -> Reference (training) -> Relative (相对origin) -> Rotated -> Current Match
+                if len(pts_centered) == 0: continue
                 
-                # 2.1 从 ROI 坐标转换到 Reference 坐标（训练位置）
-                # 获取 ROI 偏移（从 config.json）
-                roi_offset_x = 0
-                roi_offset_y = 0
-                
-                # [Fix] 确保 roi_in_reference 已加载
-                if not hasattr(self, 'roi_in_reference') or not self.roi_in_reference:
-                    print(f"[HalconProductManager] ⚠️ Warning: roi_in_reference missing. Try reloading for '{self.current_product}'...")
-                    if self.current_product:
-                        cfg = self.products.load_product_config(self.current_product)
-                        if cfg:
-                            self.roi_in_reference = cfg.get('roi_in_reference')
-                            print(f"[HalconProductManager] ✅ Reloaded ROI: {self.roi_in_reference}")
-                        else:
-                            print(f"[HalconProductManager] ❌ Failed to load config for '{self.current_product}'")
-                
-                # 强制打印调试信息 (无条件)
-                if len(pts) > 0:
-                    roi_status = self.roi_in_reference if hasattr(self, 'roi_in_reference') else "MISSING"
-                    print(f"[DEBUG] Product={self.current_product}")
-                    print(f"[DEBUG] ROI_Info={roi_status}")
-                    print(f"[DEBUG] RefPoint=({ref_col}, {ref_row}) Match=({cx}, {cy})")
-                    print(f"[DEBUG] Pts[0]={pts[0]}")
-
-                if hasattr(self, 'roi_in_reference') and self.roi_in_reference:
-                    roi_offset_x = self.roi_in_reference.get('x', 0)
-                    roi_offset_y = self.roi_in_reference.get('y', 0)
-                
-                # 应用偏移：ROI -> Reference
-                pts_in_reference = pts + np.array([roi_offset_x, roi_offset_y])
-                
-                if len(pts) > 0 and hasattr(self, 'roi_in_reference') and self.roi_in_reference:
-                    print(f"[坐标转换] 第1个点(Ref): {pts_in_reference[0]}")
-                
-                # 2.2 转换为相对于训练原点的坐标
-                pts_centered = pts_in_reference - np.array([ref_col, ref_row])
-                
-                if len(pts) > 0 and hasattr(self, 'roi_in_reference') and self.roi_in_reference:
-                    print(f"[坐标转换] 第1个点(相对): {pts_centered[0]}")
-                
-                # 2.3 旋转
+                # 2.2 直接旋转 (因为已经 centered to model origin)
                 cos_a = np.cos(angle)
                 sin_a = np.sin(angle)
                 x_new = pts_centered[:, 0] * cos_a + pts_centered[:, 1] * sin_a
@@ -597,14 +553,21 @@ class HalconProductManager:
                 
                 # 2.5 创建新段 (保留原有属性)
                 new_pts = [tuple(p) for p in pts_transformed]
-                new_seg = PathSegment(seg.type, seg.color, new_pts, seg.dwell_ms)
+                
+                if is_obj:
+                    new_seg = PathSegment(seg.type, seg.color, new_pts, seg.dwell_ms)
+                else:
+                    color = 0 # 默认颜色
+                    type_str = 'line' if len(new_pts) > 1 else 'dot'
+                    new_seg = PathSegment(type_str, color, new_pts, 100)
+
                 mold_segments.append(new_seg)
                 
                 # 2.6 绘制 (使用段的颜色)
                 pts_draw = pts_transformed.astype(np.int32)
-                color = seg.get_display_color_bgr() # (B,G,R)
+                color = new_seg.get_display_color_bgr() # (B,G,R)
                 
-                if seg.type == 'dot':
+                if new_seg.type == 'dot':
                     cv2.circle(debug_img, tuple(pts_draw[0]), 4, color, -1)
                 else:
                     cv2.polylines(debug_img, [pts_draw], False, color, 2, cv2.LINE_AA)

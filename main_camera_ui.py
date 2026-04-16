@@ -6321,48 +6321,47 @@ class MainWindow(QWidget):
             ref_center = self.halcon_ref_center
             
             final_template = []
-            
-            # [Fix] Handle PathSegment objects to preserve metadata (Color/Type)
-            # If segments list contains PathSegment objects (from PathSegmentList), use them.
-            # Otherwise (from .npy), they are just numpy arrays.
-            
+            roi_in_ref = None
+            if getattr(self, 'halcon_product_manager', None):
+                roi_in_ref = getattr(self.halcon_product_manager, 'roi_in_reference', None)
+
             from core.path_segment import PathSegment
             
             for seg in segments:
                 # 1. Check type
                 if isinstance(seg, PathSegment):
-                    # It's an object. Extract points.
-                    # Note: seg.points might be list of tuples. Convert to numpy.
                     pts_np = np.array(seg.points, dtype=np.float32)
-                    pts_w = pts_np.reshape(-1, 1, 2)
-                    
-                    # Project Warped -> Raw
-                    pts_raw = cv2.perspectiveTransform(pts_w, Minv).reshape(-1, 2)
-                    
-                    # Subtract ROI Center -> Relative
-                    print(f"[DEBUG Path Edit] Converting path to relative: ref_center={ref_center}, sample_point_before={pts_raw[0] if len(pts_raw)>0 else 'N/A'}")
-                    pts_rel = pts_raw - ref_center
-                    print(f"[DEBUG Path Edit] Sample_point_after={pts_rel[0] if len(pts_rel)>0 else 'N/A'}")
-                    
-                    # Create NEW Segment with transformed points
-                    # (Keep color, dwell, type)
-                    # Store as OBJECT in template list
-                    new_seg = PathSegment(seg.type, seg.color, pts_rel.tolist(), seg.dwell_ms)
-                    # OPTIMIZATION: Store numpy array in points for speed, if downstream supports it?
-                    # BatchWorker checks if hasattr points.
-                    # HalconManager._transform_and_draw_paths expects... wait.
-                    # Let's keep points as List[Tuple] to match class definition, 
-                    # OR hijack it to store numpy if we are careful.
-                    # Safer: Store as object, but maybe add a .points_np attribute?
-                    new_seg.points_np = pts_rel # Attached for calculation convenience
-                    final_template.append(new_seg)
-                    
+                    is_obj = True
                 else:
-                    # Legacy: Just a numpy array
-                    pts_w = seg.reshape(-1, 1, 2)
+                    pts_np = np.array(seg, dtype=np.float32)
+                    is_obj = False
+                
+                if len(pts_np) == 0: 
+                    continue
+
+                # NEW product paths are in ROI coordinates. OLD products are in Warped coordinates.
+                if roi_in_ref:
+                    # ROI Space -> Reference Space -> Relative Space
+                    roi_x = roi_in_ref.get('x', 0)
+                    roi_y = roi_in_ref.get('y', 0)
+                    pts_raw = pts_np + np.array([roi_x, roi_y], dtype=np.float32)
+                    pts_rel = pts_raw - ref_center
+                else:
+                    # Warped Space -> Raw Space -> Relative Space
+                    pts_w = pts_np.reshape(-1, 1, 2)
                     pts_raw = cv2.perspectiveTransform(pts_w, Minv).reshape(-1, 2)
                     pts_rel = pts_raw - ref_center
-                    final_template.append(pts_rel)
+
+                # Create NEW Segment with transformed points
+                if is_obj:
+                    new_seg = PathSegment(seg.type, seg.color, pts_rel.tolist(), getattr(seg, 'dwell_ms', 100))
+                else:
+                    color = 0
+                    type_str = 'line' if len(pts_rel) > 1 else 'dot'
+                    new_seg = PathSegment(type_str, color, pts_rel.tolist(), 100)
+
+                new_seg.points_np = pts_rel # Attached for calculation convenience
+                final_template.append(new_seg)
                 
             self.halcon_path_template = final_template
             print(f"[Halcon] Template computed! {len(final_template)} segments (Mixed Mode).")

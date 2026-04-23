@@ -6218,11 +6218,12 @@ class MainWindow(QWidget):
                 # Fallback to disk (Legacy)
                 # Determine path directory: use product directory if product loaded, else config
                 path_dir = config_dir
-                current_recipe = None
-                if getattr(self, 'halcon_product_manager', None) and self.halcon_product_manager.current_product:
-                    current_recipe = self.halcon_product_manager.current_product
-                else:
-                    current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
+                # [FIX] Always prefer hpm.current_product (updated dynamically in mixed-mode batch)
+                # over the UI label (which stays frozen at the first product's name during background threads)
+                hpm_ref = getattr(self, 'halcon_product_manager', None)
+                current_recipe = (hpm_ref.current_product if hpm_ref and hpm_ref.current_product
+                                  else self.lbl_recipe_name.text().replace("当前配方: ", ""))
+                print(f"[Halcon] Template path-load: using product='{current_recipe}'")
                 if current_recipe and "未加载" not in current_recipe:
                     try:
                         path_dir = self.product_manager.get_product_path(current_recipe)
@@ -6280,11 +6281,13 @@ class MainWindow(QWidget):
             
             # 0. Try Product Image FIRST (If a product is loaded)
             # This is CRITICAL for getting the correct Minv aligned with the Model
-            current_recipe = None
-            if getattr(self, 'halcon_product_manager', None) and self.halcon_product_manager.current_product:
-                current_recipe = self.halcon_product_manager.current_product
-            else:
-                current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
+            # [FIX] Always prefer hpm.current_product over UI label.
+            # In a background batch thread, lbl_recipe_name is NOT updated and still shows
+            # the first product, causing wrong reference image + wrong origin for product 2+.
+            hpm_ref = getattr(self, 'halcon_product_manager', None)
+            current_recipe = (hpm_ref.current_product if hpm_ref and hpm_ref.current_product
+                              else self.lbl_recipe_name.text().replace("当前配方: ", ""))
+            print(f"[Halcon] Template image-load: using product='{current_recipe}'")
             if current_recipe and "未加载" not in current_recipe:
                 try:
                     recipe_img_path = os.path.join(self.product_manager.get_product_path(current_recipe), "reference.png")

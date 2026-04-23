@@ -1,0 +1,194 @@
+{
+  "vision_offset_x": 0.0,
+  "vision_offset_y": 0.0,
+  "exposure": 2.6,
+  "gain": 2.4,
+  "gamma": 2.2,
+  "feedrate_xy": 1000,
+  "feedrate_z": 300,
+  "accel": 452.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 59.0,
+  "safe_z_product": 70.0,
+  "work_z": 100.0,
+  "nozzle_offset_x": -96.9,
+  "nozzle_offset_y": -5.199999999999989,
+  "z_base": 52.599999999999966,
+  "model_file": "n_XX2.shm",
+  "model_row": 1028.0,
+  "model_col": 1483.0,
+  "product_name": "n_XX2",
+  "roi_in_reference": {
+    "x": 738,
+    "y": 292,
+    "width": 1490,
+    "height": 1472
+  },
+  "valve_prefeed_time": 0.1,
+  "valve_a_dispense_time": 0.77,
+  "valve_b_dispense_time": 2.0,
+  "line_speed_xy": 800,
+  "recognized_coordinates": {
+    "segments": [
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1173.12,
+            502.35
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1288.85,
+            582.65
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1837.79,
+            496.84
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1946.07,
+            579.02
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1186.08,
+            1159.56
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1296.22,
+            1234.26
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1845.16,
+            1142.86
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1957.17,
+            1232.49
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 1,
+        "points": [
+          [
+            1133.89,
+            606.89
+          ],
+          [
+            1197.36,
+            681.58
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 1,
+        "points": [
+          [
+            1806.03,
+            599.53
+          ],
+          [
+            1895.64,
+            685.43
+          ],
+          [
+            1897.51,
+            685.43
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 1,
+        "points": [
+          [
+            1105.78,
+            1258.5
+          ],
+          [
+            1255.13,
+            1344.41
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 1,
+        "points": [
+          [
+            1751.79,
+            1247.4
+          ],
+          [
+            1908.6,
+            1350.12
+          ]
+        ],
+        "dwell_ms": 100
+      }
+    ],
+    "timestamp": 1776938961.6119235,
+    "transform_data": {
+      "cx": 1520.35,
+      "cy": 1012.48,
+      "angle": -0.0002,
+      "score": 0.657
+    }
+  }
+}

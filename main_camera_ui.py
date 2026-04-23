@@ -6218,7 +6218,11 @@ class MainWindow(QWidget):
                 # Fallback to disk (Legacy)
                 # Determine path directory: use product directory if product loaded, else config
                 path_dir = config_dir
-                current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
+                current_recipe = None
+                if getattr(self, 'halcon_product_manager', None) and self.halcon_product_manager.current_product:
+                    current_recipe = self.halcon_product_manager.current_product
+                else:
+                    current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
                 if current_recipe and "未加载" not in current_recipe:
                     try:
                         path_dir = self.product_manager.get_product_path(current_recipe)
@@ -6276,7 +6280,11 @@ class MainWindow(QWidget):
             
             # 0. Try Product Image FIRST (If a product is loaded)
             # This is CRITICAL for getting the correct Minv aligned with the Model
-            current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
+            current_recipe = None
+            if getattr(self, 'halcon_product_manager', None) and self.halcon_product_manager.current_product:
+                current_recipe = self.halcon_product_manager.current_product
+            else:
+                current_recipe = self.lbl_recipe_name.text().replace("当前配方: ", "")
             if current_recipe and "未加载" not in current_recipe:
                 try:
                     recipe_img_path = os.path.join(self.product_manager.get_product_path(current_recipe), "reference.png")
@@ -6345,7 +6353,11 @@ class MainWindow(QWidget):
             roi_center = None
             
             # 优先使用保存的model_row/col（ROI训练后的正确origin）
-            if hasattr(self, 'model_ref_row') and hasattr(self, 'model_ref_col'):
+            hpm = getattr(self, 'halcon_product_manager', None)
+            if hpm and hasattr(hpm, 'model_ref_row') and (hpm.model_ref_row != 0 or hpm.model_ref_col != 0):
+                roi_center = np.array([hpm.model_ref_col, hpm.model_ref_row])
+                print(f"[Halcon] ✅ Using HPM model origin: col={hpm.model_ref_col:.2f}, row={hpm.model_ref_row:.2f}")
+            elif hasattr(self, 'model_ref_row') and hasattr(self, 'model_ref_col'):
                 if self.model_ref_row != 0 or self.model_ref_col != 0:
                     roi_center = np.array([self.model_ref_col, self.model_ref_row])  # (col, row) = (X, Y)
                     print(f"[Halcon] ✅ Using saved model origin: col={self.model_ref_col:.2f}, row={self.model_ref_row:.2f}")

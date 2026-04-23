@@ -105,9 +105,10 @@ class BatchWorker(QThread):
         is_mixed = self.cfg.get('mixed_mode', False)
         
         if is_mixed:
-            # Mixed Mode: Assume all colors (0-3) available
+            # Mixed Mode: Initially assume all 4 colors to set up progress bar
+            # We will accurately recalculate this after Phase 1 finishes!
             active_colors = {0, 1, 2, 3}
-            self.mw.log(f"[Batch] Mixed Mode Enabled: Using all color channels [0, 1, 2, 3]")
+            self.mw.log(f"[Batch] Mixed Mode Enabled: Initially reserving 4 colors.")
         else:
             # Standard Mode: Check current loaded template
             if not getattr(self.mw, 'halcon_path_template', None):
@@ -126,7 +127,9 @@ class BatchWorker(QThread):
         sorted_colors = sorted(list(active_colors)) if active_colors else [0]
         if not sorted_colors: sorted_colors = [0]
         
-        total_ops = total_molds * len(sorted_colors)
+        total_scan_ops = total_molds
+        total_dispense_ops = total_molds * len(sorted_colors)
+        total_ops = total_scan_ops + total_dispense_ops
         ops_finished = 0
         RESOLUTION = 1000
         global_total_steps = total_ops * RESOLUTION
@@ -139,11 +142,12 @@ class BatchWorker(QThread):
         title = mode_names.get(self.mode, "未知模式")
 
         self.log_signal.emit(f"🚀 开始【{title}】：{rows}x{cols}，共 {len(sorted_colors)} 种颜色")
+        self.log_signal.emit(f"📸 阶段1：全局扫描所有模具 ({total_molds} 个)...")
         
         self.mw.show_center_crosshair = True
         self.mw.render_current_frame() 
 
-        # Vision Cache: Stores (r, c) -> (paths_groups, current_x, current_y)
+        # Vision Cache: Stores (r, c) -> (paths_groups, current_x, current_y, product_name)
         vision_cache = {}
 
         # 1. 确保 Z 轴抬起
@@ -155,10 +159,110 @@ class BatchWorker(QThread):
         self.mw.machine.move_to(z=safe_z, speed=self.mw.feedrate_z)
         self.log_signal.emit(f"🔼 抬升至安全高度 Z={safe_z}")
 
-        # --- Outer Loop: Colors ---
+        # ========================================================
+        # Phase 1: Global Scan Loop
+        # ========================================================
+        for r in range(rows):
+            for c in range(cols):
+                if not self.running:
+                    self.finished_signal.emit(False, "用户停止")
+                    return
+
+                while self.paused:
+                    if not self.running: return
+                    self.msleep(100)
+
+                current_base_progress = ops_finished * RESOLUTION
+                self.progress_signal.emit(current_base_progress, global_total_steps)
+
+                cache_key = (r, c)
+                target_x = start_x + c * space_x
+                target_y = start_y + r * space_y
+                
+                self.log_signal.emit(f"📍 [{ops_finished + 1}/{total_ops}] (R{r}, C{c}) 首次定位 & 识别...")
+                
+                # Move Camera
+                self.mw.machine.move_to(x=target_x, y=target_y, speed=self.mw.feedrate_xy)
+                
+                cam_work_z = float(self.cfg.get('cam_work_z', 0.0))
+                self.mw.machine.move_to(z=cam_work_z, speed=self.mw.feedrate_z)
+                self.mw.machine.wait_until_idle()
+                
+                # 增加稳定时间，保证相机对焦和曝光稳定 (由 0.5 改为 1.2)
+                time.sleep(1.2) 
+
+                if self.mw.last_frame is None:
+                    self.log_signal.emit("❌ 无法获取图像，跳过")
+                    self._safe_lift_z()
+                    vision_cache[cache_key] = None
+                    ops_finished += 1
+                    continue
+
+                img = self.mw.last_frame.copy()
+                img = cv2.flip(img, -1)
+                if len(img.shape) == 3: gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                else: gray_img = img
+
+                # [NEW] Mixed Mode Logic: Detect Product First
+                is_mixed = self.cfg.get('mixed_mode', False)
+                if is_mixed:
+                    self.log_signal.emit(f"🔍 [混合模式] 正在识别最佳产品...")
+                    all_prods = self.mw.product_manager.list_products()
+                    best_prod, score = self.mw.halcon_product_manager.find_best_match_product(gray_img, all_prods)
+                    
+                    if best_prod and score > 0.4: # Lower threshold to 0.4
+                        self.log_signal.emit(f"✅ (R{r}C{c}) 识别到产品 [{best_prod}] (Score: {score:.2f})")
+                        # 加载该产品
+                        ok, msg = self.mw.halcon_product_manager.load_product(best_prod)
+                        if ok:
+                            # 重要：更新主界面模板缓存，否则后续识别会用旧模板
+                            self.mw._compute_halcon_template()
+                        else:
+                            self.log_signal.emit(f"❌ 加载产品失败: {msg}")
+                    else:
+                        self.log_signal.emit(f"⚠️ (R{r}C{c}) 未能识别已知产品 (Best: {best_prod}, Score: {score:.2f})")
+                        # 可能会继续用当前产品尝试，或者跳过
+                
+                paths_groups, _ = self.mw.get_vision_result(gray_img)
+                
+                if not paths_groups:
+                    self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})")
+                    vision_cache[cache_key] = None # Mark as processed but empty
+                else:
+                    self.path_update_signal.emit(paths_groups)
+                    # Store in cache (including product name for mixed mode)
+                    current_product = getattr(self.mw.halcon_product_manager, 'current_product', None)
+                    vision_cache[cache_key] = (paths_groups, target_x, target_y, current_product)
+                    
+                # Lift after vision
+                self._safe_lift_z()
+                ops_finished += 1
+                
+        self.log_signal.emit("✅ 阶段1扫描完成，准备开始点胶...")
+
+        # --- 重新统计所有模具中实际存在的颜色 ---
+        actual_colors = set()
+        for key, cached_data in vision_cache.items():
+            if cached_data:
+                paths_groups, _, _, _ = cached_data
+                for group in paths_groups:
+                    if hasattr(group, 'color'):
+                        actual_colors.add(group.color)
+        
+        if actual_colors:
+            sorted_colors = sorted(list(actual_colors))
+            self.log_signal.emit(f"📊 扫描汇总：实际需要点胶的颜色共 {len(sorted_colors)} 种。")
+            # 动态调整进度条总量
+            total_dispense_ops = total_molds * len(sorted_colors)
+            total_ops = total_scan_ops + total_dispense_ops
+            global_total_steps = total_ops * RESOLUTION
+
+        # ========================================================
+        # Phase 2: Dispense by Color Loop
+        # ========================================================
         for color_pos, color_idx in enumerate(sorted_colors):
             color_name = self._color_name(color_idx)
-            self.log_signal.emit(f"🎨 正在处理颜色: {color_name} ...")
+            self.log_signal.emit(f"🎨 阶段2：正在处理颜色: {color_name} ...")
             
             # --- Inner Loop: Grid ---
             for r in range(rows):
@@ -174,130 +278,45 @@ class BatchWorker(QThread):
                     current_base_progress = ops_finished * RESOLUTION
                     self.progress_signal.emit(current_base_progress, global_total_steps)
 
-                    # Determine if we have cached data
                     cache_key = (r, c)
-                    has_cache = cache_key in vision_cache
+                    cached_data = vision_cache.get(cache_key)
                     
-                    target_x = start_x + c * space_x
-                    target_y = start_y + r * space_y
-                    
-                    paths_groups = []
-                    
-                    if not has_cache:
-                        # --- First Pass (Vision) ---
-                        self.log_signal.emit(f"📍 [{ops_finished + 1}/{total_ops}] (R{r}, C{c}) 首次定位 & 识别...")
+                    if not cached_data:
+                        ops_finished += 1
+                        continue
                         
-                        # [FIX] Set current_x/y for this iteration
-                        current_x = target_x
-                        current_y = target_y
-                        
-                        # Move Camera
-                        self.mw.machine.move_to(x=target_x, y=target_y, speed=self.mw.feedrate_xy)
-                        
-                        cam_work_z = float(self.cfg.get('cam_work_z', 0.0))
-                        self.mw.machine.move_to(z=cam_work_z, speed=self.mw.feedrate_z)
-                        self.mw.machine.wait_until_idle()
-                        time.sleep(0.5) 
-
-                        if self.mw.last_frame is None:
-                            self.log_signal.emit("❌ 无法获取图像，跳过")
-                            self._safe_lift_z()
-                            ops_finished += 1
-                            continue
-
-                        img = self.mw.last_frame.copy()
-                        img = cv2.flip(img, -1)
-                        if len(img.shape) == 3: gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                        else: gray_img = img
-
-                        # [NEW] Mixed Mode Logic: Detect Product First
-                        is_mixed = self.cfg.get('mixed_mode', False)
-                        if is_mixed:
-                            self.log_signal.emit(f"🔍 [混合模式] 正在识别最佳产品...")
-                            all_prods = self.mw.product_manager.list_products()
-                            best_prod, score = self.mw.halcon_product_manager.find_best_match_product(gray_img, all_prods)
-                            
-                            if best_prod and score > 0.4: # Lower threshold to 0.4
-                                self.log_signal.emit(f"✅ (R{r}C{c}) 识别到产品 [{best_prod}] (Score: {score:.2f})")
-                                # 加载该产品
-                                ok, msg = self.mw.halcon_product_manager.load_product(best_prod)
-                                if ok:
-                                    # 重要：更新主界面模板缓存，否则后续识别会用旧模板
-                                    self.mw._compute_halcon_template()
-                                else:
-                                    self.log_signal.emit(f"❌ 加载产品失败: {msg}")
-                            else:
-                                self.log_signal.emit(f"⚠️ (R{r}C{c}) 未能识别已知产品 (Best: {best_prod}, Score: {score:.2f})")
-                                # 可能会继续用当前产品尝试，或者跳过
-                        
-                        paths_groups, _ = self.mw.get_vision_result(gray_img)
-                        
-                        if not paths_groups:
-                            self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})")
-                            vision_cache[cache_key] = None # Mark as processed but empty
-                        else:
-                            self.path_update_signal.emit(paths_groups)
-                            # Store in cache (including product name for mixed mode)
-                            current_product = getattr(self.mw.halcon_product_manager, 'current_product', None)
-                            vision_cache[cache_key] = (paths_groups, target_x, target_y, current_product)
-                            
-                        # Lift after vision
-                        self._safe_lift_z()
-                        
+                    # Unpack cache (now includes product name)
+                    if len(cached_data) == 4:
+                        paths_groups, cached_x, cached_y, cached_product = cached_data
                     else:
-                        # --- Subsequent Passes (Use Cache) ---
-                        cached_data = vision_cache[cache_key]
-                        if cached_data is None:
-                            # Previous vision failed or empty
-                            ops_finished += 1
-                            continue
-                        
-                        # Unpack cache (now includes product name)
-                        if len(cached_data) == 4:
-                            paths_groups, cached_x, cached_y, cached_product = cached_data
-                        else:
-                            # Backward compatibility (old cache format)
-                            paths_groups, cached_x, cached_y = cached_data
-                            cached_product = None
-                        
-                        # [FIX] Update current_x/y to cached coordinates
-                        current_x = cached_x
-                        current_y = cached_y
-                        
-                        # [NEW] In Mixed Mode, reload product and update path visualization
-                        is_mixed = self.cfg.get('mixed_mode', False)
-                        if is_mixed and cached_product:
-                            # Check if we need to switch products
-                            current_loaded = getattr(self.mw.halcon_product_manager, 'current_product', None)
-                            if current_loaded != cached_product:
-                                # Load cached product
-                                ok, msg = self.mw.halcon_product_manager.load_product(cached_product)
-                                if ok:
-                                    self.mw._compute_halcon_template()
-                                    
-                            # Always update path visualization when returning to a position
-                            # Use cached paths_groups for visualization
-                            if paths_groups:
-                                self.path_update_signal.emit(paths_groups)
-
-                    if not paths_groups and has_cache:
-                         cached_data = vision_cache[cache_key]
-                         if cached_data:
-                             # Handle both old (3-tuple) and new (4-tuple) cache formats
-                             if len(cached_data) >= 3:
-                                 paths_groups = cached_data[0]  # paths_groups is always first element
+                        # Backward compatibility (old cache format)
+                        paths_groups, cached_x, cached_y = cached_data
+                        cached_product = None
                     
+                    current_x = cached_x
+                    current_y = cached_y
+                    
+                    # [NEW] In Mixed Mode, reload product and update path visualization
+                    is_mixed = self.cfg.get('mixed_mode', False)
+                    if is_mixed and cached_product:
+                        # Check if we need to switch products
+                        current_loaded = getattr(self.mw.halcon_product_manager, 'current_product', None)
+                        if current_loaded != cached_product:
+                            # Load cached product
+                            ok, msg = self.mw.halcon_product_manager.load_product(cached_product)
+                            if ok:
+                                self.mw._compute_halcon_template()
+                                
+                        # Always update path visualization when returning to a position
+                        # Use cached paths_groups for visualization
+                        if paths_groups:
+                            self.path_update_signal.emit(paths_groups)
+
                     if not paths_groups:
                         ops_finished += 1
                         continue
 
                     # Filter paths for CURRENT COLOR
-                    # paths_groups is List[List[Path]]. Usually 1 product per vision result unless multi-mold in one view.
-                    # Flatten or iterate?
-                    # The `generate_dispense_gcode` expects `paths_groups`.
-                    # We can filter IN PLACE or pass color to generator.
-                    # Better: Filter here.
-                    
                     filtered_groups = []
                     has_work = False
                     for prod_paths in paths_groups:
@@ -326,7 +345,6 @@ class BatchWorker(QThread):
 
                     try:
                         # Generate G-code ONLY for this color
-                        # [FIX] Use current_x / current_y (which are updated from cache or current target)
                         gcode_lines = self.generate_dispense_gcode(filtered_groups, current_x, current_y, target_color=color_idx)
                         
                         if gcode_lines:
@@ -353,8 +371,6 @@ class BatchWorker(QThread):
                                 self.mw.machine._post_gcode(line)
                             
                             self.mw.machine.wait_until_idle()
-                            # Lift after dispense (already handled in generate? check safe lift)
-                            # self._safe_lift_z() # generate_dispense_gcode ends with safe lift
                     except Exception as e:
                         self.log_signal.emit(f"❌ 执行出错: {e}")
                         self._safe_lift_z()
@@ -362,15 +378,12 @@ class BatchWorker(QThread):
                     ops_finished += 1
             
             # End of Grid Loop (One Color Finished)
-            # Maybe return to Safe Z or Origin?
             self._safe_lift_z()
             self.log_signal.emit(f"✅ {color_name} 批次完成")
 
-            # Optional color-change checkpoint for nozzle/real modes.
-            # camera_dry mode keeps running continuously.
+            # Optional color-change checkpoint for both nozzle and camera modes.
             need_checkpoint = (
-                self.mode != 'camera_dry'
-                and bool(self.cfg.get('enable_color_change_pause', True))
+                bool(self.cfg.get('enable_color_change_pause', True))
                 and color_pos < (len(sorted_colors) - 1)
             )
             if need_checkpoint:

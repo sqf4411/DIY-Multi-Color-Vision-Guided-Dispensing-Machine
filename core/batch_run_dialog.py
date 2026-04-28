@@ -457,8 +457,13 @@ class BatchWorker(QThread):
         lines = []
         lines.append("G90") # 绝对模式
         
-        # 初始抬升到产品安全高度 (最高)
-        lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
+        # 先 XY 移动到本模具中心上方（此时仍在相机扫描安全高度，最高最安全）
+        # 再下探到产品安全高度 —— 保证横向移动时 Z 不会碰到模具
+        mold_center_x = current_x + off_x
+        mold_center_y = current_y + off_y
+        lines.append(f"G0 X{mold_center_x:.3f} Y{mold_center_y:.3f} F{speed_xy}  ; XY 先到模具中心上方")
+        lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}  ; 到位后再下探至产品安全高度")
+
 
         # [Fix] Initialize state
         active_color_valve = None

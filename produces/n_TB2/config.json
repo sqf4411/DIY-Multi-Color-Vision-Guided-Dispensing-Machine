@@ -18,5 +18,154 @@
   "valve_prefeed_time": 0.1,
   "valve_a_dispense_time": 0.77,
   "valve_b_dispense_time": 2.0,
-  "line_speed_xy": 800
+  "line_speed_xy": 800,
+  "recognized_coordinates": {
+    "segments": [
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1027.59,
+            525.88
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1311.45,
+            527.81
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1315.21,
+            824.92
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1686.15,
+            516.49
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1954.88,
+            514.63
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1973.78,
+            811.74
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1036.98,
+            1192.02
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1324.63,
+            1190.16
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1330.28,
+            1491.06
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1703.12,
+            1176.95
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1981.31,
+            1178.88
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 0,
+        "points": [
+          [
+            1986.95,
+            1472.21
+          ]
+        ],
+        "dwell_ms": 100
+      }
+    ],
+    "timestamp": 1777362316.797074,
+    "transform_data": {
+      "cx": 1488.89,
+      "cy": 1025.81,
+      "angle": -0.0001,
+      "score": 0.6872
+    }
+  },
+  "roi_in_reference": {
+    "x": 732,
+    "y": 272,
+    "width": 1555,
+    "height": 1492
+  }
 }

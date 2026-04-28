@@ -654,6 +654,44 @@ class LaserMeasureWorker(QThread):
                 pass
             self.finished_signal.emit(False, str(e))
 
+class ReturnToInitialWorker(QThread):
+    """
+    激光测高完成后，以指定速度将机器后台返回初始位置，
+    不阻塞主线程，确保相机画面持续刷新。
+    """
+    finished_signal = pyqtSignal(bool)  # success
+    log_signal      = pyqtSignal(str)
+
+    def __init__(self, machine, ix, iy, iz, safe_z, feedrate_xy, feedrate_z):
+        super().__init__()
+        self.machine      = machine
+        self.ix           = ix
+        self.iy           = iy
+        self.iz           = iz
+        self.safe_z       = safe_z
+        self.feedrate_xy  = feedrate_xy
+        self.feedrate_z   = feedrate_z
+
+    def run(self):
+        try:
+            fxy = int(self.feedrate_xy)
+            fz  = int(self.feedrate_z)
+            self.log_signal.emit(f"🔄 正在返回初始位置 (XY F={fxy}, Z F={fz})...")
+            # 1. 先抬升到测高安全高度
+            self.machine.send_gcode(f"G0 Z{self.safe_z:.2f} F{fz}")
+            self.machine.wait_until_idle()
+            # 2. 移回初始 XY
+            self.machine.send_gcode(f"G0 X{self.ix:.2f} Y{self.iy:.2f} F{fxy}")
+            self.machine.wait_until_idle()
+            # 3. 降回初始 Z
+            self.machine.send_gcode(f"G0 Z{self.iz:.2f} F{fz}")
+            self.machine.wait_until_idle()
+            self.log_signal.emit("✅ 已返回初始位置")
+            self.finished_signal.emit(True)
+        except Exception as e:
+            self.log_signal.emit(f"⚠️ 返回初始位置失败: {e}")
+            self.finished_signal.emit(False)
+
 ######## 滚轮
 class ImageLabel(QLabel):
     """支持滚轮缩放 + 左键拖拽的 QLabel"""
@@ -2681,47 +2719,50 @@ class MainWindow(QWidget):
             except Exception as e:
                 self.log(f"❌ 保存激光数据失败: {e}")
 
-            # [修复] 测量完成后回到初始位置（包裹 try/except 防止 wait_until_idle 异常阻断后续弹窗）
-            return_ok = False
+            # [修复] 先把结果缓存到实例变量，然后启动后台线程回初始位。
+            # 回位完成信号触发 _on_laser_return_finished，再弹结果框。
+            # 这样主线程不被阻塞，相机画面持续刷新，速度也受控。
+            self._laser_result_total_pts  = count     if 'count'     in locals() else 0
+            self._laser_result_avg_depth  = avg_depth if 'avg_depth' in locals() else 0.0
+            self._laser_result_avg_z      = avg_z     if 'avg_z'     in locals() else 0.0
+
             if hasattr(self, 'laser_initial_pos') and self.laser_initial_pos:
                 ix, iy, iz = self.laser_initial_pos
-                self.log(f"🔄 正在返回初始位置: X={ix:.2f}, Y={iy:.2f}, Z={iz:.2f}")
-                try:
-                    # 先抬升到测高安全高度
-                    self.machine.send_gcode(f"G0 Z{self.laser_measure_z:.2f}")
-                    self.machine.wait_until_idle()
-                    # 移动XY
-                    self.machine.send_gcode(f"G0 X{ix:.2f} Y{iy:.2f}")
-                    self.machine.wait_until_idle()
-                    # 降下Z
-                    self.machine.send_gcode(f"G0 Z{iz:.2f}")
-                    self.machine.wait_until_idle()
-                    self.laser_initial_pos = None
-                    return_ok = True
-                    self.log("✅ 已返回初始位置")
-                except Exception as e_ret:
-                    self.log(f"⚠️ 返回初始位置失败: {e_ret}")
+                self.laser_initial_pos = None
+                self._return_worker = ReturnToInitialWorker(
+                    self.machine,
+                    ix, iy, iz,
+                    self.laser_measure_z,
+                    getattr(self, 'feedrate_xy', 3000),
+                    getattr(self, 'feedrate_z',  600)
+                )
+                self._return_worker.log_signal.connect(self.log)
+                self._return_worker.finished_signal.connect(self._on_laser_return_finished)
+                self._return_worker.start()
+                self.log(f"🔄 后台返回初始位置: X={ix:.2f}, Y={iy:.2f}, Z={iz:.2f}")
             else:
-                return_ok = True  # 无初始位置记录，视为"不需要返回"
-
-            # 提取上面计算好的结果（如果在except里失败也能显示默认值）
-            total_pts = count if 'count' in locals() else 0
-            adpth = avg_depth if 'avg_depth' in locals() else 0.0
-            az = avg_z if 'avg_z' in locals() else 0.0
-
-            return_note = "机器已返回初始位置。" if return_ok else "⚠️ 返回初始位置失败，请手动归位。"
-            msg_box_text = (
-                f"激光测高完成！\n\n"
-                f"所有点测量完毕：共 {total_pts} 点\n"
-                f"平均深度：{adpth:.3f} mm\n"
-                f"平均Z高度：{az:.3f} mm\n\n"
-                f"数据已保存到配方，{return_note}"
-            )
-            QMessageBox.information(self, "完成", msg_box_text)
-            self.log("✅ 激光测高全部完成")
+                # 无初始位置记录，直接弹窗
+                self._on_laser_return_finished(True)
         else:
             QMessageBox.warning(self, "中断", f"测量中断: {msg}")
             self.log(f"❌ 测量中断: {msg}")
+
+    def _on_laser_return_finished(self, return_ok: bool):
+        """回初始位后台线程结束后的回调：弹出最终结果对话框"""
+        total_pts = getattr(self, '_laser_result_total_pts',  0)
+        adpth     = getattr(self, '_laser_result_avg_depth', 0.0)
+        az        = getattr(self, '_laser_result_avg_z',     0.0)
+
+        return_note = "机器已返回初始位置。" if return_ok else "⚠️ 返回初始位置失败，请手动归位。"
+        msg_box_text = (
+            f"激光测高完成！\n\n"
+            f"所有点测量完毕：共 {total_pts} 点\n"
+            f"平均深度：{adpth:.3f} mm\n"
+            f"平均Z高度：{az:.3f} mm\n\n"
+            f"数据已保存到配方，{return_note}"
+        )
+        QMessageBox.information(self, "完成", msg_box_text)
+        self.log("✅ 激光测高全部完成")
 
 
 

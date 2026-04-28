@@ -1,194 +1,241 @@
 {
-  "vision_offset_x": 0.0,
-  "vision_offset_y": 0.0,
-  "exposure": 2.6,
-  "gain": 2.4,
-  "gamma": 2.2,
-  "feedrate_xy": 1000,
-  "feedrate_z": 300,
-  "accel": 452.0,
-  "jog_step_mm": 1.0,
-  "safe_z_cavity": 59.0,
-  "safe_z_product": 70.0,
-  "work_z": 100.0,
-  "nozzle_offset_x": -96.9,
-  "nozzle_offset_y": -5.199999999999989,
-  "z_base": 52.599999999999966,
-  "model_file": "n_XX2.shm",
-  "model_row": 1028.0,
-  "model_col": 1483.0,
-  "product_name": "n_XX2",
-  "roi_in_reference": {
-    "x": 738,
-    "y": 292,
-    "width": 1490,
-    "height": 1472
-  },
-  "valve_prefeed_time": 0.1,
-  "valve_a_dispense_time": 0.77,
-  "valve_b_dispense_time": 2.0,
-  "line_speed_xy": 800,
-  "recognized_coordinates": {
-    "segments": [
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1173.12,
-            502.35
-          ]
+    "vision_offset_x": 0.0,
+    "vision_offset_y": 0.0,
+    "exposure": 2.6,
+    "gain": 2.4,
+    "gamma": 2.2,
+    "feedrate_xy": 1000,
+    "feedrate_z": 300,
+    "accel": 452.0,
+    "jog_step_mm": 1.0,
+    "safe_z_cavity": 59.0,
+    "safe_z_product": 70.0,
+    "work_z": 100.0,
+    "nozzle_offset_x": -96.9,
+    "nozzle_offset_y": -5.199999999999989,
+    "z_base": 52.599999999999966,
+    "model_file": "n_XX2.shm",
+    "model_row": 1028.0,
+    "model_col": 1483.0,
+    "product_name": "n_XX2",
+    "roi_in_reference": {
+        "x": 738,
+        "y": 292,
+        "width": 1490,
+        "height": 1472
+    },
+    "valve_prefeed_time": 0.1,
+    "valve_a_dispense_time": 0.77,
+    "valve_b_dispense_time": 2.0,
+    "line_speed_xy": 800,
+    "recognized_coordinates": {
+        "segments": [
+            {
+                "type": "dot",
+                "color": 0,
+                "points": [
+                    [
+                        1193.01,
+                        517.49
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "dot",
+                "color": 0,
+                "points": [
+                    [
+                        1308.71,
+                        597.84
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "dot",
+                "color": 0,
+                "points": [
+                    [
+                        1857.69,
+                        512.31
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "dot",
+                "color": 0,
+                "points": [
+                    [
+                        1965.93,
+                        594.54
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "dot",
+                "color": 0,
+                "points": [
+                    [
+                        1205.66,
+                        1174.71
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "dot",
+                "color": 0,
+                "points": [
+                    [
+                        1315.76,
+                        1249.46
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "dot",
+                "color": 0,
+                "points": [
+                    [
+                        1864.74,
+                        1158.32
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "dot",
+                "color": 0,
+                "points": [
+                    [
+                        1976.71,
+                        1248.01
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "line",
+                "color": 1,
+                "points": [
+                    [
+                        1153.74,
+                        622.01
+                    ],
+                    [
+                        1217.17,
+                        696.73
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "line",
+                "color": 1,
+                "points": [
+                    [
+                        1825.88,
+                        614.98
+                    ],
+                    [
+                        1915.45,
+                        700.92
+                    ],
+                    [
+                        1917.32,
+                        700.93
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "line",
+                "color": 1,
+                "points": [
+                    [
+                        1125.31,
+                        1273.6
+                    ],
+                    [
+                        1274.62,
+                        1359.59
+                    ]
+                ],
+                "dwell_ms": 100
+            },
+            {
+                "type": "line",
+                "color": 1,
+                "points": [
+                    [
+                        1771.32,
+                        1262.82
+                    ],
+                    [
+                        1928.09,
+                        1365.61
+                    ]
+                ],
+                "dwell_ms": 100
+            }
         ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
+        "timestamp": 1777361098.8402548,
+        "transform_data": {
+            "cx": 1539.99,
+            "cy": 1027.79,
+            "angle": -0.0006,
+            "score": 0.5981
+        }
+    },
+    "laser_data": {
+        "timestamp": 1777361137.3865006,
         "points": [
-          [
-            1288.85,
-            582.65
-          ]
+            {
+                "x": 185.08,
+                "y": 111.68,
+                "depth": 6.366820276497703
+            },
+            {
+                "x": 189.22,
+                "y": 108.76,
+                "depth": 8.11059907834102
+            },
+            {
+                "x": 209.0,
+                "y": 111.74,
+                "depth": 6.2599078341013845
+            },
+            {
+                "x": 212.87,
+                "y": 108.75,
+                "depth": 5.957603686635949
+            },
+            {
+                "x": 185.33,
+                "y": 88.0,
+                "depth": 7.893087557603691
+            },
+            {
+                "x": 189.27,
+                "y": 85.29,
+                "depth": 7.620276497695857
+            },
+            {
+                "x": 209.06,
+                "y": 88.46,
+                "depth": 9.253456221198162
+            },
+            {
+                "x": 213.06,
+                "y": 85.21,
+                "depth": 4.92903225806452
+            }
         ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1837.79,
-            496.84
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1946.07,
-            579.02
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1186.08,
-            1159.56
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1296.22,
-            1234.26
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1845.16,
-            1142.86
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "dot",
-        "color": 0,
-        "points": [
-          [
-            1957.17,
-            1232.49
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "line",
-        "color": 1,
-        "points": [
-          [
-            1133.89,
-            606.89
-          ],
-          [
-            1197.36,
-            681.58
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "line",
-        "color": 1,
-        "points": [
-          [
-            1806.03,
-            599.53
-          ],
-          [
-            1895.64,
-            685.43
-          ],
-          [
-            1897.51,
-            685.43
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "line",
-        "color": 1,
-        "points": [
-          [
-            1105.78,
-            1258.5
-          ],
-          [
-            1255.13,
-            1344.41
-          ]
-        ],
-        "dwell_ms": 100
-      },
-      {
-        "type": "line",
-        "color": 1,
-        "points": [
-          [
-            1751.79,
-            1247.4
-          ],
-          [
-            1908.6,
-            1350.12
-          ]
-        ],
-        "dwell_ms": 100
-      }
-    ],
-    "timestamp": 1776938961.6119235,
-    "transform_data": {
-      "cx": 1520.35,
-      "cy": 1012.48,
-      "angle": -0.0002,
-      "score": 0.657
+        "avg_depth": 7.048847926267285,
+        "avg_z": 59.64884792626725
     }
-  }
 }

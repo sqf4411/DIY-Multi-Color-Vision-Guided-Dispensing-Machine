@@ -2681,32 +2681,41 @@ class MainWindow(QWidget):
             except Exception as e:
                 self.log(f"❌ 保存激光数据失败: {e}")
 
-            # [新增] 测量完成后回到初始位置
+            # [修复] 测量完成后回到初始位置（包裹 try/except 防止 wait_until_idle 异常阻断后续弹窗）
+            return_ok = False
             if hasattr(self, 'laser_initial_pos') and self.laser_initial_pos:
                 ix, iy, iz = self.laser_initial_pos
                 self.log(f"🔄 正在返回初始位置: X={ix:.2f}, Y={iy:.2f}, Z={iz:.2f}")
-                # 先抬升到测高安全高度
-                self.machine.send_gcode(f"G0 Z{self.laser_measure_z:.2f}")
-                self.machine.wait_idle()
-                # 移动XY
-                self.machine.send_gcode(f"G0 X{ix:.2f} Y{iy:.2f}")
-                self.machine.wait_idle()
-                # 降下Z
-                self.machine.send_gcode(f"G0 Z{iz:.2f}")
-                self.machine.wait_idle()
-                self.laser_initial_pos = None
+                try:
+                    # 先抬升到测高安全高度
+                    self.machine.send_gcode(f"G0 Z{self.laser_measure_z:.2f}")
+                    self.machine.wait_until_idle()
+                    # 移动XY
+                    self.machine.send_gcode(f"G0 X{ix:.2f} Y{iy:.2f}")
+                    self.machine.wait_until_idle()
+                    # 降下Z
+                    self.machine.send_gcode(f"G0 Z{iz:.2f}")
+                    self.machine.wait_until_idle()
+                    self.laser_initial_pos = None
+                    return_ok = True
+                    self.log("✅ 已返回初始位置")
+                except Exception as e_ret:
+                    self.log(f"⚠️ 返回初始位置失败: {e_ret}")
+            else:
+                return_ok = True  # 无初始位置记录，视为"不需要返回"
 
             # 提取上面计算好的结果（如果在except里失败也能显示默认值）
             total_pts = count if 'count' in locals() else 0
             adpth = avg_depth if 'avg_depth' in locals() else 0.0
             az = avg_z if 'avg_z' in locals() else 0.0
 
+            return_note = "机器已返回初始位置。" if return_ok else "⚠️ 返回初始位置失败，请手动归位。"
             msg_box_text = (
                 f"激光测高完成！\n\n"
                 f"所有点测量完毕：共 {total_pts} 点\n"
                 f"平均深度：{adpth:.3f} mm\n"
                 f"平均Z高度：{az:.3f} mm\n\n"
-                f"数据已保存到配方，机器已返回初始位置。"
+                f"数据已保存到配方，{return_note}"
             )
             QMessageBox.information(self, "完成", msg_box_text)
             self.log("✅ 激光测高全部完成")

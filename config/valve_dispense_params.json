@@ -1,11 +1,11 @@
 {
   "version": "1.0",
-  "last_updated": "2026-04-23 18:10:48",
+  "last_updated": "2026-04-28 15:24:54",
   "parameters": {
     "prefeed_time": 0.1,
     "valve_a_dispense_time": 0.77,
     "valve_b_dispense_time": 2.0,
     "line_speed_xy": 800
   },
-  "notes": "Loaded from product 'n_TB2'"
+  "notes": "Loaded from product 'n_XX2'"
 }

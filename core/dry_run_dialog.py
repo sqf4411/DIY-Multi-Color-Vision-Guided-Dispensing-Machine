@@ -256,9 +256,9 @@ class DryRunDialog(QDialog):
         self.machine_paths = [] # [NEW] Reset paths
         gcode_lines = []
         gcode_lines.append("G90")
-        # 初始：确保 Z 在安全高度（机器当前位置应高于产品安全高度）
-        # XY 移动将在此高度进行，到达每个产品上方后再逐级下降
-        gcode_lines.append(f"G0 Z{self.origin_z:.2f} F{self.speed_z}  ; 确保初始安全高度")
+        # 初始：确保 Z 在安全高度（取当前位置与产品安全高度的最大值，保证 XY 移动时不撞车）
+        initial_safe_z = max(getattr(self, 'origin_z', self.safe_z_product), self.safe_z_product)
+        gcode_lines.append(f"G0 Z{initial_safe_z:.2f} F{self.speed_z}  ; 确保初始安全高度 ≥ 产品安全高度")
 
         # [NEW] Color-First Logic
         all_colors = set()

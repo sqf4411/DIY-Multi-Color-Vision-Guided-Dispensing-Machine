@@ -150,14 +150,12 @@ class BatchWorker(QThread):
         # Vision Cache: Stores (r, c) -> (paths_groups, current_x, current_y, product_name)
         vision_cache = {}
 
-        # 1. 确保 Z 轴抬起
-        if self.mode == 'camera_dry':
-            safe_z = float(self.cfg['cam_safe_z_cavity'])
-        else:
-            safe_z = float(self.cfg['nozzle_safe_z_cavity'])
+        # 1. 扫描阶段始终用相机移动安全高度（无论 camera_dry 还是 nozzle_dry）
+        #    Phase1 扫描由相机完成，XY 移动必须在相机移动安全高度
+        cam_scan_safe_z = float(self.mw.cam_safe_z_product or 0.0)
+        self.mw.machine.move_to(z=cam_scan_safe_z, speed=self.mw.feedrate_z)
+        self.log_signal.emit(f"🔼 [扫描阶段] 抬升至相机移动安全高度 Z={cam_scan_safe_z}")
 
-        self.mw.machine.move_to(z=safe_z, speed=self.mw.feedrate_z)
-        self.log_signal.emit(f"🔼 抬升至安全高度 Z={safe_z}")
 
         # ========================================================
         # Phase 1: Global Scan Loop
@@ -181,10 +179,11 @@ class BatchWorker(QThread):
                 
                 self.log_signal.emit(f"📍 [{ops_finished + 1}/{total_ops}] (R{r}, C{c}) 首次定位 & 识别...")
                 
-                # Move Camera
+                # 移动到扫描位置（XY在相机移动安全高度，不会触碰模具）
                 self.mw.machine.move_to(x=target_x, y=target_y, speed=self.mw.feedrate_xy)
-                
-                cam_work_z = float(self.cfg.get('cam_work_z', 0.0))
+
+                # 降到相机工作高度（对焦高度）进行扫描
+                cam_work_z = float(self.mw.cam_work_z or 0.0)
                 self.mw.machine.move_to(z=cam_work_z, speed=self.mw.feedrate_z)
                 self.mw.machine.wait_until_idle()
                 
@@ -234,8 +233,8 @@ class BatchWorker(QThread):
                     current_product = getattr(self.mw.halcon_product_manager, 'current_product', None)
                     vision_cache[cache_key] = (paths_groups, target_x, target_y, current_product)
                     
-                # Lift after vision
-                self._safe_lift_z()
+                # 扫描后抬回相机移动安全高度（为下一个模具的 XY 移动做准备）
+                self.mw.machine.move_to(z=cam_scan_safe_z, speed=self.mw.feedrate_z)
                 ops_finished += 1
                 
         self.log_signal.emit("✅ 阶段1扫描完成，准备开始点胶...")
@@ -435,21 +434,21 @@ class BatchWorker(QThread):
         h_img, w_img = self.mw.last_frame.shape[:2]
         center_x, center_y = w_img / 2, h_img / 2
         
-        # 根据模式选择参数
+        # 根据模式选择参数（始终从主界面/当前配方读取，支持混合模式切换产品）
         if self.mode == 'camera_dry':
             # 相机空跑：无偏移，用相机高度
             off_x, off_y = 0.0, 0.0
-            safe_z_cavity = float(self.cfg['cam_safe_z_cavity'])
-            safe_z_product = float(self.cfg['cam_safe_z_product'])
-            work_z = float(self.cfg['cam_work_z'])
+            safe_z_cavity  = float(self.mw.cam_safe_z_cavity  or 0.0)
+            safe_z_product = float(self.mw.cam_safe_z_product or 0.0)
+            work_z         = float(self.mw.cam_work_z         or 0.0)
             valve_on = False
         else:
-            # 针头空跑 / 真实点胶：有偏移，用主界面高度
+            # 针头空跑 / 真实点胶：有偏移，用针头高度
             off_x = self.mw.nozzle_offset_x
             off_y = self.mw.nozzle_offset_y
-            safe_z_cavity = float(self.cfg['nozzle_safe_z_cavity'])
-            safe_z_product = float(self.cfg['nozzle_safe_z_product'])
-            work_z = float(self.cfg['nozzle_work_z'])
+            safe_z_cavity  = float(self.mw.safe_z_cavity  or 0.0)
+            safe_z_product = float(self.mw.safe_z_product or 0.0)
+            work_z         = float(self.mw.work_z         or 0.0)
             valve_on = (self.mode == 'real')
 
         speed_xy = int(self.mw.feedrate_xy)
@@ -697,32 +696,25 @@ class BatchRunDialog(QDialog):
         grp_grid.setLayout(form)
         layout.addWidget(grp_grid)
 
-        # --- 2. 高度配置 (新增) ---
-        grp_z = QGroupBox("高度配置 (Z-Heights)")
+        # --- 2. 高度配置（只读展示，来自当前配方，不可手动修改）---
+        grp_z = QGroupBox("高度配置 (Z-Heights)  ← 自动同步配方参数，不可手动修改")
+        grp_z.setStyleSheet("QGroupBox { color: #F59E0B; }")
         form_z = QFormLayout()
-        
-        # 相机空跑高度
-        # 相机空跑高度
-        # 智能默认值：如果主界面参数看起来是默认值(<=20.0)，但 Z 基准很大(>100)，则使用 Z 基准
-        # 这样可以防止用户忘记设置参数时机器撞向底部
-        def_cam_safe = self.mw.cam_safe_z_cavity
-        if def_cam_safe is None:
-            def_cam_safe = 0.0
-        elif def_cam_safe <= 20.0 and self.mw.z_base > 100:
-            def_cam_safe = self.mw.z_base
-            
-        self.spn_cam_safe_cavity = QDoubleSpinBox()
-        self.spn_cam_safe_cavity.setRange(-500, 500)
-        self.spn_cam_safe_cavity.setValue(def_cam_safe)
-        
-        self.spn_cam_safe_product = QDoubleSpinBox()
-        self.spn_cam_safe_product.setRange(-500, 500)
-        self.spn_cam_safe_product.setValue(self.mw.cam_safe_z_product if self.mw.cam_safe_z_product is not None else 0.0)
 
-        self.spn_cam_work = QDoubleSpinBox()
-        self.spn_cam_work.setRange(-500, 500)
-        self.spn_cam_work.setValue(self.mw.cam_work_z if self.mw.cam_work_z is not None else 0.0)
-        
+        def _make_readonly_spn():
+            spn = QDoubleSpinBox()
+            spn.setRange(-500, 500)
+            spn.setDecimals(2)
+            spn.setReadOnly(True)
+            spn.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            spn.setStyleSheet("background-color: #2d2d2d; color: #aaaaaa;")
+            return spn
+
+        # 相机高度 (只读)
+        self.spn_cam_safe_cavity  = _make_readonly_spn()
+        self.spn_cam_safe_product = _make_readonly_spn()
+        self.spn_cam_work         = _make_readonly_spn()
+
         h_cam_z = QHBoxLayout()
         h_cam_z.addWidget(QLabel("腔内安全:"))
         h_cam_z.addWidget(self.spn_cam_safe_cavity)
@@ -732,19 +724,11 @@ class BatchRunDialog(QDialog):
         h_cam_z.addWidget(self.spn_cam_work)
         form_z.addRow("相机高度:", h_cam_z)
 
-        # 针头/真实高度
-        self.spn_nozzle_safe_cavity = QDoubleSpinBox()
-        self.spn_nozzle_safe_cavity.setRange(-500, 500)
-        self.spn_nozzle_safe_cavity.setValue(self.mw.safe_z_cavity if self.mw.safe_z_cavity is not None else 0.0)
-        
-        self.spn_nozzle_safe_product = QDoubleSpinBox()
-        self.spn_nozzle_safe_product.setRange(-500, 500)
-        self.spn_nozzle_safe_product.setValue(self.mw.safe_z_product if self.mw.safe_z_product is not None else 0.0)
+        # 针头高度 (只读)
+        self.spn_nozzle_safe_cavity  = _make_readonly_spn()
+        self.spn_nozzle_safe_product = _make_readonly_spn()
+        self.spn_nozzle_work         = _make_readonly_spn()
 
-        self.spn_nozzle_work = QDoubleSpinBox()
-        self.spn_nozzle_work.setRange(-500, 500)
-        self.spn_nozzle_work.setValue(self.mw.work_z if self.mw.work_z is not None else 0.0)
-        
         h_nozzle_z = QHBoxLayout()
         h_nozzle_z.addWidget(QLabel("腔内安全:"))
         h_nozzle_z.addWidget(self.spn_nozzle_safe_cavity)
@@ -753,9 +737,13 @@ class BatchRunDialog(QDialog):
         h_nozzle_z.addWidget(QLabel("工作:"))
         h_nozzle_z.addWidget(self.spn_nozzle_work)
         form_z.addRow("针头高度:", h_nozzle_z)
-        
+
         grp_z.setLayout(form_z)
         layout.addWidget(grp_z)
+
+        # 首次填充展示值
+        self.update_z_display()
+
 
         # --- 3. 运行日志 ---
         self.log_box = QTextEdit()
@@ -892,6 +880,16 @@ class BatchRunDialog(QDialog):
         # 立即保存
         self.save_settings(silent=True)
 
+    def update_z_display(self):
+        """从主界面（当前配方）同步 Z 高度到只读展示框"""
+        mw = self.mw
+        self.spn_cam_safe_cavity.setValue(mw.cam_safe_z_cavity  or 0.0)
+        self.spn_cam_safe_product.setValue(mw.cam_safe_z_product or 0.0)
+        self.spn_cam_work.setValue(mw.cam_work_z             or 0.0)
+        self.spn_nozzle_safe_cavity.setValue(mw.safe_z_cavity    or 0.0)
+        self.spn_nozzle_safe_product.setValue(mw.safe_z_product   or 0.0)
+        self.spn_nozzle_work.setValue(mw.work_z               or 0.0)
+
     def get_config(self):
         return {
             'start_x': self.spn_start_x.value(),
@@ -901,13 +899,13 @@ class BatchRunDialog(QDialog):
             'cols': self.spn_cols.value(),
             'space_x': self.spn_space_x.value(),
             'space_y': self.spn_space_y.value(),
-            # 新增高度参数
-            'cam_safe_z_cavity': self.spn_cam_safe_cavity.value(),
-            'cam_safe_z_product': self.spn_cam_safe_product.value(),
-            'cam_work_z': self.spn_cam_work.value(),
-            'nozzle_safe_z_cavity': self.spn_nozzle_safe_cavity.value(),
-            'nozzle_safe_z_product': self.spn_nozzle_safe_product.value(),
-            'nozzle_work_z': self.spn_nozzle_work.value(),
+            # 高度参数：始终从主界面（当前配方）读取，而非 spinbox
+            'cam_safe_z_cavity':  self.mw.cam_safe_z_cavity  or 0.0,
+            'cam_safe_z_product': self.mw.cam_safe_z_product or 0.0,
+            'cam_work_z':         self.mw.cam_work_z         or 0.0,
+            'nozzle_safe_z_cavity':  self.mw.safe_z_cavity   or 0.0,
+            'nozzle_safe_z_product': self.mw.safe_z_product  or 0.0,
+            'nozzle_work_z':         self.mw.work_z          or 0.0,
             # [NEW] Simulation
             'disable_valves': self.chk_simulate.isChecked(),
             'mixed_mode': self.chk_mixed_mode.isChecked(),
@@ -1153,20 +1151,19 @@ class BatchRunDialog(QDialog):
             self.spn_color_change_y.setValue(get_float('batch_color_change_y', self.spn_start_y.value()))
             self.chk_color_change_pause.setChecked(bool(get_int('batch_color_change_pause', 1)))
             
-            # Z轴参数 (从 Config 读取，若无则使用 MainWindow 变量)
-            self.spn_cam_safe_cavity.setValue(get_float('cam_safe_z_cavity', self.mw.cam_safe_z_cavity or 0.0))
-            self.spn_cam_safe_product.setValue(get_float('cam_safe_z_product', self.mw.cam_safe_z_product or 0.0))
-            self.spn_cam_work.setValue(get_float('cam_work_z', self.mw.cam_work_z or 0.0))
-            
-            self.spn_nozzle_safe_cavity.setValue(get_float('safe_z_cavity', self.mw.safe_z_cavity or 0.0))
-            self.spn_nozzle_safe_product.setValue(get_float('safe_z_product', self.mw.safe_z_product or 0.0))
-            self.spn_nozzle_work.setValue(get_float('work_z', self.mw.work_z or 0.0))
+            # Z轴参数：始终从主界面（当前配方）读取，不从全局 cfg 读旧展示値
+            self.update_z_display()
             
             # [NEW] Line speed
             self.spn_line_speed.setValue(get_int('line_speed_xy', 800))
             
         except Exception as e:
             self.log(f"❌ 加载配置失败: {e}")
+
+    def showEvent(self, event):
+        """每次打开对话框时刷新 Z 高度展示（同步当前配方的最新值）"""
+        super().showEvent(event)
+        self.update_z_display()
 
     def save_settings(self, silent=False):
         """

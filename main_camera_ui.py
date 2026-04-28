@@ -1694,42 +1694,19 @@ class MainWindow(QWidget):
         coord_layout.addWidget(self.lbl_pos_z)
         motion_layout.addLayout(coord_layout)
 
-        # ===== Z 高度参数 (安全高度 / 点胶高度) =====
-        zparam_layout = QHBoxLayout()
-
-        # 1. 腔内安全高度
-        lbl_safe_cavity = QLabel("腔内安全Z")
+        # Z 高度参数（隐藏控件，仅供内部数据流使用；UI 展示移至空跑对话框）
+        # 三个高度只在相机空跑 / 针头空跑对话框中可编辑
         self.spn_safe_z_cavity = QDoubleSpinBox()
         self.spn_safe_z_cavity.setRange(0.0, 300.0)
-        self.spn_safe_z_cavity.setDecimals(2)
-        self.spn_safe_z_cavity.setSingleStep(0.1)
         self.spn_safe_z_cavity.setValue(self.safe_z_cavity if self.safe_z_cavity is not None else 0.0)
-
-        # 2. 产品安全高度
-        lbl_safe_product = QLabel("产品安全Z")
         self.spn_safe_z_product = QDoubleSpinBox()
         self.spn_safe_z_product.setRange(0.0, 300.0)
-        self.spn_safe_z_product.setDecimals(2)
-        self.spn_safe_z_product.setSingleStep(0.1)
         self.spn_safe_z_product.setValue(self.safe_z_product if self.safe_z_product is not None else 0.0)
-
-        # 3. 点胶高度
-        lbl_work = QLabel("点胶Z")
         self.spn_work_z = QDoubleSpinBox()
         self.spn_work_z.setRange(0.0, 300.0)
-        self.spn_work_z.setDecimals(2)
-        self.spn_work_z.setSingleStep(0.1)
         self.spn_work_z.setValue(self.work_z if self.work_z is not None else 0.0)
+        # 不添加到任何布局 → 不显示在 UI 中
 
-        zparam_layout.addWidget(lbl_safe_cavity)
-        zparam_layout.addWidget(self.spn_safe_z_cavity)
-        zparam_layout.addWidget(lbl_safe_product)
-        zparam_layout.addWidget(self.spn_safe_z_product)
-        zparam_layout.addWidget(lbl_work)
-        zparam_layout.addWidget(self.spn_work_z)
-
-        motion_layout.addLayout(zparam_layout)
-        
 
         # 步长设置 + 预设按钮
         step_layout = QVBoxLayout()
@@ -5447,6 +5424,12 @@ class MainWindow(QWidget):
             self.color_delay = dialog.color_delay
 
             self.save_app_settings()
+            # 同时将相机 Z 高度写入产品 config.json（避免下次加载配方时被覆盖）
+            self._save_z_heights_to_product({
+                'cam_safe_z_cavity':  self.cam_safe_z_cavity,
+                'cam_safe_z_product': self.cam_safe_z_product,
+                'cam_work_z':         self.cam_work_z,
+            })
 
         self._prepare_dry_run(
             use_nozzle_offset=False, 
@@ -5464,6 +5447,27 @@ class MainWindow(QWidget):
              # OR better: Insert the saving logic directly into the specific block in _prepare_dry_run if possible, 
              # but _prepare_dry_run is generic for both nozzle and camera.
              pass
+
+    def _save_z_heights_to_product(self, patch: dict):
+        """直接将 Z 高度参数嵌入产品的 config.json，避免下次加载配方时被覆盖"""
+        try:
+            if not getattr(self, 'halcon_product_manager', None):
+                return
+            prod_name = self.halcon_product_manager.get_current_product_name()
+            if not prod_name:
+                return
+            prod_dir = self.halcon_product_manager.products.get_product_path(prod_name)
+            cfg_path = os.path.join(prod_dir, 'config.json')
+            existing = {}
+            if os.path.exists(cfg_path):
+                with open(cfg_path, 'r', encoding='utf-8') as f:
+                    existing = json.load(f)
+            existing.update(patch)
+            with open(cfg_path, 'w', encoding='utf-8') as f:
+                json.dump(existing, f, indent=2, ensure_ascii=False)
+            self.log(f"✅ Z高度已写入配方: {prod_name}")
+        except Exception as e:
+            self.log(f"❌ 保存Z高度到配方失败: {e}")
 
     def _save_machine_coords_to_product(self, machine_paths):
         """[NEW] Helper to save machine coordinates to laser_points.json"""
@@ -5529,9 +5533,11 @@ class MainWindow(QWidget):
 
         def save_nozzle_params(dialog):
             # 更新主界面控件，控件会自动更新变量
-            self.spn_safe_z_cavity.setValue(dialog.safe_z_cavity)
-            self.spn_safe_z_product.setValue(dialog.safe_z_product)
-            self.spn_work_z.setValue(dialog.work_z)
+            # 直接更新变量（spinbox 已从 UI 移除，改为直接赋值）
+            self.safe_z_cavity  = dialog.safe_z_cavity
+            self.safe_z_product = dialog.safe_z_product
+            self.work_z         = dialog.work_z
+
                         
             # 速度参数是共享的，同步更新变量和 UI 滑块
             self.feedrate_xy = dialog.speed_xy
@@ -5554,6 +5560,12 @@ class MainWindow(QWidget):
             self.color_delay = dialog.color_delay
 
             self.save_app_settings()
+            # 同时将针头 Z 高度写入产品 config.json（避免下次加载配方时被覆盖）
+            self._save_z_heights_to_product({
+                'safe_z_cavity':  self.safe_z_cavity,
+                'safe_z_product': self.safe_z_product,
+                'work_z':         self.work_z,
+            })
 
         self._prepare_dry_run(
             use_nozzle_offset=True, 
@@ -5805,9 +5817,11 @@ class MainWindow(QWidget):
                 self.dry_run_worker.start()
                 
                 # 保存参数
-                self.spn_safe_z_cavity.setValue(dialog.safe_z_cavity)
-                self.spn_safe_z_product.setValue(dialog.safe_z_product)
-                self.spn_work_z.setValue(dialog.work_z)
+                # 直接更新变量（spinbox 已从 UI 移除）
+                self.safe_z_cavity  = dialog.safe_z_cavity
+                self.safe_z_product = dialog.safe_z_product
+                self.work_z         = dialog.work_z
+
                 self.feedrate_xy = dialog.speed_xy
                 self.feedrate_z = dialog.speed_z
 

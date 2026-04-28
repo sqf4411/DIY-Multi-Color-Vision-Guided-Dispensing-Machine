@@ -167,12 +167,22 @@ class ProductManager:
             config_data["line_speed_xy"] = 800
 
         # Save Config JSON
+        # [FIX] Load existing config first and MERGE, to preserve training-time fields
+        # (e.g. roi_in_reference, recognized_coordinates, laser_data) that are NOT
+        # included in config_data passed by the UI save button.
         config_path = os.path.join(product_dir, "config.json")
         try:
+            existing_config = {}
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    existing_config = json.load(f)
+            # Merge: new values overwrite, existing-only fields are preserved
+            merged_config = {**existing_config, **config_data}
             with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(config_data, f, indent=2, ensure_ascii=False)
+                json.dump(merged_config, f, indent=2, ensure_ascii=False)
         except Exception as e:
             return False, f"Failed to save config: {e}"
+
 
         # Save dots path
         if path_points is not None:

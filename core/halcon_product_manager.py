@@ -33,6 +33,8 @@ class HalconProductManager:
         self.vision_offset_x = 0.0
         self.vision_offset_y = 0.0
         self.current_segments: Optional[PathSegmentList] = None # [NEW] Store rich segments
+        self.n_cavities = 4  # 每个模具内的小产品（穴）数量，从 config.json 读取
+
         
     # ========== 产品操作 ==========
     
@@ -236,6 +238,10 @@ class HalconProductManager:
             # ⭐ 加载 ROI 偏移信息（用于路径坐标转换）
             self.roi_in_reference = config.get('roi_in_reference', None)
             
+            # ⭐ 加载穴位数量（用于聚类分组，默认4穴）
+            self.n_cavities = int(config.get('n_cavities', 4))
+
+            
             # 4.5 ⭐ 应用阀门参数到全局配置
             from datetime import datetime
             
@@ -425,8 +431,68 @@ class HalconProductManager:
         return self.products.get_product_path(self.current_product)
     
     # ========== 识别处理 ==========
-    
+
+    @staticmethod
+    def _cluster_segments_to_cavities(segments: list, n_cavities: int) -> list:
+        """
+        将单次识别出的所有路径段按空间位置聚类成 n_cavities 个穴位组。
+
+        策略（适用于 2×2 四穴布局）：
+          - 计算每段的质心 (cx, cy)
+          - 以所有质心 X 中位数为左右分界，Y 中位数为上下分界
+          - 分成 4 象限：TL / TR / BL / BR，按阅读顺序排列
+
+        Args:
+            segments: 所有路径段（混合所有穴位）
+            n_cavities: 穴位数量
+
+        Returns:
+            List[List[PathSegment]] —— 每个子列表是一个穴位的路径段
+        """
+        if not segments or n_cavities <= 1:
+            return [segments]
+
+        # 计算每段质心
+        centroids = []
+        for seg in segments:
+            pts = seg.points if hasattr(seg, 'points') else []
+            if pts:
+                cx = float(np.mean([p[0] for p in pts]))
+                cy = float(np.mean([p[1] for p in pts]))
+            else:
+                cx, cy = 0.0, 0.0
+            centroids.append((cx, cy))
+
+        if len(centroids) < n_cavities:
+            print(f"[HalconPM] ⚠️ 路径段数({len(centroids)}) < 穴位数({n_cavities})，跳过聚类")
+            return [segments]
+
+        xs = np.array([c[0] for c in centroids])
+        ys = np.array([c[1] for c in centroids])
+
+        if n_cavities == 4:
+            # 2×2 布局：以质心中位线分割四象限
+            mid_x = float(np.median(xs))
+            mid_y = float(np.median(ys))
+
+            groups = {'TL': [], 'TR': [], 'BL': [], 'BR': []}
+            for seg, (cx, cy) in zip(segments, centroids):
+                left = cx <= mid_x
+                top  = cy <= mid_y
+                if top  and left:  groups['TL'].append(seg)
+                elif top:          groups['TR'].append(seg)
+                elif left:         groups['BL'].append(seg)
+                else:              groups['BR'].append(seg)
+
+            # 按阅读顺序 TL→TR→BL→BR 返回非空组
+            result = [groups[k] for k in ('TL', 'TR', 'BL', 'BR') if groups[k]]
+            return result if result else [segments]
+        else:
+            print(f"[HalconPM] n_cavities={n_cavities} 暂不支持自动聚类，使用单组模式")
+            return [segments]
+
     def process_image(self, gray_img: np.ndarray) -> Tuple[List, np.ndarray]:
+
         """
         处理图像并绘制路径（完整识别逻辑）
         
@@ -474,12 +540,20 @@ class HalconProductManager:
             )
             
             if mold_segments:
-                found_paths.append(mold_segments)
-                
-                # ✅ 新增：保存识别结果到产品配方
+                # ⭐ 聚类：把整块模具的所有路径段按空间位置分配到各穴位
+                n = getattr(self, 'n_cavities', 4)
+                cavity_groups = self._cluster_segments_to_cavities(mold_segments, n)
+                found_paths.extend(cavity_groups)  # 每个穴位组对应 DryRunDialog 的一个"产品"
+
+                print(f"[HalconPM] 识别 {len(mold_segments)} 段 → 聚类为 {len(cavity_groups)} 穴位")
+                for i, g in enumerate(cavity_groups):
+                    print(f"  穴位 {i+1}: {len(g)} 段路径")
+
+                # ✅ 保存识别结果到产品配方（保存完整混合段）
                 self._save_recognized_coordinates(
                     mold_segments, cx, cy, angle, score
                 )
+
             
             # 绘制分数
             text = f"S:{score:.2f}"

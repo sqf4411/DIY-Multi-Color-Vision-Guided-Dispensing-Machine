@@ -563,20 +563,25 @@ class BatchWorker(QThread):
                     target_mach_y = current_y + dy_mm + off_y
                     
                     if first_pt:
-                        # 1. 移动到起点上方 (快速 G0)
+                        # ① XY 移动到起点上方（快速，Z 不变）
                         lines.append(f"G0 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{speed_xy}")
-                        # 2. 下降到工作高度 (慢速 G1)
-                        lines.append(f"G1 Z{work_z:.2f} F{speed_z}")
                         
-                        # 3. 开阀逻辑 (如果需要出胶)
+                        # ② 三级下降（每个产品第一段完整三级，后续段直接工作高度）
+                        #    产品第一段: safe_z_product(已在) → safe_z_cavity → work_z
+                        #    后续段:     safe_z_cavity(已在) → work_z
+                        if seg_idx == 0:
+                            lines.append(f"G1 Z{safe_z_cavity:.2f} F{speed_z}  ; ②-1 降至腔内安全高度")
+                        lines.append(f"G1 Z{work_z:.2f} F{speed_z}  ; ②-2 降至工作高度")
+                        
+                        # ③ 开阀逻辑
                         if valve_on:
                             lines.append(f"; Open Master Valve A")
                             append_master_cmd(True)
-                            # [FIX] 无论点还是线，都先延时等待压力建立
                             if dwell_ms > 0:
                                 lines.append(f"G4 P{dwell_ms}")
                             
                         first_pt = False
+
                     else:
                         # 移动到后续点 - 使用画线速度
                         line_speed = self.cfg.get('line_speed_xy', speed_xy)

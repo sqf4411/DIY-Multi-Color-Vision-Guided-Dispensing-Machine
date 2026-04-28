@@ -3723,7 +3723,13 @@ class MainWindow(QWidget):
                 self.spn_safe_z_product.setValue(self.safe_z_product)
             if hasattr(self, 'spn_work_z'):
                 self.spn_work_z.setValue(self.work_z)
-        
+
+            # 同步更新针头偏移标签（加载配方时也要刷新显示）
+            if hasattr(self, 'lbl_offset_x'):
+                self.lbl_offset_x.setText(f"ΔX: {self.nozzle_offset_x:.3f} mm")
+            if hasattr(self, 'lbl_offset_y'):
+                self.lbl_offset_y.setText(f"ΔY: {self.nozzle_offset_y:.3f} mm")
+
             if hasattr(self, 'lbl_z_base'):
                 self.lbl_z_base.setText(f"当前 Z 基准: {self.z_base:.2f} mm")
 

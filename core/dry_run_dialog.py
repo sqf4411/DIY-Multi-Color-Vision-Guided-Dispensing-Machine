@@ -55,7 +55,7 @@ class DryRunDialog(QDialog):
         param_group = QGroupBox("参数设置")
         param_layout = QGridLayout()
 
-        # Safe Z Cavity
+        # Safe Z Cavity — Row 0
         param_layout.addWidget(QLabel("腔内安全高度 (Cavity Z):"), 0, 0)
         self.spn_safe_z_cavity = QDoubleSpinBox()
         self.spn_safe_z_cavity.setRange(0, 300)
@@ -63,15 +63,7 @@ class DryRunDialog(QDialog):
         self.spn_safe_z_cavity.valueChanged.connect(self.on_param_changed)
         param_layout.addWidget(self.spn_safe_z_cavity, 0, 1)
 
-        # Safe Z Product
-        param_layout.addWidget(QLabel("产品安全高度 (Product Z):"), 1, 0)
-        self.spn_safe_z_product = QDoubleSpinBox()
-        self.spn_safe_z_product.setRange(0, 300)
-        self.spn_safe_z_product.setValue(self.safe_z_product)
-        self.spn_safe_z_product.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_safe_z_product, 1, 1)
-
-        # Work Z
+        # Work Z — Row 0 right column
         param_layout.addWidget(QLabel("点胶高度 (Work Z):"), 0, 2)
         self.spn_work_z = QDoubleSpinBox()
         self.spn_work_z.setRange(0, 300)
@@ -79,64 +71,72 @@ class DryRunDialog(QDialog):
         self.spn_work_z.valueChanged.connect(self.on_param_changed)
         param_layout.addWidget(self.spn_work_z, 0, 3)
 
-        # [NEW] Laser Z Option
-        self.chk_use_laser = QCheckBox(f"使用激光测量高度 (基准Z={self.z_base:.1f} + 测量 + 工作Z)")
-        if not self.laser_data:
-             self.chk_use_laser.setText("使用激光测量高度 (无数据)")
-             self.chk_use_laser.setEnabled(False)
-        else:
-             self.chk_use_laser.setChecked(True)
-        self.chk_use_laser.stateChanged.connect(self.on_param_changed)
-        # Occupy a full row
-        param_layout.addWidget(self.chk_use_laser, 1, 0, 1, 4)
+        # Safe Z Product — Row 1 (was being hidden by laser checkbox before)
+        param_layout.addWidget(QLabel("产品安全高度 (Product Z):"), 1, 0)
+        self.spn_safe_z_product = QDoubleSpinBox()
+        self.spn_safe_z_product.setRange(0, 300)
+        self.spn_safe_z_product.setValue(self.safe_z_product)
+        self.spn_safe_z_product.valueChanged.connect(self.on_param_changed)
+        param_layout.addWidget(self.spn_safe_z_product, 1, 1)
 
-        # Speed XY
-        param_layout.addWidget(QLabel("XY 速度 (mm/min):"), 2, 0)
+        # Laser Z checkbox — Row 2, full width (no longer conflicts with Product Z)
+        self.chk_use_laser = QCheckBox(f"使用激光测量高度 (基准Z={self.z_base:.1f} + 测量深度 + 工作Z)")
+        if not self.laser_data:
+            self.chk_use_laser.setText("使用激光测量高度 (无数据)")
+            self.chk_use_laser.setEnabled(False)
+        else:
+            self.chk_use_laser.setChecked(True)
+        self.chk_use_laser.stateChanged.connect(self.on_param_changed)
+        param_layout.addWidget(self.chk_use_laser, 2, 0, 1, 4)
+
+        # Speed XY — Row 3
+        param_layout.addWidget(QLabel("XY 速度 (mm/min):"), 3, 0)
         self.spn_speed_xy = QSpinBox()
         self.spn_speed_xy.setRange(100, 20000)
         self.spn_speed_xy.setValue(int(self.speed_xy))
         self.spn_speed_xy.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_speed_xy, 2, 1)
+        param_layout.addWidget(self.spn_speed_xy, 3, 1)
 
-        # Speed Z
-        param_layout.addWidget(QLabel("Z 速度 (mm/min):"), 2, 2)
+        # Speed Z — Row 3 right column
+        param_layout.addWidget(QLabel("Z 速度 (mm/min):"), 3, 2)
         self.spn_speed_z = QSpinBox()
         self.spn_speed_z.setRange(100, 5000)
         self.spn_speed_z.setValue(int(self.speed_z))
         self.spn_speed_z.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_speed_z, 2, 3)
+        param_layout.addWidget(self.spn_speed_z, 3, 3)
 
-        # Dot Dwell
-        param_layout.addWidget(QLabel("点胶延时 (ms):"), 3, 0)
+        # Dot Dwell — Row 4
+        param_layout.addWidget(QLabel("点胶延时 (ms):"), 4, 0)
         self.spn_dwell = QSpinBox()
         self.spn_dwell.setRange(0, 5000)
         self.spn_dwell.setValue(self.dwell_ms)
         self.spn_dwell.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_dwell, 3, 1)
+        param_layout.addWidget(self.spn_dwell, 4, 1)
 
-        # Line Dwell
-        param_layout.addWidget(QLabel("画线延时 (ms):"), 3, 2)
+        # Line Dwell — Row 4 right column
+        param_layout.addWidget(QLabel("画线延时 (ms):"), 4, 2)
         self.spn_line_dwell = QSpinBox()
         self.spn_line_dwell.setRange(0, 5000)
         self.spn_line_dwell.setValue(self.line_dwell_ms)
         self.spn_line_dwell.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_line_dwell, 3, 3)
+        param_layout.addWidget(self.spn_line_dwell, 4, 3)
 
-        # Line Speed
-        param_layout.addWidget(QLabel("画线速度 (mm/min):"), 4, 2)
-        self.spn_line_speed = QSpinBox()
-        self.spn_line_speed.setRange(100, 5000)
-        self.spn_line_speed.setValue(self.line_speed_xy)
-        self.spn_line_speed.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_line_speed, 4, 3)
-
-        # [NEW] Color Delay (Supply Pressure Delay)
-        param_layout.addWidget(QLabel("供料延时 (ms):"), 4, 0)
+        # Color Delay — Row 5
+        param_layout.addWidget(QLabel("供料延时 (ms):"), 5, 0)
         self.spn_color_delay = QSpinBox()
         self.spn_color_delay.setRange(0, 5000)
         self.spn_color_delay.setValue(int(self.color_delay))
         self.spn_color_delay.valueChanged.connect(self.on_param_changed)
-        param_layout.addWidget(self.spn_color_delay, 4, 1)
+        param_layout.addWidget(self.spn_color_delay, 5, 1)
+
+        # Line Speed — Row 5 right column
+        param_layout.addWidget(QLabel("画线速度 (mm/min):"), 5, 2)
+        self.spn_line_speed = QSpinBox()
+        self.spn_line_speed.setRange(100, 5000)
+        self.spn_line_speed.setValue(self.line_speed_xy)
+        self.spn_line_speed.valueChanged.connect(self.on_param_changed)
+        param_layout.addWidget(self.spn_line_speed, 5, 3)
+
 
         param_group.setLayout(param_layout)
         layout.addWidget(param_group)
@@ -256,8 +256,9 @@ class DryRunDialog(QDialog):
         self.machine_paths = [] # [NEW] Reset paths
         gcode_lines = []
         gcode_lines.append("G90")
-        # Start with Product Safe Z
-        gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
+        # 初始：确保 Z 在安全高度（机器当前位置应高于产品安全高度）
+        # XY 移动将在此高度进行，到达每个产品上方后再逐级下降
+        gcode_lines.append(f"G0 Z{self.origin_z:.2f} F{self.speed_z}  ; 确保初始安全高度")
 
         # [NEW] Color-First Logic
         all_colors = set()
@@ -326,25 +327,26 @@ class DryRunDialog(QDialog):
                     start_x += self.nozzle_offset_x
                     start_y += self.nozzle_offset_y
 
-                    # Move XY first
+                    # ① XY 移动到点位（Z 不变：产品间在 product_safe，点间在 cavity_safe）
                     gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{self.speed_xy}")
-                    
-                    # 3. Down to Work Z
-                    calc_z = self.work_z
-                    
-                    use_laser = getattr(self, 'chk_use_laser', None) and self.chk_use_laser.isChecked()
-                    
-                    # [NEW] Three-Dimensional Dispensing
-                    if use_laser and seg_type == 'dot':
-                       # Match using Camera Machine Coords (abs_x[0])
-                       # Laser Measured stored using Machine Pos where Camera seen it
-                       depth = self.find_nearest_depth(abs_x[0], abs_y[0])
-                       if depth != 0.0:
-                           # Formula: Z_Target = Z_Base + Depth + Gap(WorkZ)
-                           calc_z = self.z_base + depth + self.work_z
-                           gcode_lines.append(f"; [3D] Depth={depth:.3f} -> Z={calc_z:.2f}")
 
-                    gcode_lines.append(f"G0 Z{calc_z:.2f} F{self.speed_z}")
+                    # ② 计算目标 Z（支持激光补偿）
+                    calc_z = self.work_z
+                    use_laser = getattr(self, 'chk_use_laser', None) and self.chk_use_laser.isChecked()
+                    if use_laser and seg_type == 'dot':
+                        depth = self.find_nearest_depth(abs_x[0], abs_y[0])
+                        if depth != 0.0:
+                            calc_z = self.z_base + depth + self.work_z
+                            gcode_lines.append(f"; [3D] Depth={depth:.3f} -> Z={calc_z:.2f}")
+
+                    # ③ 三级下降（产品第一段：完整三级；后续段：仅 work_z）
+                    #   每个产品第一段: 产品安全高度 → 腔内安全高度 → 工作高度
+                    #   同产品内后续段: 已在腔内安全高度 → 直接工作高度
+                    if seg_idx == 0:
+                        gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}  ; ③-1 降至产品安全高度")
+                        gcode_lines.append(f"G0 Z{self.safe_z_cavity:.2f} F{self.speed_z}   ; ③-2 降至腔内安全高度")
+                    gcode_lines.append(f"G0 Z{calc_z:.2f} F{self.speed_z}                    ; ③-3 降至工作高度")
+
 
                     # Check if it is a Dot (1 point) or Line (>1 points)
                     # Prepare Valve Commands

@@ -57,6 +57,41 @@ class ProductManager:
             raise ValueError("Unsafe product path.")
         return product_path
 
+    # ---------- Numeric helpers ----------
+    @staticmethod
+    def _round_floats(obj, decimals=4, depth_decimals=4):
+        """
+        Recursively round all float values in a dict/list to `decimals` places.
+        Fields named 'depth' use `depth_decimals` (default 4) for laser data.
+        Regular machine/camera params use `decimals` (default 2).
+        """
+        _DEEP_KEYS = {'depth', 'timestamp'}  # Keep more precision for these
+        _SHORT_KEYS = {
+            'vision_offset_x', 'vision_offset_y',
+            'exposure', 'gain', 'gamma',
+            'nozzle_offset_x', 'nozzle_offset_y',
+            'z_base', 'safe_z_cavity', 'safe_z_product', 'work_z',
+            'valve_prefeed_time', 'valve_a_dispense_time', 'valve_b_dispense_time',
+            'model_row', 'model_col',
+            'cx', 'cy', 'angle', 'score',
+            'x', 'y',
+        }
+        if isinstance(obj, dict):
+            return {
+                k: ProductManager._round_floats(
+                    v,
+                    decimals=(depth_decimals if k in _DEEP_KEYS else
+                              2 if k in _SHORT_KEYS else decimals),
+                    depth_decimals=depth_decimals
+                )
+                for k, v in obj.items()
+            }
+        elif isinstance(obj, list):
+            return [ProductManager._round_floats(i, decimals, depth_decimals) for i in obj]
+        elif isinstance(obj, float):
+            return round(obj, decimals)
+        return obj
+
     # ---------- IO helpers ----------
     def _safe_load_npy(self, path: str):
         """Load numeric .npy safely (pickle disabled)."""
@@ -178,6 +213,9 @@ class ProductManager:
                     existing_config = json.load(f)
             # Merge: new values overwrite, existing-only fields are preserved
             merged_config = {**existing_config, **config_data}
+            # Round all floats to keep config.json readable and avoid
+            # floating-point noise like -5.199999999999989 or -9.087557603686633
+            merged_config = self._round_floats(merged_config)
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(merged_config, f, indent=2, ensure_ascii=False)
         except Exception as e:

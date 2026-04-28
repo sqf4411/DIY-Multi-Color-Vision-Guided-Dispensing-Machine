@@ -2581,7 +2581,14 @@ class MainWindow(QWidget):
             self.log(f"❌ 自动基准失败: {msg}")
     
     def _load_recognized_coordinates(self):
-        """从产品配方加载识别坐标（优先使用机器坐标）"""
+        """从产品配方加载识别坐标（优先使用机器坐标）
+
+        优先级:
+          1. laser_points.json — 由"相机空跑"生成的真实机器坐标 (最可靠)
+          2. config.json["recognized_coordinates"] — 由"模具识别"生成的像素坐标，
+             通过 cam2mach_matrix 转换为机器坐标 (次选，自动保存到 laser_points.json)
+          3. 返回 None — 由上层回落到模板坐标（但会带安全警告）
+        """
         if not hasattr(self, 'halcon_product_manager') or not self.halcon_product_manager:
             return None
         
@@ -2591,53 +2598,131 @@ class MainWindow(QWidget):
         
         product_dir = self.halcon_product_manager.products.get_product_path(product_name)
         
-        # [MODIFIED] Load from laser_points.json
+        # ── 1. 优先：从 laser_points.json 加载机器坐标 ──────────────────────
         points_file = os.path.join(product_dir, "laser_points.json")
         
-        if not os.path.exists(points_file):
-            return None
-        
-        try:
-            with open(points_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # Data structure: {"timestamp": ..., "points": [...]}
-            machine_coords = data.get("points")
-            
-            if machine_coords:
-                from core.path_segment import PathSegment
-                segments = []
+        if os.path.exists(points_file):
+            try:
+                with open(points_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
                 
-                # Create segments for dots
-                for pt_data in machine_coords:
-                    if pt_data.get("type", "dot") == "dot":
-                        x = pt_data.get("x")
-                        y = pt_data.get("y")
-                        
-                        # [FIX] Handle nested list structure found in laser_points.json
-                        # Structure: {"points": [[316.67, 107.60]], ...}
-                        if x is None or y is None:
-                            pts_list = pt_data.get("points")
-                            if pts_list and len(pts_list) > 0 and isinstance(pts_list[0], list):
-                                x = pts_list[0][0]
-                                y = pts_list[0][1]
+                machine_coords = data.get("points")
+                if machine_coords:
+                    from core.path_segment import PathSegment
+                    segments = []
+                    for pt_data in machine_coords:
+                        if pt_data.get("type", "dot") == "dot":
+                            x = pt_data.get("x")
+                            y = pt_data.get("y")
+                            # Handle nested list: {"points": [[316.67, 107.60]], ...}
+                            if x is None or y is None:
+                                pts_list = pt_data.get("points")
+                                if pts_list and len(pts_list) > 0 and isinstance(pts_list[0], list):
+                                    x = pts_list[0][0]
+                                    y = pts_list[0][1]
+                            if x is not None and y is not None:
+                                segments.append(PathSegment("dot", pt_data.get("color", 0), [(x, y)], 100))
+                    if segments:
+                        self.log(f"✅ 从 laser_points.json 加载 {len(segments)} 个测高点")
+                        return segments
+            except Exception as e:
+                self.log(f"❌ 加载 laser_points.json 失败: {str(e)}")
 
-                        if x is not None and y is not None:
-                            seg = PathSegment(
-                                "dot",
-                                pt_data.get("color", 0),
-                                [(x, y)],
-                                100
-                            )
-                            segments.append(seg)
-                
-                if segments:
-                    self.log(f"✅ 从 laser_points.json 加载 {len(segments)} 个测高点")
-                    return segments
-                    
+        # ── 2. 次选：从 recognized_coordinates（像素坐标）转换 ────────────────
+        # "模具识别"运行后会把像素坐标写入 config.json["recognized_coordinates"]。
+        # 用 cam2mach_matrix 转换为机器坐标，再保存到 laser_points.json 以备后用。
+        try:
+            config_path = os.path.join(product_dir, "config.json")
+            if not os.path.exists(config_path):
+                return None
+            with open(config_path, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+            recog = cfg.get("recognized_coordinates")
+            if not recog:
+                return None
+
+            px_segs = recog.get("segments", [])
+            if not px_segs:
+                return None
+
+            # 需要 cam2mach_matrix 才能做像素→机器坐标转换
+            if not hasattr(self, 'cam2mach_matrix') or self.cam2mach_matrix is None:
+                self.log("⚠️ 未找到 laser_points.json，且 cam2mach 矩阵未加载，"
+                         "无法自动转换识别坐标。请先运行'相机空跑'生成机器坐标。")
+                return None
+
+            # 需要当前机器位置作为坐标变换的原点
+            if not self.machine:
+                self.log("⚠️ 机器未连接，无法转换识别坐标到机器坐标。")
+                return None
+
+            origin_x, origin_y, _ = self.machine.get_position()
+
+            # 图像尺寸用于计算像素相对中心的偏移
+            if self.last_frame is not None:
+                h_img, w_img = self.last_frame.shape[:2]
+            else:
+                h_img, w_img = 2048, 3072  # 5MP 相机默认分辨率
+
+            center_x, center_y = w_img / 2.0, h_img / 2.0
+            m = self.cam2mach_matrix  # 2×3 仿射矩阵
+
+            from core.path_segment import PathSegment
+            import time
+
+            machine_segs_for_save = []
+            result_segments = []
+
+            for seg_dict in px_segs:
+                seg_type = seg_dict.get("type", "dot")
+                if seg_type != "dot":
+                    continue
+                for pt in seg_dict.get("points", []):
+                    try:
+                        px, py = float(pt[0]), float(pt[1])
+                    except (TypeError, IndexError, ValueError):
+                        continue
+
+                    # 像素坐标相对图像中心的偏移
+                    dx_pix = px - center_x
+                    dy_pix = py - center_y
+
+                    # 仿射矩阵线性部分：相对像素偏移 → 相对机器mm偏移
+                    dx_mm = m[0, 0] * dx_pix + m[0, 1] * dy_pix
+                    dy_mm = m[1, 0] * dx_pix + m[1, 1] * dy_pix
+
+                    mx = origin_x + dx_mm
+                    my = origin_y + dy_mm
+
+                    result_segments.append(
+                        PathSegment("dot", seg_dict.get("color", 0), [(mx, my)], 100)
+                    )
+                    machine_segs_for_save.append({
+                        "type": "dot",
+                        "color": seg_dict.get("color", 0),
+                        "x": round(mx, 4),
+                        "y": round(my, 4)
+                    })
+
+            if not result_segments:
+                return None
+
+            # 自动保存到 laser_points.json，下次直接走第 1 路径
+            try:
+                laser_data = {"timestamp": time.time(), "points": machine_segs_for_save}
+                with open(points_file, 'w', encoding='utf-8') as f:
+                    json.dump(laser_data, f, indent=4, ensure_ascii=False)
+                self.log(f"✅ 已从识别坐标转换并保存 laser_points.json ({len(result_segments)} 个点)")
+            except Exception as save_err:
+                self.log(f"⚠️ 保存 laser_points.json 失败 (不影响本次测量): {save_err}")
+
+            return result_segments
+
         except Exception as e:
-            self.log(f"❌ 加载 laser_points.json 失败: {str(e)}")
-            
+            self.log(f"❌ 从识别坐标转换机器坐标失败: {e}")
+            import traceback
+            traceback.print_exc()
+
         return None
 
 

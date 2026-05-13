@@ -352,9 +352,9 @@ class DryRunDialog(QDialog):
                     # Prepare Valve Commands
                     # Default to A1 if no color info
                     dwell_ms = getattr(p_px, 'dwell_ms', 0)
-                    color_idx = getattr(p_px, 'color', 0)
-                    valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
-                    target_valve = valve_macros[color_idx] if 0 <= color_idx < 4 else "A1_VALVE"
+                    # 手动换色模式：固定使用 A1_VALVE，不按颜色 index 切换阀门
+                    # 颜色顺序由用户手动换料保证；软件始终控制 A1_VALVE + VALVE_A_CTRL
+                    target_valve = "A1_VALVE"
 
                     # --- Valve State Logic ---
                     # Check if we need to switch color valve

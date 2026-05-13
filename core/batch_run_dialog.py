@@ -501,11 +501,9 @@ class BatchWorker(QThread):
                 lines.append(f"; Segment {seg_idx+1}: Type={seg_type}, Color={seg_color}, Dwell={dwell_ms}ms")
                 
                 # Prepare Valve Commands
-                # Default to A1 if no color info
-                # Prepare Valve Commands
-                # Default to A1 if no color info
-                valve_macros = ["A1_VALVE", "A2_VALVE", "A3_VALVE", "A4_VALVE"]
-                target_valve = valve_macros[seg_color] if 0 <= seg_color < 4 else "A1_VALVE"
+                # 手动换色模式：固定使用 A1_VALVE，不按颜色 index 切换阀门
+                # 颜色顺序由用户手动换料保证；软件始终控制 A1_VALVE + VALVE_A_CTRL
+                target_valve = "A1_VALVE"
 
                 # --- Valve State Logic ---
                 # Check if we need to switch color valve

@@ -85,7 +85,7 @@ class DryRunDialog(QDialog):
             self.chk_use_laser.setText("使用激光测量高度 (无数据)")
             self.chk_use_laser.setEnabled(False)
         else:
-            self.chk_use_laser.setChecked(True)
+            self.chk_use_laser.setChecked(False)  # 默认不启用激光测高，需要时手动勾选
         self.chk_use_laser.stateChanged.connect(self.on_param_changed)
         param_layout.addWidget(self.chk_use_laser, 2, 0, 1, 4)
 

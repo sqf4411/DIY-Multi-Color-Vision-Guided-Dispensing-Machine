@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QHeaderView, QAbstractItemView, QMessageBox, QWidget
 )
 from PyQt5.QtGui import QPainter, QPen, QPixmap, QImage, QColor, QBrush, QFont
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QRectF
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QRectF, QEvent
 import numpy as np
 import cv2
 import os
@@ -946,6 +946,10 @@ class DetailedHeightAdjustDialog(QDialog):
         self.canvas.segment_clicked.connect(self.on_canvas_segment_clicked)
         scroll_area.setWidget(self.canvas)
         
+        # 将滚轮事件转发给画布，避免被 ScrollArea 拦截
+        self._scroll_viewport = scroll_area.viewport()
+        self._scroll_viewport.installEventFilter(self)
+        
         sidebar = QWidget()
         sidebar.setMaximumWidth(400)
         sidebar_layout = QVBoxLayout(sidebar)
@@ -954,15 +958,15 @@ class DetailedHeightAdjustDialog(QDialog):
         type_group = QGroupBox("高度类型切换")
         type_layout = QHBoxLayout()
         
-        self.btn_type_product = QPushButton("产品安全 (Product Z)")
+        self.btn_type_product = QPushButton("产品安全高度")
         self.btn_type_product.setCheckable(True)
         self.btn_type_product.clicked.connect(lambda: self.change_active_height_type("safe_z_product"))
         
-        self.btn_type_cavity = QPushButton("腔内安全 (Cavity Z)")
+        self.btn_type_cavity = QPushButton("腔内安全高度")
         self.btn_type_cavity.setCheckable(True)
         self.btn_type_cavity.clicked.connect(lambda: self.change_active_height_type("safe_z_cavity"))
         
-        self.btn_type_work = QPushButton("点胶高度 (Work Z)")
+        self.btn_type_work = QPushButton("点胶高度")
         self.btn_type_work.setCheckable(True)
         self.btn_type_work.setChecked(True)
         self.btn_type_work.clicked.connect(lambda: self.change_active_height_type("work_z"))
@@ -1027,6 +1031,14 @@ class DetailedHeightAdjustDialog(QDialog):
         splitter.setStretchFactor(1, 1)
         
         main_layout.addWidget(splitter)
+
+    def eventFilter(self, obj, event):
+        """将 ScrollArea viewport 的滚轮事件转发给画布处理（实现缩放）"""
+        from PyQt5.QtWidgets import QApplication
+        if obj is getattr(self, '_scroll_viewport', None) and event.type() == QEvent.Wheel:
+            QApplication.sendEvent(self.canvas, event)
+            return True
+        return super().eventFilter(obj, event)
 
     def change_active_height_type(self, h_type):
         self.active_height_type = h_type

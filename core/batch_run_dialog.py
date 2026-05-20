@@ -229,6 +229,8 @@ class BatchWorker(QThread):
                     vision_cache[cache_key] = None # Mark as processed but empty
                 else:
                     self.path_update_signal.emit(paths_groups)
+                    # 应用当前配方的段级自定义高度到路径对象
+                    self._apply_segment_heights_to_paths(paths_groups)
                     # Store in cache (including product name for mixed mode)
                     current_product = getattr(self.mw.halcon_product_manager, 'current_product', None)
                     vision_cache[cache_key] = (paths_groups, target_x, target_y, current_product)
@@ -497,8 +499,13 @@ class BatchWorker(QThread):
                          continue
 
 
+                # 读取段级自定义高度（已由 _apply_segment_heights_to_paths 写入到段对象）
+                seg_safe_z_product = getattr(path_obj, 'custom_safe_z_product', safe_z_product)
+                seg_safe_z_cavity  = getattr(path_obj, 'custom_safe_z_cavity',  safe_z_cavity)
+                seg_work_z         = getattr(path_obj, 'custom_work_z',         work_z)
+
                 # Color/Valve Change Comments
-                lines.append(f"; Segment {seg_idx+1}: Type={seg_type}, Color={seg_color}, Dwell={dwell_ms}ms")
+                lines.append(f"; Segment {seg_idx+1}: Type={seg_type}, Color={seg_color}, Dwell={dwell_ms}ms, Z=[product={seg_safe_z_product:.2f}, cavity={seg_safe_z_cavity:.2f}, work={seg_work_z:.2f}]")
                 
                 # Prepare Valve Commands
                 # 手动换色模式：固定使用 A1_VALVE，不按颜色 index 切换阀门
@@ -600,10 +607,14 @@ class BatchWorker(QThread):
                     append_master_cmd(False)
                 
                 # ✅ 段结束：抬到腔内安全Z
-                lines.append(f"G1 Z{safe_z_cavity:.2f} F{speed_z}")
+                lines.append(f"G1 Z{seg_safe_z_cavity:.2f} F{speed_z}")
             
-            # ✅ Product完成：升到产品安全Z
-            lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}")
+            # ✅ Product完成：升到产品安全Z（取当前产品最后一段的自定义产品安全高度）
+            last_seg_safe_z_product = safe_z_product
+            if product_paths:
+                last_seg = product_paths[-1]
+                last_seg_safe_z_product = getattr(last_seg, 'custom_safe_z_product', safe_z_product)
+            lines.append(f"G1 Z{last_seg_safe_z_product:.2f} F{speed_z}")
         
         # End of Processing: Close Color Valve if open
         if active_color_valve is not None:
@@ -621,6 +632,46 @@ class BatchWorker(QThread):
     def stop(self):
         self.running = False
 
+    def _apply_segment_heights_to_paths(self, paths_groups):
+        """从当前配方的 config.json 加载 segment_heights，
+        并将自定义高度属性写入各路径段对象。
+        这样在后续按颜色过滤后，段对象仍然携带正确的高度信息。"""
+        segment_heights = {}
+        try:
+            pm = getattr(self.mw, 'halcon_product_manager', None)
+            current_product = getattr(pm, 'current_product', None)
+            if current_product and pm and hasattr(pm, 'products'):
+                prod_dir = pm.products.get_product_path(current_product)
+                if prod_dir:
+                    config_path = os.path.join(prod_dir, 'config.json')
+                    if os.path.exists(config_path):
+                        with open(config_path, 'r', encoding='utf-8') as f:
+                            cfg = json.load(f)
+                        segment_heights = cfg.get('segment_heights', {})
+                        if segment_heights:
+                            self.log_signal.emit(
+                                f"[Batch] 已加载配方段高度微调: {len(segment_heights)} 个段已自定义")
+        except Exception as e:
+            self.log_signal.emit(f"[WARN] 无法加载段高度配置: {e}")
+
+        global_safe_z_cavity  = float(self.mw.safe_z_cavity  or 0.0)
+        global_safe_z_product = float(self.mw.safe_z_product or 0.0)
+        global_work_z         = float(self.mw.work_z         or 0.0)
+
+        for p_idx, prod_paths in enumerate(paths_groups):
+            for s_idx, seg in enumerate(prod_paths):
+                key = f"prod_{p_idx}_seg_{s_idx}"
+                custom = segment_heights.get(key, {})
+                if custom:
+                    seg.has_custom_height = True
+                    seg.custom_safe_z_product = custom.get('safe_z_product', global_safe_z_product)
+                    seg.custom_safe_z_cavity  = custom.get('safe_z_cavity',  global_safe_z_cavity)
+                    seg.custom_work_z         = custom.get('work_z',         global_work_z)
+                else:
+                    seg.has_custom_height     = False
+                    seg.custom_safe_z_product = global_safe_z_product
+                    seg.custom_safe_z_cavity  = global_safe_z_cavity
+                    seg.custom_work_z         = global_work_z
 
 class BatchRunDialog(QDialog):
     def __init__(self, main_window):

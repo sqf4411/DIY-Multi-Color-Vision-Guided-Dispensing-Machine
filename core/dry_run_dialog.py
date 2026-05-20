@@ -75,11 +75,11 @@ class DryRunDialog(QDialog):
         
         if parent:
             if hasattr(parent, 'halcon_product_manager') and parent.halcon_product_manager:
-                self.product_name = parent.halcon_product_manager.get_current_product_name()
+                self.product_name = parent.halcon_product_manager.current_product
                 if self.product_name:
                     self.product_dir = parent.halcon_product_manager.products.get_product_path(self.product_name)
             elif hasattr(parent, 'mw') and parent.mw and hasattr(parent.mw, 'halcon_product_manager') and parent.mw.halcon_product_manager:
-                self.product_name = parent.mw.halcon_product_manager.get_current_product_name()
+                self.product_name = parent.mw.halcon_product_manager.current_product
                 if self.product_name:
                     self.product_dir = parent.mw.halcon_product_manager.products.get_product_path(self.product_name)
 

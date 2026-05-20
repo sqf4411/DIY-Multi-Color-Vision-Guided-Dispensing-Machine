@@ -1,12 +1,19 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QGroupBox, QDoubleSpinBox, QSpinBox, QTextEdit,
-    QDialogButtonBox, QCheckBox
+    QDialogButtonBox, QCheckBox, QPushButton, QProgressBar,
+    QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
+    QHeaderView, QAbstractItemView, QMessageBox, QWidget
 )
+from PyQt5.QtGui import QPainter, QPen, QPixmap, QImage, QColor, QBrush, QFont
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QRectF
 import numpy as np
+import cv2
+import os
+import json
 
 class DryRunDialog(QDialog):
-    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None, laser_data=None, z_base=0.0):
+    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None, laser_data=None, z_base=0.0, img_dry=None):
         super().__init__(parent)
         self.save_callback = save_callback
         self.is_real_run = is_real_run
@@ -18,20 +25,37 @@ class DryRunDialog(QDialog):
         self.origin_x, self.origin_y, self.origin_z = machine_origin
         self.nozzle_offset_x, self.nozzle_offset_y = nozzle_offset
         self.center_x, self.center_y = img_center
+        self.img_dry = img_dry
         
         # [NEW] Laser Data
         self.laser_data = laser_data if laser_data else []
         self.z_base = z_base
         
-        # Parse products structure
+        # Parse products structure and convert to PathSegments
+        from core.path_segment import PathSegment
         self.products = []
         if len(self.paths_px) > 0:
             if isinstance(self.paths_px[0], list):
                 # New format: List[List[path]]
-                self.products = self.paths_px
+                for prod_seg_list in self.paths_px:
+                    new_seg_list = []
+                    for seg in prod_seg_list:
+                        if isinstance(seg, PathSegment):
+                            new_seg_list.append(seg)
+                        else:
+                            pts = seg.tolist() if isinstance(seg, np.ndarray) else seg
+                            t = 'line' if len(pts) > 1 else 'dot'
+                            new_seg_list.append(PathSegment(t, 0, pts))
+                    self.products.append(new_seg_list)
             else:
                 # Old format: List[path] -> Treat each path as a separate product for safety
-                self.products = [[p] for p in self.paths_px]
+                for seg in self.paths_px:
+                    if isinstance(seg, PathSegment):
+                        self.products.append([seg])
+                    else:
+                        pts = seg.tolist() if isinstance(seg, np.ndarray) else seg
+                        t = 'line' if len(pts) > 1 else 'dot'
+                        self.products.append([PathSegment(t, 0, pts)])
 
         # 初始参数
         self.safe_z_cavity = initial_params.get('safe_z_cavity', 22.0)
@@ -43,6 +67,47 @@ class DryRunDialog(QDialog):
         self.line_dwell_ms = initial_params.get('line_dwell_ms', 0) # Line Start Dwell
         self.color_delay = initial_params.get('color_delay', 500)   # Color Supply Delay
         self.line_speed_xy = initial_params.get('line_speed_xy', 800)  # Line Dispensing Speed
+
+        # Load customized heights from product config
+        self.product_name = None
+        self.product_dir = None
+        self.segment_heights_config = {}
+        
+        if parent:
+            if hasattr(parent, 'halcon_product_manager') and parent.halcon_product_manager:
+                self.product_name = parent.halcon_product_manager.get_current_product_name()
+                if self.product_name:
+                    self.product_dir = parent.halcon_product_manager.products.get_product_path(self.product_name)
+            elif hasattr(parent, 'mw') and parent.mw and hasattr(parent.mw, 'halcon_product_manager') and parent.mw.halcon_product_manager:
+                self.product_name = parent.mw.halcon_product_manager.get_current_product_name()
+                if self.product_name:
+                    self.product_dir = parent.mw.halcon_product_manager.products.get_product_path(self.product_name)
+
+        if self.product_dir:
+            config_path = os.path.join(self.product_dir, "config.json")
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        cfg = json.load(f)
+                    self.segment_heights_config = cfg.get("segment_heights", {})
+                except Exception as e:
+                    print(f"[DryRunDialog] Error loading heights config: {e}")
+
+        # Apply heights from config, or default to global parameters
+        for prod_idx, prod_segs in enumerate(self.products):
+            for seg_idx, seg in enumerate(prod_segs):
+                key = f"prod_{prod_idx}_seg_{seg_idx}"
+                custom = self.segment_heights_config.get(key, {})
+                if custom:
+                    seg.custom_safe_z_product = custom.get("safe_z_product", self.safe_z_product)
+                    seg.custom_safe_z_cavity = custom.get("safe_z_cavity", self.safe_z_cavity)
+                    seg.custom_work_z = custom.get("work_z", self.work_z)
+                    seg.has_custom_height = True
+                else:
+                    seg.custom_safe_z_product = self.safe_z_product
+                    seg.custom_safe_z_cavity = self.safe_z_cavity
+                    seg.custom_work_z = self.work_z
+                    seg.has_custom_height = False
 
         self.init_ui()
         self.generate_gcode()
@@ -78,6 +143,12 @@ class DryRunDialog(QDialog):
         self.spn_safe_z_product.setValue(self.safe_z_product)
         self.spn_safe_z_product.valueChanged.connect(self.on_param_changed)
         param_layout.addWidget(self.spn_safe_z_product, 1, 1)
+
+        # 详细调整按钮 - Row 1, Column 2, 3
+        self.btn_detail_adjust = QPushButton("详细调整...")
+        self.btn_detail_adjust.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold;")
+        self.btn_detail_adjust.clicked.connect(self.on_detail_adjust_clicked)
+        param_layout.addWidget(self.btn_detail_adjust, 1, 2, 1, 2)
 
         # Laser Z checkbox — Row 2, full width (no longer conflicts with Product Z)
         self.chk_use_laser = QCheckBox(f"使用激光测量高度 (基准Z={self.z_base:.1f} + 测量深度 + 工作Z)")
@@ -200,7 +271,25 @@ class DryRunDialog(QDialog):
         self.line_dwell_ms = self.spn_line_dwell.value()
         self.color_delay = self.spn_color_delay.value()
         self.line_speed_xy = self.spn_line_speed.value()
+        
+        # Keep non-customized segments in sync with global parameter spinboxes
+        for prod_idx, prod_segs in enumerate(self.products):
+            for seg_idx, seg in enumerate(prod_segs):
+                if not getattr(seg, 'has_custom_height', False):
+                    seg.custom_safe_z_product = self.safe_z_product
+                    seg.custom_safe_z_cavity = self.safe_z_cavity
+                    seg.custom_work_z = self.work_z
         self.generate_gcode()
+
+    def on_detail_adjust_clicked(self):
+        global_params = {
+            'safe_z_cavity': self.spn_safe_z_cavity.value(),
+            'safe_z_product': self.spn_safe_z_product.value(),
+            'work_z': self.spn_work_z.value()
+        }
+        dlg = DetailedHeightAdjustDialog(self, self.products, self.img_dry, global_params, self.product_dir)
+        if dlg.exec_() == QDialog.Accepted:
+            self.generate_gcode()
 
     def find_nearest_depth(self, x, y):
         """
@@ -257,7 +346,15 @@ class DryRunDialog(QDialog):
         gcode_lines = []
         gcode_lines.append("G90")
         # 初始：确保 Z 在安全高度（取当前位置与产品安全高度的最大值，保证 XY 移动时不撞车）
-        initial_safe_z = max(getattr(self, 'origin_z', self.safe_z_product), self.safe_z_product)
+        max_safe_z_product = self.safe_z_product
+        for prod_idx, prod_segments in enumerate(self.products):
+            if not self.chk_products[prod_idx].isChecked():
+                continue
+            for seg in prod_segments:
+                seg_z = seg.custom_safe_z_product if getattr(seg, 'has_custom_height', False) else self.safe_z_product
+                if seg_z > max_safe_z_product:
+                    max_safe_z_product = seg_z
+        initial_safe_z = max(getattr(self, 'origin_z', max_safe_z_product), max_safe_z_product)
         gcode_lines.append(f"G0 Z{initial_safe_z:.2f} F{self.speed_z}  ; 确保初始安全高度 ≥ 产品安全高度")
 
         # [NEW] Color-First Logic
@@ -330,21 +427,25 @@ class DryRunDialog(QDialog):
                     # ① XY 移动到点位（Z 不变：产品间在 product_safe，点间在 cavity_safe）
                     gcode_lines.append(f"G0 X{start_x:.3f} Y{start_y:.3f} F{self.speed_xy}")
 
+                    # Determine target heights for this segment
+                    has_custom = getattr(p_px, 'has_custom_height', False)
+                    seg_safe_z_product = p_px.custom_safe_z_product if has_custom else self.safe_z_product
+                    seg_safe_z_cavity = p_px.custom_safe_z_cavity if has_custom else self.safe_z_cavity
+                    seg_work_z = p_px.custom_work_z if has_custom else self.work_z
+
                     # ② 计算目标 Z（支持激光补偿）
-                    calc_z = self.work_z
+                    calc_z = seg_work_z
                     use_laser = getattr(self, 'chk_use_laser', None) and self.chk_use_laser.isChecked()
                     if use_laser and seg_type == 'dot':
                         depth = self.find_nearest_depth(abs_x[0], abs_y[0])
                         if depth != 0.0:
-                            calc_z = self.z_base + depth + self.work_z
+                            calc_z = self.z_base + depth + seg_work_z
                             gcode_lines.append(f"; [3D] Depth={depth:.3f} -> Z={calc_z:.2f}")
 
                     # ③ 三级下降（产品第一段：完整三级；后续段：仅 work_z）
-                    #   每个产品第一段: 产品安全高度 → 腔内安全高度 → 工作高度
-                    #   同产品内后续段: 已在腔内安全高度 → 直接工作高度
                     if seg_idx == 0:
-                        gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}  ; ③-1 降至产品安全高度")
-                        gcode_lines.append(f"G0 Z{self.safe_z_cavity:.2f} F{self.speed_z}   ; ③-2 降至腔内安全高度")
+                        gcode_lines.append(f"G0 Z{seg_safe_z_product:.2f} F{self.speed_z}  ; ③-1 降至产品安全高度")
+                        gcode_lines.append(f"G0 Z{seg_safe_z_cavity:.2f} F{self.speed_z}   ; ③-2 降至腔内安全高度")
                     gcode_lines.append(f"G0 Z{calc_z:.2f} F{self.speed_z}                    ; ③-3 降至工作高度")
 
 
@@ -431,11 +532,14 @@ class DryRunDialog(QDialog):
                         append_master_cmd(False) # Close A
 
                     # 5. Lift after segment to Cavity Safe Z
-                    gcode_lines.append(f"G0 Z{self.safe_z_cavity:.2f} F{self.speed_z}")
+                    gcode_lines.append(f"G0 Z{seg_safe_z_cavity:.2f} F{self.speed_z}")
                 
                 # ✅ Product完成：升到产品安全Z
                 if color_segments:
-                    gcode_lines.append(f"G0 Z{self.safe_z_product:.2f} F{self.speed_z}")
+                    last_seg = color_segments[-1]
+                    last_has_custom = getattr(last_seg, 'has_custom_height', False)
+                    last_safe_z_product = last_seg.custom_safe_z_product if last_has_custom else self.safe_z_product
+                    gcode_lines.append(f"G0 Z{last_safe_z_product:.2f} F{self.speed_z}")
             
             # End of Color: Close Color Valve after all products of this color
             if active_color_valve is not None:
@@ -570,4 +674,590 @@ class DryRunControlDialog(QDialog):
         cursor.select(cursor.LineUnderCursor)
         self.gcode_box.setTextCursor(cursor)
         self.gcode_box.ensureCursorVisible()
+
+
+# =========================================================================
+# HeightAdjustCanvas & DetailedHeightAdjustDialog for Fine-tuning heights
+# =========================================================================
+
+class HeightAdjustCanvas(QWidget):
+    segment_clicked = pyqtSignal(int, int) # (prod_idx, seg_idx)
+
+    def __init__(self, template_img, products, global_params, parent=None):
+        super().__init__(parent)
+        self.template = template_img # BGR numpy array
+        self.products = products # list of lists of PathSegment
+        self.global_params = global_params
+        self.active_height_type = "work_z"
+        self.selected_prod_idx = None
+        self.selected_seg_idx = None
+        
+        # Zoom/Pan parameters
+        self.scale = 1.0
+        self.calculate_scale()
+        self.setMouseTracking(True)
+        self.setStyleSheet("background-color: #1e1e1e;")
+        
+        self.is_panning = False
+        self.last_pan_pos = QPoint()
+
+    def calculate_scale(self):
+        if self.template is None:
+            self.setFixedSize(800, 600)
+            return
+        h, w = self.template.shape[:2]
+        self.scale = 1.0
+        self.setFixedSize(int(w * self.scale), int(h * self.scale))
+
+    def set_active_height_type(self, h_type):
+        self.active_height_type = h_type
+        self.update()
+
+    def set_selected_segment(self, prod_idx, seg_idx):
+        self.selected_prod_idx = prod_idx
+        self.selected_seg_idx = seg_idx
+        self.update()
+
+    def mousePressEvent(self, event):
+        x = event.x() / self.scale
+        y = event.y() / self.scale
+        
+        if event.button() == Qt.MiddleButton:
+            self.setCursor(Qt.ClosedHandCursor)
+            self.last_pan_pos = event.globalPos()
+            self.is_panning = True
+            return
+            
+        if event.button() == Qt.LeftButton:
+            prod_idx, seg_idx = self.find_segment_at(x, y)
+            if prod_idx is not None and seg_idx is not None:
+                self.segment_clicked.emit(prod_idx, seg_idx)
+                self.set_selected_segment(prod_idx, seg_idx)
+            else:
+                self.segment_clicked.emit(-1, -1)
+                self.set_selected_segment(None, None)
+
+    def mouseMoveEvent(self, event):
+        if self.is_panning:
+            delta = event.globalPos() - self.last_pan_pos
+            self.last_pan_pos = event.globalPos()
+            
+            parent = self.parent()
+            while parent:
+                if isinstance(parent, QScrollArea):
+                    scrollbar_h = parent.horizontalScrollBar()
+                    scrollbar_v = parent.verticalScrollBar()
+                    scrollbar_h.setValue(scrollbar_h.value() - delta.x())
+                    scrollbar_v.setValue(scrollbar_v.value() - delta.y())
+                    break
+                parent = parent.parent()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MiddleButton:
+            self.setCursor(Qt.ArrowCursor)
+            self.is_panning = False
+
+    def wheelEvent(self, event):
+        if self.template is None:
+            return
+        delta = event.angleDelta().y()
+        zoom_factor = 1.1 if delta > 0 else 0.9
+        new_scale = self.scale * zoom_factor
+        
+        new_scale = max(0.1, min(10.0, new_scale))
+        if new_scale != self.scale:
+            self.scale = new_scale
+            h, w = self.template.shape[:2]
+            self.setFixedSize(int(w * self.scale), int(h * self.scale))
+            self.update()
+
+    def find_segment_at(self, x, y):
+        threshold = 15 / self.scale
+        for prod_idx, prod_segs in enumerate(self.products):
+            for seg_idx, seg in enumerate(prod_segs):
+                if seg.type == 'dot':
+                    px, py = seg.points[0]
+                    dist = ((px - x)**2 + (py - y)**2) ** 0.5
+                    if dist < threshold:
+                        return prod_idx, seg_idx
+                else:
+                    for j in range(len(seg.points) - 1):
+                        x1, y1 = seg.points[j]
+                        x2, y2 = seg.points[j+1]
+                        dist = self.point_to_line_distance(x, y, x1, y1, x2, y2)
+                        if dist < threshold:
+                            return prod_idx, seg_idx
+        return None, None
+
+    def point_to_line_distance(self, px, py, x1, y1, x2, y2):
+        line_len = ((x2-x1)**2 + (y2-y1)**2) ** 0.5
+        if line_len == 0:
+            return ((px-x1)**2 + (py-y1)**2) ** 0.5
+        t = max(0, min(1, ((px-x1)*(x2-x1) + (py-y1)*(y2-y1)) / (line_len**2)))
+        proj_x = x1 + t * (x2 - x1)
+        proj_y = y1 + t * (y2 - y1)
+        return ((px-proj_x)**2 + (py-proj_y)**2) ** 0.5
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # 1. Background image
+        if self.template is not None:
+            h, w = self.template.shape[:2]
+            scaled_w = int(w * self.scale)
+            scaled_h = int(h * self.scale)
+            
+            if len(self.template.shape) == 2:
+                img_color = cv2.cvtColor(self.template, cv2.COLOR_GRAY2RGB)
+            else:
+                img_color = cv2.cvtColor(self.template, cv2.COLOR_BGR2RGB)
+                
+            qimg = QImage(img_color.data, w, h, w*3, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimg)
+            scaled_pixmap = pixmap.scaled(scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            painter.drawPixmap(0, 0, scaled_pixmap)
+        else:
+            painter.fillRect(self.rect(), QColor(30, 30, 30))
+
+        # 2. Draw all products & segments
+        for prod_idx, prod_segs in enumerate(self.products):
+            for seg_idx, seg in enumerate(prod_segs):
+                is_selected = (prod_idx == self.selected_prod_idx and seg_idx == self.selected_seg_idx)
+                has_custom = getattr(seg, 'has_custom_height', False)
+                
+                r, g, b = seg.get_display_color_rgb()
+                base_color = QColor(r, g, b)
+                if has_custom:
+                    base_color = QColor(34, 211, 238) # Cyan
+                
+                # Draw selection highlight
+                if is_selected:
+                    glow_pen = QPen(QColor(234, 179, 8), 6) # Yellow glow
+                    painter.setPen(glow_pen)
+                    if seg.type == 'dot':
+                        x, y = seg.points[0]
+                        painter.drawEllipse(int(x*self.scale)-8, int(y*self.scale)-8, 16, 16)
+                    else:
+                        for i in range(len(seg.points)-1):
+                            p1 = QPoint(int(seg.points[i][0]*self.scale), int(seg.points[i][1]*self.scale))
+                            p2 = QPoint(int(seg.points[i+1][0]*self.scale), int(seg.points[i+1][1]*self.scale))
+                            painter.drawLine(p1, p2)
+
+                # Draw segment itself
+                pen = QPen(base_color, 2 if not is_selected else 3)
+                painter.setPen(pen)
+                painter.setBrush(QBrush(base_color))
+                
+                if seg.type == 'dot':
+                    x, y = seg.points[0]
+                    painter.drawEllipse(int(x*self.scale)-4, int(y*self.scale)-4, 8, 8)
+                else:
+                    for i in range(len(seg.points)-1):
+                        p1 = QPoint(int(seg.points[i][0]*self.scale), int(seg.points[i][1]*self.scale))
+                        p2 = QPoint(int(seg.points[i+1][0]*self.scale), int(seg.points[i+1][1]*self.scale))
+                        painter.drawLine(p1, p2)
+                    for x, y in seg.points:
+                        painter.drawEllipse(int(x*self.scale)-3, int(y*self.scale)-3, 6, 6)
+
+                # 3. Draw Height Label
+                if seg.type == 'dot':
+                    lx, ly = seg.points[0]
+                else:
+                    mid = len(seg.points) // 2
+                    lx, ly = seg.points[mid]
+                
+                if self.active_height_type == "safe_z_product":
+                    val = seg.custom_safe_z_product if has_custom else self.global_params['safe_z_product']
+                elif self.active_height_type == "safe_z_cavity":
+                    val = seg.custom_safe_z_cavity if has_custom else self.global_params['safe_z_cavity']
+                else:
+                    val = seg.custom_work_z if has_custom else self.global_params['work_z']
+                
+                label_text = f"{val:.2f}"
+                if has_custom:
+                    label_text += "*"
+
+                lbl_px = int(lx * self.scale)
+                lbl_py = int(ly * self.scale) - 10
+                
+                painter.setFont(QFont('Arial', 9, QFont.Bold))
+                fm = painter.fontMetrics()
+                rect = fm.boundingRect(label_text)
+                
+                box_x = lbl_px - rect.width() // 2 - 4
+                box_y = lbl_py - rect.height() - 2
+                box_w = rect.width() + 8
+                box_h = rect.height() + 4
+                
+                painter.setPen(Qt.NoPen)
+                if is_selected:
+                    painter.setBrush(QBrush(QColor(234, 179, 8, 220)))
+                elif has_custom:
+                    painter.setBrush(QBrush(QColor(8, 145, 178, 220)))
+                else:
+                    painter.setBrush(QBrush(QColor(0, 0, 0, 180)))
+                
+                painter.drawRoundedRect(QRectF(box_x, box_y, box_w, box_h), 3, 3)
+                
+                if is_selected:
+                    painter.setPen(QColor(0, 0, 0))
+                else:
+                    painter.setPen(QColor(255, 255, 255))
+                painter.drawText(box_x + 4, box_y + fm.ascent() + 2, label_text)
+
+                # Segment index tag
+                tag_text = f"P{prod_idx+1}-{seg_idx+1}"
+                tag_rect = fm.boundingRect(tag_text)
+                tag_x = lbl_px - tag_rect.width() // 2 - 4
+                tag_y = box_y - tag_rect.height() - 2
+                tag_w = tag_rect.width() + 8
+                tag_h = tag_rect.height() + 4
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(QColor(75, 85, 99, 180)))
+                painter.drawRoundedRect(QRectF(tag_x, tag_y, tag_w, tag_h), 2, 2)
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawText(tag_x + 4, tag_y + fm.ascent() + 2, tag_text)
+
+
+class DetailedHeightAdjustDialog(QDialog):
+    def __init__(self, parent, products, img_dry, global_params, product_dir):
+        super().__init__(parent)
+        self.setWindowTitle("产品高度细微调整 (模具误差补偿)")
+        self.resize(1200, 800)
+        self.products = products
+        self.img_dry = img_dry
+        self.global_params = global_params
+        self.product_dir = product_dir
+        self.active_height_type = "work_z"
+        
+        self.init_ui()
+
+    def init_ui(self):
+        main_layout = QHBoxLayout(self)
+        
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("background-color: #121212; border: 1px solid #374151;")
+        
+        self.canvas = HeightAdjustCanvas(self.img_dry, self.products, self.global_params, self)
+        self.canvas.segment_clicked.connect(self.on_canvas_segment_clicked)
+        scroll_area.setWidget(self.canvas)
+        
+        sidebar = QWidget()
+        sidebar.setMaximumWidth(400)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(5, 5, 5, 5)
+        
+        type_group = QGroupBox("高度类型切换")
+        type_layout = QHBoxLayout()
+        
+        self.btn_type_product = QPushButton("产品安全 (Product Z)")
+        self.btn_type_product.setCheckable(True)
+        self.btn_type_product.clicked.connect(lambda: self.change_active_height_type("safe_z_product"))
+        
+        self.btn_type_cavity = QPushButton("腔内安全 (Cavity Z)")
+        self.btn_type_cavity.setCheckable(True)
+        self.btn_type_cavity.clicked.connect(lambda: self.change_active_height_type("safe_z_cavity"))
+        
+        self.btn_type_work = QPushButton("点胶高度 (Work Z)")
+        self.btn_type_work.setCheckable(True)
+        self.btn_type_work.setChecked(True)
+        self.btn_type_work.clicked.connect(lambda: self.change_active_height_type("work_z"))
+        
+        self.height_buttons = [self.btn_type_product, self.btn_type_cavity, self.btn_type_work]
+        for btn in self.height_buttons:
+            type_layout.addWidget(btn)
+        
+        type_group.setLayout(type_layout)
+        sidebar_layout.addWidget(type_group)
+        
+        self.lbl_global_default = QLabel()
+        self.lbl_global_default.setStyleSheet("color: #9CA3AF; font-size: 11px;")
+        self.update_global_default_label()
+        sidebar_layout.addWidget(self.lbl_global_default)
+        
+        self.table = QTableWidget()
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["产品", "段", "类型", "颜色", "高度值 (mm)", "自定义"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.itemSelectionChanged.connect(self.on_table_selection_changed)
+        self.table.itemChanged.connect(self.on_table_item_changed)
+        sidebar_layout.addWidget(self.table)
+        
+        self.populate_table()
+
+        adjust_group = QGroupBox("快捷调整")
+        adjust_layout = QVBoxLayout()
+        
+        self.btn_apply_default = QPushButton("重置为全局默认高度")
+        self.btn_apply_default.clicked.connect(self.on_reset_to_default)
+        adjust_layout.addWidget(self.btn_apply_default)
+        
+        self.btn_apply_to_product = QPushButton("应用当前高度到本穴所有段")
+        self.btn_apply_to_product.clicked.connect(self.on_apply_to_product)
+        adjust_layout.addWidget(self.btn_apply_to_product)
+        
+        adjust_group.setLayout(adjust_layout)
+        sidebar_layout.addWidget(adjust_group)
+        
+        sidebar_layout.addStretch()
+        
+        btn_layout = QHBoxLayout()
+        self.btn_save = QPushButton("保存到此配方 (Save)")
+        self.btn_save.setStyleSheet("background-color: #10B981; color: white; font-weight: bold; min-height: 35px;")
+        self.btn_save.clicked.connect(self.save_to_recipe)
+        
+        self.btn_cancel = QPushButton("取消")
+        self.btn_cancel.setStyleSheet("background-color: #4B5563; color: white; min-height: 35px;")
+        self.btn_cancel.clicked.connect(self.reject)
+        
+        btn_layout.addWidget(self.btn_save)
+        btn_layout.addWidget(self.btn_cancel)
+        sidebar_layout.addLayout(btn_layout)
+        
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(scroll_area)
+        splitter.addWidget(sidebar)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+        
+        main_layout.addWidget(splitter)
+
+    def change_active_height_type(self, h_type):
+        self.active_height_type = h_type
+        for btn in self.height_buttons:
+            btn.setChecked(btn.text().lower().startswith(h_type[:4]) or 
+                            (h_type == "safe_z_product" and "产品" in btn.text()) or
+                            (h_type == "safe_z_cavity" and "腔内" in btn.text()) or
+                            (h_type == "work_z" and "点胶" in btn.text()))
+        
+        self.update_global_default_label()
+        self.canvas.set_active_height_type(h_type)
+        self.populate_table()
+
+    def update_global_default_label(self):
+        val = self.global_params.get(self.active_height_type, 0.0)
+        self.lbl_global_default.setText(f"当前高度类型的全局默认值: {val:.2f} mm\n(勾选【自定义】以修改，取消勾选将恢复默认值)")
+
+    def populate_table(self):
+        self.table.blockSignals(True)
+        self.table.setRowCount(0)
+        
+        row_idx = 0
+        for prod_idx, prod_segs in enumerate(self.products):
+            for seg_idx, seg in enumerate(prod_segs):
+                self.table.insertRow(row_idx)
+                
+                item_prod = QTableWidgetItem(f"产品 {prod_idx + 1}")
+                item_prod.setFlags(item_prod.flags() & ~Qt.ItemIsEditable)
+                item_prod.setData(Qt.UserRole, prod_idx)
+                item_prod.setData(Qt.UserRole + 1, seg_idx)
+                self.table.setItem(row_idx, 0, item_prod)
+                
+                item_seg = QTableWidgetItem(f"{seg_idx + 1}")
+                item_seg.setFlags(item_seg.flags() & ~Qt.ItemIsEditable)
+                self.table.setItem(row_idx, 1, item_seg)
+                
+                type_str = "点" if seg.type == 'dot' else "线"
+                item_type = QTableWidgetItem(type_str)
+                item_type.setFlags(item_type.flags() & ~Qt.ItemIsEditable)
+                self.table.setItem(row_idx, 2, item_type)
+                
+                color_str = f"颜色 {seg.color + 1}"
+                item_color = QTableWidgetItem(color_str)
+                item_color.setFlags(item_color.flags() & ~Qt.ItemIsEditable)
+                self.table.setItem(row_idx, 3, item_color)
+                
+                has_custom = getattr(seg, 'has_custom_height', False)
+                if self.active_height_type == "safe_z_product":
+                    val = seg.custom_safe_z_product if has_custom else self.global_params['safe_z_product']
+                elif self.active_height_type == "safe_z_cavity":
+                    val = seg.custom_safe_z_cavity if has_custom else self.global_params['safe_z_cavity']
+                else:
+                    val = seg.custom_work_z if has_custom else self.global_params['work_z']
+                
+                item_val = QTableWidgetItem(f"{val:.2f}")
+                if not has_custom:
+                    item_val.setFlags(item_val.flags() & ~Qt.ItemIsEditable)
+                    item_val.setForeground(QColor(156, 163, 175))
+                self.table.setItem(row_idx, 4, item_val)
+                
+                item_custom = QTableWidgetItem()
+                item_custom.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+                item_custom.setCheckState(Qt.Checked if has_custom else Qt.Unchecked)
+                self.table.setItem(row_idx, 5, item_custom)
+                
+                if prod_idx == self.canvas.selected_prod_idx and seg_idx == self.canvas.selected_seg_idx:
+                    self.table.selectRow(row_idx)
+                
+                row_idx += 1
+                
+        self.table.blockSignals(False)
+
+    def on_canvas_segment_clicked(self, prod_idx, seg_idx):
+        if prod_idx == -1 or seg_idx == -1:
+            self.table.clearSelection()
+            return
+            
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 0)
+            if item.data(Qt.UserRole) == prod_idx and item.data(Qt.UserRole + 1) == seg_idx:
+                self.table.blockSignals(True)
+                self.table.selectRow(r)
+                self.table.blockSignals(False)
+                break
+
+    def on_table_selection_changed(self):
+        selected_ranges = self.table.selectedRanges()
+        if not selected_ranges:
+            self.canvas.set_selected_segment(None, None)
+            return
+        row = selected_ranges[0].topRow()
+        item = self.table.item(row, 0)
+        prod_idx = item.data(Qt.UserRole)
+        seg_idx = item.data(Qt.UserRole + 1)
+        self.canvas.set_selected_segment(prod_idx, seg_idx)
+
+    def on_table_item_changed(self, item):
+        row = item.row()
+        col = item.column()
+        
+        item_prod = self.table.item(row, 0)
+        if not item_prod:
+            return
+        prod_idx = item_prod.data(Qt.UserRole)
+        seg_idx = item_prod.data(Qt.UserRole + 1)
+        seg = self.products[prod_idx][seg_idx]
+        
+        if col == 5:
+            is_checked = (item.checkState() == Qt.Checked)
+            seg.has_custom_height = is_checked
+            
+            if is_checked:
+                if not hasattr(seg, 'custom_safe_z_product'):
+                    seg.custom_safe_z_product = self.global_params['safe_z_product']
+                if not hasattr(seg, 'custom_safe_z_cavity'):
+                    seg.custom_safe_z_cavity = self.global_params['safe_z_cavity']
+                if not hasattr(seg, 'custom_work_z'):
+                    seg.custom_work_z = self.global_params['work_z']
+            
+            self.populate_table()
+            self.canvas.update()
+            
+        elif col == 4:
+            try:
+                val = float(item.text())
+                seg.has_custom_height = True
+                
+                self.table.blockSignals(True)
+                self.table.item(row, 5).setCheckState(Qt.Checked)
+                self.table.blockSignals(False)
+                
+                if self.active_height_type == "safe_z_product":
+                    seg.custom_safe_z_product = val
+                elif self.active_height_type == "safe_z_cavity":
+                    seg.custom_safe_z_cavity = val
+                elif self.active_height_type == "work_z":
+                    seg.custom_work_z = val
+                
+                self.canvas.update()
+            except ValueError:
+                self.populate_table()
+
+    def on_reset_to_default(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "未选中", "请先在列表中或画布上选择一个段！")
+            return
+            
+        item_prod = self.table.item(row, 0)
+        prod_idx = item_prod.data(Qt.UserRole)
+        seg_idx = item_prod.data(Qt.UserRole + 1)
+        seg = self.products[prod_idx][seg_idx]
+        
+        seg.has_custom_height = False
+        
+        self.populate_table()
+        self.canvas.update()
+
+    def on_apply_to_product(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "未选中", "请先在列表中或画布上选择一个段！")
+            return
+            
+        item_prod = self.table.item(row, 0)
+        prod_idx = item_prod.data(Qt.UserRole)
+        seg_idx = item_prod.data(Qt.UserRole + 1)
+        seg = self.products[prod_idx][seg_idx]
+        
+        has_custom = getattr(seg, 'has_custom_height', False)
+        if self.active_height_type == "safe_z_product":
+            val = seg.custom_safe_z_product if has_custom else self.global_params['safe_z_product']
+        elif self.active_height_type == "safe_z_cavity":
+            val = seg.custom_safe_z_cavity if has_custom else self.global_params['safe_z_cavity']
+        else:
+            val = seg.custom_work_z if has_custom else self.global_params['work_z']
+            
+        for target_seg in self.products[prod_idx]:
+            target_seg.has_custom_height = True
+            
+            if not hasattr(target_seg, 'custom_safe_z_product'):
+                target_seg.custom_safe_z_product = self.global_params['safe_z_product']
+            if not hasattr(target_seg, 'custom_safe_z_cavity'):
+                target_seg.custom_safe_z_cavity = self.global_params['safe_z_cavity']
+            if not hasattr(target_seg, 'custom_work_z'):
+                target_seg.custom_work_z = self.global_params['work_z']
+                
+            if self.active_height_type == "safe_z_product":
+                target_seg.custom_safe_z_product = val
+            elif self.active_height_type == "safe_z_cavity":
+                target_seg.custom_safe_z_cavity = val
+            else:
+                target_seg.custom_work_z = val
+                
+        self.populate_table()
+        self.canvas.update()
+
+    def save_to_recipe(self):
+        segment_heights = {}
+        for prod_idx, prod_segs in enumerate(self.products):
+            for seg_idx, seg in enumerate(prod_segs):
+                if getattr(seg, 'has_custom_height', False):
+                    key = f"prod_{prod_idx}_seg_{seg_idx}"
+                    segment_heights[key] = {
+                        "safe_z_product": getattr(seg, 'custom_safe_z_product', self.global_params['safe_z_product']),
+                        "safe_z_cavity": getattr(seg, 'custom_safe_z_cavity', self.global_params['safe_z_cavity']),
+                        "work_z": getattr(seg, 'custom_work_z', self.global_params['work_z'])
+                    }
+                    
+        if self.product_dir:
+            config_path = os.path.join(self.product_dir, "config.json")
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        cfg = json.load(f)
+                except Exception:
+                    cfg = {}
+            else:
+                cfg = {}
+                
+            cfg["segment_heights"] = segment_heights
+            
+            try:
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(cfg, f, indent=2, ensure_ascii=False)
+                print(f"[DetailedHeightAdjustDialog] Saved customized segment heights: {segment_heights}")
+                QMessageBox.information(self, "保存成功", f"细微高度参数已成功保存到配方配置中！")
+                self.accept()
+            except Exception as e:
+                QMessageBox.critical(self, "保存失败", f"保存参数到配方配置失败:\n{e}")
+        else:
+            QMessageBox.warning(self, "无法保存", "未找到加载的产品配方目录，无法持久化保存高度！")
+            self.accept()
 

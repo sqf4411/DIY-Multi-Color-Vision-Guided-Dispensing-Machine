@@ -5671,7 +5671,8 @@ class MainWindow(QWidget):
                 is_real_run=False, # 空跑都不出胶
                 save_callback=save_callback,  # ✅ 传入回调，供“仅保存”按钮使用
                 laser_data=laser_data_points,
-                z_base=z_base
+                z_base=z_base,
+                img_dry=img_dry
             )
             
             dialog.setWindowTitle(f"{title} - 参数确认")
@@ -5802,7 +5803,8 @@ class MainWindow(QWidget):
                 initial_params,
                 (center_x, center_y),
                 is_real_run=True,
-                save_callback=self.on_dry_run.save_nozzle_params # 复用针头参数保存逻辑
+                save_callback=self.on_dry_run.save_nozzle_params, # 复用针头参数保存逻辑
+                img_dry=img_dry
             )
 
             if dialog.exec_() == QDialog.Accepted:

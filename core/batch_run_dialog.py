@@ -500,9 +500,15 @@ class BatchWorker(QThread):
 
 
                 # 读取段级自定义高度（已由 _apply_segment_heights_to_paths 写入到段对象）
-                seg_safe_z_product = getattr(path_obj, 'custom_safe_z_product', safe_z_product)
-                seg_safe_z_cavity  = getattr(path_obj, 'custom_safe_z_cavity',  safe_z_cavity)
-                seg_work_z         = getattr(path_obj, 'custom_work_z',         work_z)
+                if self.mode == 'camera_dry':
+                    # 相机空跑模式下，强制使用相机高度，忽略段级自定义高度
+                    seg_safe_z_product = safe_z_product
+                    seg_safe_z_cavity  = safe_z_cavity
+                    seg_work_z         = work_z
+                else:
+                    seg_safe_z_product = getattr(path_obj, 'custom_safe_z_product', safe_z_product)
+                    seg_safe_z_cavity  = getattr(path_obj, 'custom_safe_z_cavity',  safe_z_cavity)
+                    seg_work_z         = getattr(path_obj, 'custom_work_z',         work_z)
 
                 # Color/Valve Change Comments
                 lines.append(f"; Segment {seg_idx+1}: Type={seg_type}, Color={seg_color}, Dwell={dwell_ms}ms, Z=[product={seg_safe_z_product:.2f}, cavity={seg_safe_z_cavity:.2f}, work={seg_work_z:.2f}]")
@@ -579,8 +585,8 @@ class BatchWorker(QThread):
                         #    产品第一段: safe_z_product(已在) → safe_z_cavity → work_z
                         #    后续段:     safe_z_cavity(已在) → work_z
                         if seg_idx == 0:
-                            lines.append(f"G1 Z{safe_z_cavity:.2f} F{speed_z}  ; ②-1 降至腔内安全高度")
-                        lines.append(f"G1 Z{work_z:.2f} F{speed_z}  ; ②-2 降至工作高度")
+                            lines.append(f"G1 Z{seg_safe_z_cavity:.2f} F{speed_z}  ; ②-1 降至腔内安全高度")
+                        lines.append(f"G1 Z{seg_work_z:.2f} F{speed_z}  ; ②-2 降至工作高度")
                         
                         # ③ 开阀逻辑
                         if valve_on:
@@ -613,7 +619,10 @@ class BatchWorker(QThread):
             last_seg_safe_z_product = safe_z_product
             if product_paths:
                 last_seg = product_paths[-1]
-                last_seg_safe_z_product = getattr(last_seg, 'custom_safe_z_product', safe_z_product)
+                if self.mode == 'camera_dry':
+                    last_seg_safe_z_product = safe_z_product
+                else:
+                    last_seg_safe_z_product = getattr(last_seg, 'custom_safe_z_product', safe_z_product)
             lines.append(f"G1 Z{last_seg_safe_z_product:.2f} F{speed_z}")
         
         # End of Processing: Close Color Valve if open

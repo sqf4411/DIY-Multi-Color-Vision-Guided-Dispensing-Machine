@@ -885,17 +885,17 @@ class BatchRunDialog(QDialog):
 
         # 粘度补偿 (Viscosity Compensation)
         h_comp = QHBoxLayout()
-        lbl_comp = QLabel("🧪 粘度补偿 (时间追加):")
+        lbl_comp = QLabel("🧪 粘度补偿 (出胶量微调):")
         lbl_comp.setStyleSheet("color: #10B981; font-weight: bold;")
         h_comp.addWidget(lbl_comp)
         
         self.cmb_viscosity_comp = QComboBox()
-        self.cmb_viscosity_comp.addItems(["无补偿 (0%)", "+1%", "+3%", "+5%", "+10%", "自定义..."])
+        self.cmb_viscosity_comp.addItems(["无补偿 (0%)", "+1%", "+3%", "+5%", "+10%", "-1%", "-3%", "-5%", "自定义..."])
         self.cmb_viscosity_comp.currentIndexChanged.connect(self.on_viscosity_comp_changed)
         h_comp.addWidget(self.cmb_viscosity_comp)
         
         self.spn_viscosity_comp = QDoubleSpinBox()
-        self.spn_viscosity_comp.setRange(0, 100)
+        self.spn_viscosity_comp.setRange(-90, 500)
         self.spn_viscosity_comp.setSuffix(" %")
         self.spn_viscosity_comp.setDecimals(1)
         self.spn_viscosity_comp.setVisible(False)
@@ -1276,13 +1276,13 @@ class BatchRunDialog(QDialog):
             self.log(f"加载配置失败: {e}")
 
     def on_viscosity_comp_changed(self, idx):
-        if idx == 5: # 自定义
+        if idx == 8: # 自定义
             self.spn_viscosity_comp.setVisible(True)
         else:
             self.spn_viscosity_comp.setVisible(False)
             
             # 自动映射预设值
-            val_map = {0: 0.0, 1: 1.0, 2: 3.0, 3: 5.0, 4: 10.0}
+            val_map = {0: 0.0, 1: 1.0, 2: 3.0, 3: 5.0, 4: 10.0, 5: -1.0, 6: -3.0, 7: -5.0}
             if idx in val_map:
                 self.spn_viscosity_comp.blockSignals(True)
                 self.spn_viscosity_comp.setValue(val_map[idx])

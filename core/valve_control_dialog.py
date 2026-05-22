@@ -1,13 +1,64 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, 
-                             QLabel, QDoubleSpinBox, QPushButton, QGroupBox, QMessageBox,
+                             QLabel, QDoubleSpinBox, QSpinBox, QPushButton, QGroupBox, QMessageBox,
                              QTabWidget, QWidget, QRadioButton, QButtonGroup)
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
 import json
 from pathlib import Path
 from datetime import datetime
 
 from core.touch_spinbox import apply_touch_support
+
+class ValveCleaningWorker(QThread):
+    finished_signal = pyqtSignal()
+    status_signal = pyqtSignal(str)
+    valves_on_signal = pyqtSignal()
+    valves_off_signal = pyqtSignal()
+    
+    def __init__(self, on_time, off_time, cycles, parent=None):
+        super().__init__(parent)
+        self.on_time = on_time
+        self.off_time = off_time
+        self.cycles = cycles
+        self.is_running = True
+        
+    def run(self):
+        import time
+        for i in range(self.cycles):
+            if not self.is_running:
+                break
+            
+            self.status_signal.emit(f"第 {i+1}/{self.cycles} 次循环: 排胶中...")
+            self.valves_on_signal.emit()
+            
+            t_start = time.time()
+            while time.time() - t_start < self.on_time:
+                if not self.is_running:
+                    break
+                time.sleep(0.1)
+                
+            if not self.is_running:
+                break
+                
+            self.status_signal.emit(f"第 {i+1}/{self.cycles} 次循环: 停歇中...")
+            self.valves_off_signal.emit()
+            
+            if i < self.cycles - 1:
+                t_start = time.time()
+                while time.time() - t_start < self.off_time:
+                    if not self.is_running:
+                        break
+                    time.sleep(0.1)
+                    
+        self.valves_off_signal.emit()
+        if self.is_running:
+            self.status_signal.emit("清洗完成")
+        else:
+            self.status_signal.emit("已停止")
+        self.finished_signal.emit()
+        
+    def stop(self):
+        self.is_running = False
 
 class ValveControlDialog(QDialog):
     def __init__(self, parent=None, machine_client=None):
@@ -37,6 +88,7 @@ class ValveControlDialog(QDialog):
         self.spin_boxes = {}
         self.status_labels = {}
         self.all_test_buttons = []  # 存储所有测试按钮
+        self.clean_worker = None
         
         self.init_ui()
         
@@ -315,6 +367,56 @@ class ValveControlDialog(QDialog):
         grid_group.setLayout(grid)
         layout.addWidget(grid_group)
         
+        # ====== 新增: 洗阀程序 ======
+        clean_group = QGroupBox("🧽 洗阀程序 (A+A1 自动循环排胶)")
+        clean_layout = QVBoxLayout()
+        
+        clean_grid = QGridLayout()
+        # 参数: 间断时间 (开)、停歇时间 (关)、循环次数
+        clean_grid.addWidget(QLabel("单次排胶时长(s):"), 0, 0)
+        self.spn_clean_on = QDoubleSpinBox()
+        self.spn_clean_on.setRange(0.1, 60.0)
+        self.spn_clean_on.setValue(10.0)
+        self.spn_clean_on.setSingleStep(1.0)
+        clean_grid.addWidget(self.spn_clean_on, 0, 1)
+        
+        clean_grid.addWidget(QLabel("单次停歇时长(s):"), 0, 2)
+        self.spn_clean_off = QDoubleSpinBox()
+        self.spn_clean_off.setRange(0.1, 60.0)
+        self.spn_clean_off.setValue(3.0)
+        self.spn_clean_off.setSingleStep(1.0)
+        clean_grid.addWidget(self.spn_clean_off, 0, 3)
+        
+        clean_grid.addWidget(QLabel("循环次数:"), 0, 4)
+        self.spn_clean_cycles = QSpinBox()
+        self.spn_clean_cycles.setRange(1, 100)
+        self.spn_clean_cycles.setValue(3)
+        clean_grid.addWidget(self.spn_clean_cycles, 0, 5)
+        
+        clean_layout.addLayout(clean_grid)
+        
+        clean_btn_layout = QHBoxLayout()
+        self.btn_run_clean = QPushButton("▶ 运行清洗")
+        self.btn_run_clean.setStyleSheet("background-color: #10B981; color: white; padding: 10px; font-weight: bold; border-radius: 4px;")
+        self.btn_run_clean.clicked.connect(self.run_cleaning_program)
+        
+        self.btn_stop_clean = QPushButton("⏹ 停止清洗")
+        self.btn_stop_clean.setStyleSheet("background-color: #EF4444; color: white; padding: 10px; font-weight: bold; border-radius: 4px;")
+        self.btn_stop_clean.clicked.connect(self.stop_cleaning_program)
+        self.btn_stop_clean.setEnabled(False)
+        
+        self.lbl_clean_status = QLabel("状态: 就绪")
+        self.lbl_clean_status.setStyleSheet("color: #9CA3AF; font-weight: bold;")
+        
+        clean_btn_layout.addWidget(self.btn_run_clean)
+        clean_btn_layout.addWidget(self.btn_stop_clean)
+        clean_btn_layout.addWidget(self.lbl_clean_status)
+        clean_btn_layout.addStretch()
+        
+        clean_layout.addLayout(clean_btn_layout)
+        clean_group.setLayout(clean_layout)
+        layout.addWidget(clean_group)
+        
         # ====== 6. 全部关闭按钮 ======
         btn_all_off = QPushButton("⛔ 全部关闭 (ALL OFF)")
         btn_all_off.setMinimumHeight(45)
@@ -482,10 +584,62 @@ class ValveControlDialog(QDialog):
         for pin in self.status_labels:
             self._reset_status(pin)
         self._enable_all_test_buttons()
+        # 同时停止清洗程序（如果在运行）
+        self.stop_cleaning_program()
+        
+    # ========== 洗阀程序方法 ==========
+    def run_cleaning_program(self):
+        if self.clean_worker and self.clean_worker.isRunning():
+            return
+            
+        # 1. 保存参数（和普通出胶参数一起）
+        self.save_params_to_file(show_msg=False)
+        
+        # 2. 禁用其他测试按钮
+        self._disable_all_test_buttons()
+        self.btn_run_clean.setEnabled(False)
+        self.btn_stop_clean.setEnabled(True)
+        
+        # 3. 启动线程
+        on_time = self.spn_clean_on.value()
+        off_time = self.spn_clean_off.value()
+        cycles = self.spn_clean_cycles.value()
+        
+        self.clean_worker = ValveCleaningWorker(on_time, off_time, cycles, self)
+        self.clean_worker.status_signal.connect(lambda s: self.lbl_clean_status.setText(f"状态: {s}"))
+        self.clean_worker.valves_on_signal.connect(self._clean_valves_on)
+        self.clean_worker.valves_off_signal.connect(self._clean_valves_off)
+        self.clean_worker.finished_signal.connect(self._on_clean_finished)
+        self.clean_worker.start()
+        
+    def stop_cleaning_program(self):
+        if self.clean_worker and self.clean_worker.isRunning():
+            self.clean_worker.stop()
+            self.clean_worker.wait() # 确保线程完全停止
+            
+    def _clean_valves_on(self):
+        if self.machine:
+            self.machine.set_pin("VALVE_A_CTRL", 1)
+            self.machine.set_pin("A1_VALVE", 1)
+        self._set_valve_status("VALVE_A_CTRL", True)
+        self._set_valve_status("A1_VALVE", True)
+        
+    def _clean_valves_off(self):
+        if self.machine:
+            self.machine.set_pin("VALVE_A_CTRL", 0)
+            self.machine.set_pin("A1_VALVE", 0)
+        self._set_valve_status("VALVE_A_CTRL", False)
+        self._set_valve_status("A1_VALVE", False)
+        
+    def _on_clean_finished(self):
+        self._enable_all_test_buttons()
+        self.btn_run_clean.setEnabled(True)
+        self.btn_stop_clean.setEnabled(False)
+        self._clean_valves_off()
     
     # ========== 参数管理 ==========
     
-    def save_params_to_file(self):
+    def save_params_to_file(self, show_msg=True):
         """保存当前参数到文件"""
         params = {
             "version": "1.0",
@@ -493,7 +647,10 @@ class ValveControlDialog(QDialog):
             "parameters": {
                 "prefeed_time": self.spn_prefeed_time.value(),
                 "valve_a_dispense_time": self.spn_valve_a_time.value(),
-                "valve_b_dispense_time": self.spn_valve_b_time.value()
+                "valve_b_dispense_time": self.spn_valve_b_time.value(),
+                "clean_on_time": self.spn_clean_on.value(),
+                "clean_off_time": self.spn_clean_off.value(),
+                "clean_cycles": self.spn_clean_cycles.value()
             },
             "notes": ""
         }
@@ -504,14 +661,15 @@ class ValveControlDialog(QDialog):
         try:
             with open(config_dir / "valve_dispense_params.json", 'w', encoding='utf-8') as f:
                 json.dump(params, f, indent=2, ensure_ascii=False)
-            
-            QMessageBox.information(self, "成功", 
-                f"参数已保存！\n\n"
-                f"供料提前：{params['parameters']['prefeed_time']}秒\n"
-                f"阀A时间：{params['parameters']['valve_a_dispense_time']}秒\n"
-                f"阀B时间：{params['parameters']['valve_b_dispense_time']}秒")
+            if show_msg:
+                QMessageBox.information(self, "成功", 
+                    f"参数已保存！\n\n"
+                    f"供料提前：{params['parameters']['prefeed_time']}秒\n"
+                    f"阀A时间：{params['parameters']['valve_a_dispense_time']}秒\n"
+                    f"阀B时间：{params['parameters']['valve_b_dispense_time']}秒")
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存失败：{e}")
+            if show_msg:
+                QMessageBox.critical(self, "错误", f"保存失败：{e}")
     
     def load_params_from_file(self):
         """从文件加载参数"""
@@ -526,9 +684,14 @@ class ValveControlDialog(QDialog):
                 data = json.load(f)
             
             params = data["parameters"]
-            self.spn_prefeed_time.setValue(params["prefeed_time"])
-            self.spn_valve_a_time.setValue(params["valve_a_dispense_time"])
-            self.spn_valve_b_time.setValue(params["valve_b_dispense_time"])
+            self.spn_prefeed_time.setValue(params.get("prefeed_time", 0.1))
+            self.spn_valve_a_time.setValue(params.get("valve_a_dispense_time", 0.5))
+            self.spn_valve_b_time.setValue(params.get("valve_b_dispense_time", 0.5))
+            
+            # 兼容旧参数文件，提供默认值
+            self.spn_clean_on.setValue(params.get("clean_on_time", 10.0))
+            self.spn_clean_off.setValue(params.get("clean_off_time", 3.0))
+            self.spn_clean_cycles.setValue(params.get("clean_cycles", 3))
             
             last_updated = data.get("last_updated", "未知")
             QMessageBox.information(self, "成功", 
@@ -546,6 +709,9 @@ class ValveControlDialog(QDialog):
             self.spn_prefeed_time.setValue(0.10)
             self.spn_valve_a_time.setValue(0.50)
             self.spn_valve_b_time.setValue(0.50)
+            self.spn_clean_on.setValue(10.0)
+            self.spn_clean_off.setValue(3.0)
+            self.spn_clean_cycles.setValue(3)
             QMessageBox.information(self, "成功", "已恢复默认参数")
     
     def load_params_from_file_silent(self):
@@ -562,9 +728,12 @@ class ValveControlDialog(QDialog):
                 
                 print(f"[ValveControl] 读取到的参数: {params}")
                 
-                self.spn_prefeed_time.setValue(params["prefeed_time"])
-                self.spn_valve_a_time.setValue(params["valve_a_dispense_time"])
-                self.spn_valve_b_time.setValue(params["valve_b_dispense_time"])
+                self.spn_prefeed_time.setValue(params.get("prefeed_time", 0.1))
+                self.spn_valve_a_time.setValue(params.get("valve_a_dispense_time", 0.5))
+                self.spn_valve_b_time.setValue(params.get("valve_b_dispense_time", 0.5))
+                self.spn_clean_on.setValue(params.get("clean_on_time", 10.0))
+                self.spn_clean_off.setValue(params.get("clean_off_time", 3.0))
+                self.spn_clean_cycles.setValue(params.get("clean_cycles", 3))
                 
                 print(f"[ValveControl] ✅ 已加载参数: 供料={params['prefeed_time']}, A={params['valve_a_dispense_time']}, B={params['valve_b_dispense_time']}")
             except Exception as e:

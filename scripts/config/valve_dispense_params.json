@@ -1,11 +1,13 @@
 {
   "version": "1.0",
-  "last_updated": "2025-12-31 17:37:16",
+  "last_updated": "2026-05-22 18:43:54",
   "parameters": {
     "prefeed_time": 0.1,
     "valve_a_dispense_time": 0.77,
     "valve_b_dispense_time": 2.0,
-    "line_speed_xy": 800
+    "clean_on_time": 5.0,
+    "clean_off_time": 3.0,
+    "clean_cycles": 5
   },
-  "notes": "Loaded from product '8888'"
+  "notes": ""
 }

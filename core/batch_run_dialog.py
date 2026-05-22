@@ -6,7 +6,7 @@ import numpy as np
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox, 
     QSpinBox, QPushButton, QGroupBox, QFormLayout, QMessageBox, QTextEdit,
-    QProgressBar, QCheckBox
+    QProgressBar, QCheckBox, QComboBox
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 
@@ -491,8 +491,13 @@ class BatchWorker(QThread):
                     path_points = path_obj
                     seg_type = 'line' if len(path_points) > 1 else 'dot'
                     seg_color = 0
-                    seg_color = 0
                     dwell_ms = 100 # Default
+
+                # ====== 🧪 应用粘度补偿 ======
+                comp_val = self.cfg.get('viscosity_comp_val', 0.0)
+                multiplier = 1.0 + (comp_val / 100.0)
+                dwell_ms = int(dwell_ms * multiplier)
+                # =============================
 
                 # [CRITICAL] Double-check Color (Redundancy)
                 if target_color is not None:
@@ -600,7 +605,12 @@ class BatchWorker(QThread):
 
                     else:
                         # 移动到后续点 - 使用画线速度
-                        line_speed = self.cfg.get('line_speed_xy', speed_xy)
+                        line_speed = self.cfg.get('line_speed', speed_xy)
+                        # 🧪 粘度补偿：速度越慢，出胶越厚
+                        comp_val = self.cfg.get('viscosity_comp_val', 0.0)
+                        multiplier = 1.0 + (comp_val / 100.0)
+                        line_speed = int(line_speed / multiplier)
+                        
                         lines.append(f"G1 X{target_mach_x:.3f} Y{target_mach_y:.3f} F{line_speed}")
                 
                 # [FIX] Add end dwell before closing valve
@@ -873,6 +883,26 @@ class BatchRunDialog(QDialog):
         h_line_speed.addStretch()
         mid_layout.addLayout(h_line_speed)
 
+        # 粘度补偿 (Viscosity Compensation)
+        h_comp = QHBoxLayout()
+        lbl_comp = QLabel("🧪 粘度补偿 (时间追加):")
+        lbl_comp.setStyleSheet("color: #10B981; font-weight: bold;")
+        h_comp.addWidget(lbl_comp)
+        
+        self.cmb_viscosity_comp = QComboBox()
+        self.cmb_viscosity_comp.addItems(["无补偿 (0%)", "+1%", "+3%", "+5%", "+10%", "自定义..."])
+        self.cmb_viscosity_comp.currentIndexChanged.connect(self.on_viscosity_comp_changed)
+        h_comp.addWidget(self.cmb_viscosity_comp)
+        
+        self.spn_viscosity_comp = QDoubleSpinBox()
+        self.spn_viscosity_comp.setRange(0, 100)
+        self.spn_viscosity_comp.setSuffix(" %")
+        self.spn_viscosity_comp.setDecimals(1)
+        self.spn_viscosity_comp.setVisible(False)
+        h_comp.addWidget(self.spn_viscosity_comp)
+        h_comp.addStretch()
+        mid_layout.addLayout(h_comp)
+
         mid_layout.addStretch()
 
         # --- Right: G-code 预览 ---
@@ -991,7 +1021,9 @@ class BatchRunDialog(QDialog):
             'color_change_park_x': self.spn_color_change_x.value(),
             'color_change_park_y': self.spn_color_change_y.value(),
             'color_delay': self.spn_color_delay.value(),
-            'line_speed_xy': self.spn_line_speed.value()
+            'line_speed': self.spn_line_speed.value(),
+            'viscosity_comp_idx': self.cmb_viscosity_comp.currentIndex(),
+            'viscosity_comp_val': self.spn_viscosity_comp.value()
         }
 
     def on_start(self, mode):
@@ -1232,11 +1264,29 @@ class BatchRunDialog(QDialog):
             # Z轴参数：始终从主界面（当前配方）读取，不从全局 cfg 读旧展示値
             self.update_z_display()
             
-            # [NEW] Line speed
-            self.spn_line_speed.setValue(get_int('line_speed_xy', 800))
+            self.spn_color_delay.setValue(cfg.get('color_delay', 500))
+            self.spn_line_speed.setValue(cfg.get('line_speed', 800))
+            
+            comp_idx = cfg.get('viscosity_comp_idx', 0)
+            self.cmb_viscosity_comp.setCurrentIndex(comp_idx)
+            self.spn_viscosity_comp.setValue(cfg.get('viscosity_comp_val', 0.0))
+            self.on_viscosity_comp_changed(comp_idx)
             
         except Exception as e:
-            self.log(f"❌ 加载配置失败: {e}")
+            self.log(f"加载配置失败: {e}")
+
+    def on_viscosity_comp_changed(self, idx):
+        if idx == 5: # 自定义
+            self.spn_viscosity_comp.setVisible(True)
+        else:
+            self.spn_viscosity_comp.setVisible(False)
+            
+            # 自动映射预设值
+            val_map = {0: 0.0, 1: 1.0, 2: 3.0, 3: 5.0, 4: 10.0}
+            if idx in val_map:
+                self.spn_viscosity_comp.blockSignals(True)
+                self.spn_viscosity_comp.setValue(val_map[idx])
+                self.spn_viscosity_comp.blockSignals(False)
 
     def showEvent(self, event):
         """每次打开对话框时刷新 Z 高度展示（同步当前配方的最新值）"""

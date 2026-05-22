@@ -687,15 +687,27 @@ class BatchRunDialog(QDialog):
         super().__init__(main_window)
         self.mw = main_window
         self.setWindowTitle("批量运行 (Batch Run)")
-        self.resize(600, 750) # 增加高度
+        self.resize(1200, 750) # 增加宽度和高度以适应左右布局
         
         self.init_ui()
         self.load_settings()
 
     def init_ui(self):
-        layout = QVBoxLayout()
+        main_layout = QVBoxLayout()
+        h_split = QHBoxLayout()
+        
+        left_layout = QVBoxLayout()
+        mid_layout = QVBoxLayout()
+        right_layout = QVBoxLayout()
 
-        # --- 1. 阵列配置 ---
+        # --- Left: 运行日志 ---
+        left_layout.addWidget(QLabel("运行日志:"))
+        self.log_box = QTextEdit()
+        self.log_box.setReadOnly(True)
+        self.log_box.setMinimumWidth(350) # 强制最小宽度
+        left_layout.addWidget(self.log_box)
+
+        # --- Mid: 阵列配置 & 其它设置 ---
         grp_grid = QGroupBox("阵列配置 (Grid Config)")
         form = QFormLayout()
 
@@ -757,9 +769,9 @@ class BatchRunDialog(QDialog):
         form.addRow("间距 (Spacing):", h_space)
         
         grp_grid.setLayout(form)
-        layout.addWidget(grp_grid)
+        mid_layout.addWidget(grp_grid)
 
-        # --- 2. 高度配置（只读展示，来自当前配方，不可手动修改）---
+        # 高度配置
         grp_z = QGroupBox("高度配置 (Z-Heights)  ← 自动同步配方参数，不可手动修改")
         grp_z.setStyleSheet("QGroupBox { color: #F59E0B; }")
         form_z = QFormLayout()
@@ -802,36 +814,29 @@ class BatchRunDialog(QDialog):
         form_z.addRow("针头高度:", h_nozzle_z)
 
         grp_z.setLayout(form_z)
-        layout.addWidget(grp_z)
+        mid_layout.addWidget(grp_z)
 
-        # 首次填充展示值
         self.update_z_display()
 
-
-        # --- 3. 运行日志 ---
-        self.log_box = QTextEdit()
-        self.log_box.setReadOnly(True)
-        layout.addWidget(self.log_box)
-
-        # --- 3.1 模拟设置 (New) ---
+        # 模拟设置
         self.chk_simulate = QCheckBox("模拟出胶 (关闭阀门)")
         self.chk_simulate.setChecked(True) # Default Checked
         self.chk_simulate.setStyleSheet("color: #F59E0B; font-weight: bold;")
-        layout.addWidget(self.chk_simulate)
+        mid_layout.addWidget(self.chk_simulate)
 
-        # --- 3.2 混合模式 (New) ---
+        # 混合模式
         self.chk_mixed_mode = QCheckBox("启用混合模式 (Mixed Mode - Detect All Products)")
         self.chk_mixed_mode.setChecked(False)
         self.chk_mixed_mode.setStyleSheet("color: #3B82F6; font-weight: bold;")
         self.chk_mixed_mode.setToolTip("开启后，每个位置都会尝试匹配所有已训练的产品，\n并自动加载最佳匹配的产品路径。")
-        layout.addWidget(self.chk_mixed_mode)
+        mid_layout.addWidget(self.chk_mixed_mode)
 
-        # [NEW V3.1] Color-change checkpoint
+        # Color-change checkpoint
         self.chk_color_change_pause = QCheckBox("颜色切换停靠确认（测试出胶后继续）")
         self.chk_color_change_pause.setChecked(True)
         self.chk_color_change_pause.setStyleSheet("color: #F97316; font-weight: bold;")
         self.chk_color_change_pause.setToolTip("每种颜色完成后，自动停靠到换胶位并弹窗确认。")
-        layout.addWidget(self.chk_color_change_pause)
+        mid_layout.addWidget(self.chk_color_change_pause)
 
         h_color_park = QHBoxLayout()
         h_color_park.addWidget(QLabel("换胶停靠 X:"))
@@ -845,9 +850,9 @@ class BatchRunDialog(QDialog):
         self.spn_color_change_y.setDecimals(3)
         h_color_park.addWidget(self.spn_color_change_y)
         h_color_park.addStretch()
-        layout.addLayout(h_color_park)
+        mid_layout.addLayout(h_color_park)
 
-        # [NEW] Color Supply Delay
+        # Color Supply Delay
         h_color_delay = QHBoxLayout()
         h_color_delay.addWidget(QLabel("供料延时 (ms):"))
         self.spn_color_delay = QSpinBox()
@@ -855,32 +860,41 @@ class BatchRunDialog(QDialog):
         self.spn_color_delay.setValue(500)
         h_color_delay.addWidget(self.spn_color_delay)
         h_color_delay.addStretch()
-        layout.addLayout(h_color_delay)
+        mid_layout.addLayout(h_color_delay)
 
-        # [NEW] Line Speed
+        # Line Speed
         h_line_speed = QHBoxLayout()
         h_line_speed.addWidget(QLabel("画线速度 (mm/min):"))
         self.spn_line_speed = QSpinBox()
         self.spn_line_speed.setRange(100, 5000)
-        self.spn_line_speed.setValue(800)  # Default 800mm/min
+        self.spn_line_speed.setValue(800)
         h_line_speed.addWidget(self.spn_line_speed)
         h_line_speed.addStretch()
-        layout.addLayout(h_line_speed)
+        mid_layout.addLayout(h_line_speed)
+
+        mid_layout.addStretch()
+
+        # --- Right: G-code 预览 ---
+        right_layout.addWidget(QLabel("G-code 实时预览:"))
+        self.gcode_box = QTextEdit()
+        self.gcode_box.setReadOnly(True)
+        self.gcode_box.setMinimumWidth(350) # 强制最小宽度
+        self.gcode_box.setStyleSheet("background-color: #1e1e1e; color: #dcdcdc; font-family: Consolas; font-size: 10pt;")
+        right_layout.addWidget(self.gcode_box)
+
+        # Add to split layout
+        h_split.addLayout(left_layout, stretch=1)
+        h_split.addLayout(mid_layout, stretch=1)
+        h_split.addLayout(right_layout, stretch=1)
+        
+        main_layout.addLayout(h_split)
 
         # --- 3.5 进度条 ---
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
         self.progress_bar.setFormat("%p%") # 显示百分比
-        layout.addWidget(self.progress_bar)
-
-        # G-code 预览框 (新增)
-        layout.addWidget(QLabel("G-code 实时预览:"))
-        self.gcode_box = QTextEdit()
-        self.gcode_box.setReadOnly(True)
-        self.gcode_box.setStyleSheet("background-color: #1e1e1e; color: #dcdcdc; font-family: Consolas; font-size: 10pt;")
-        layout.addWidget(self.gcode_box)
+        main_layout.addWidget(self.progress_bar)
 
         # --- 4. 按钮 ---
         btn_layout = QHBoxLayout()
@@ -928,8 +942,8 @@ class BatchRunDialog(QDialog):
         btn_layout.addWidget(self.btn_resume)
         btn_layout.addWidget(self.btn_stop)
         
-        layout.addLayout(btn_layout)
-        self.setLayout(layout)
+        main_layout.addLayout(btn_layout)
+        self.setLayout(main_layout)
 
     def on_teach_start(self):
         x, y, z = self.mw.machine.get_position()

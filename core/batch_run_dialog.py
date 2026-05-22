@@ -451,7 +451,8 @@ class BatchWorker(QThread):
             safe_z_cavity  = float(self.mw.safe_z_cavity  or 0.0)
             safe_z_product = float(self.mw.safe_z_product or 0.0)
             work_z         = float(self.mw.work_z         or 0.0)
-            valve_on = (self.mode == 'real')
+            # [FIX] 如果取消了“模拟出胶”，针头模式下也应该真实出胶
+            valve_on = not self.cfg.get('disable_valves', False)
 
         speed_xy = int(self.mw.feedrate_xy)
         speed_z = int(self.mw.feedrate_z)

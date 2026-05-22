@@ -294,6 +294,16 @@ class HalconProductManager:
                  # Optional: Clear cached template to force re-computation
                  if hasattr(self.mw, 'halcon_path_template'):
                      self.mw.halcon_path_template = None
+                     
+                 # [FIX] Update global Z heights from this product's config
+                 # so that BatchWorker.generate_dispense_gcode uses the correct heights
+                 self.mw.safe_z_cavity = config.get('safe_z_cavity', self.mw.safe_z_cavity)
+                 self.mw.safe_z_product = config.get('safe_z_product', self.mw.safe_z_product)
+                 self.mw.work_z = config.get('work_z', self.mw.work_z)
+                 
+                 self.mw.cam_safe_z_cavity = config.get('cam_safe_z_cavity', getattr(self.mw, 'cam_safe_z_cavity', 0.0))
+                 self.mw.cam_safe_z_product = config.get('cam_safe_z_product', getattr(self.mw, 'cam_safe_z_product', 0.0))
+                 self.mw.cam_work_z = config.get('cam_work_z', getattr(self.mw, 'cam_work_z', 0.0))
 
             # 5. 设置当前产品
             self.current_product = product_name

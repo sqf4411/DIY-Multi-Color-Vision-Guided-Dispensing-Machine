@@ -5,16 +5,16 @@
   "gain": 2.4,
   "gamma": 2.2,
   "feedrate_xy": 1500,
-  "feedrate_z": 500,
+  "feedrate_z": 600,
   "accel": 452.0,
   "jog_step_mm": 1.0,
-  "safe_z_cavity": 63.0,
+  "safe_z_cavity": 62.5,
   "safe_z_product": 78.0,
-  "work_z": 58.3,
-  "model_row": 1016.0,
-  "model_col": 1507.5,
+  "work_z": 59.1,
+  "model_row": 1025.5,
+  "model_col": 1558.5,
   "product_name": "投币1",
-  "model_file": "n_TB2.shm",
+  "model_file": "model.shm",
   "valve_prefeed_time": 0.1,
   "valve_a_dispense_time": 0.77,
   "valve_b_dispense_time": 2.0,
@@ -26,475 +26,431 @@
         "color": 0,
         "points": [
           [
-            1079.97,
-            549.44
+            1077.77,
+            540.47
           ],
           [
-            1350.23,
-            551.04
+            1361.58,
+            540.54
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1360.5,
-            581.1
+            1364.61,
+            592.23
           ],
           [
-            1365.22,
-            857.86
+            1366.57,
+            848.68
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1335.28,
-            859.58
+            1310.82,
+            847.65
           ],
           [
-            1099.15,
-            861.66
+            1078.7,
+            847.59
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1074.78,
-            847.43
+            1083.78,
+            807.05
           ],
           [
-            1070.95,
-            583.5
+            1073.7,
+            577.97
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1738.51,
-            543.39
+            1741.68,
+            538.6
           ],
           [
-            2007.48,
-            549.75
+            2019.41,
+            534.62
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            2018.95,
-            578.92
+            2026.49,
+            578.2
           ],
           [
-            2024.52,
-            844.1
+            2027.45,
+            844.78
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1991.41,
-            854.2
+            1976.77,
+            842.74
           ],
           [
-            1756.55,
-            860.19
+            1743.64,
+            843.7
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1734.52,
-            832.18
+            1739.58,
+            805.18
           ],
           [
-            1728.77,
-            580.19
+            1732.55,
+            569.01
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1749.12,
-            1206.96
+            1084.7,
+            1202.35
           ],
           [
-            2008.89,
-            1210.55
+            1360.4,
+            1202.42
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            2025.6,
-            1242.44
+            1369.52,
+            1241.95
           ],
           [
-            2030.03,
-            1494.42
+            1371.47,
+            1509.55
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            2000.77,
-            1512.48
+            1307.62,
+            1511.56
           ],
           [
-            1763.29,
-            1517.11
+            1084.62,
+            1510.49
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1738.55,
-            1494.34
+            1082.61,
+            1467.92
           ],
           [
-            1738.02,
-            1246.38
+            1080.64,
+            1246.95
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1085.11,
-            1217.42
+            1744.56,
+            1199.47
           ],
           [
-            1359.04,
-            1212.2
+            2022.29,
+            1197.52
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1366.89,
-            1231.23
+            2028.36,
+            1226.91
           ],
           [
-            1369.56,
-            1493.41
+            2029.31,
+            1498.56
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1361.07,
-            1521.22
+            1985.73,
+            1503.61
           ],
           [
-            1094.33,
-            1527.43
+            1746.52,
+            1501.53
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "line",
         "color": 0,
         "points": [
           [
-            1083.81,
-            1506.58
+            1742.47,
+            1457.94
           ],
           [
-            1078.43,
-            1244.36
+            1743.54,
+            1249.14
           ]
         ],
-        "dwell_ms": 550
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1216.58,
-            620.12
+            1154.86,
+            658.83
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1284.68,
-            675.8
+            1284.32,
+            655.47
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1256.29,
-            749.57
+            1177.69,
+            745.15
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1189.81,
-            768.07
+            1280.07,
+            745.17
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1143.16,
-            694.15
+            1812.25,
+            656.87
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1878.85,
-            615.15
+            1947.66,
+            651.74
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1945.95,
-            677.88
+            1845.76,
+            747.15
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1928.1,
-            756.21
+            1919.27,
+            751.03
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1849.38,
-            766.6
+            1149.2,
+            1328.63
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1805.49,
-            683.89
+            1291.06,
+            1318.34
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1879.43,
-            1274.7
+            1186.58,
+            1408.59
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1944.06,
-            1325.92
+            1256.22,
+            1420.21
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1923.3,
-            1422.76
+            1805.64,
+            1312.02
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1849.07,
-            1427.02
+            1951.37,
+            1313.34
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1801.37,
-            1364.56
+            1849.47,
+            1410.04
           ]
         ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       },
       {
         "type": "dot",
         "color": 1,
         "points": [
           [
-            1223.36,
-            1278.87
+            1912.66,
+            1420.37
           ]
         ],
-        "dwell_ms": 1030
-      },
-      {
-        "type": "dot",
-        "color": 1,
-        "points": [
-          [
-            1290.44,
-            1344.25
-          ]
-        ],
-        "dwell_ms": 1030
-      },
-      {
-        "type": "dot",
-        "color": 1,
-        "points": [
-          [
-            1268.13,
-            1425.17
-          ]
-        ],
-        "dwell_ms": 1030
-      },
-      {
-        "type": "dot",
-        "color": 1,
-        "points": [
-          [
-            1187.72,
-            1430.24
-          ]
-        ],
-        "dwell_ms": 1030
-      },
-      {
-        "type": "dot",
-        "color": 1,
-        "points": [
-          [
-            1141.83,
-            1364.27
-          ]
-        ],
-        "dwell_ms": 1030
+        "dwell_ms": 100
       }
     ],
-    "timestamp": 1780046326.2905123,
+    "timestamp": 1780048619.8222497,
     "transform_data": {
-      "cx": 1532.32,
-      "cy": 1055.12,
-      "angle": 6.2694,
-      "score": 0.4125
+      "cx": 1567.88,
+      "cy": 1060.43,
+      "angle": -0.0002,
+      "score": 0.9558
     }
   },
   "roi_in_reference": {
-    "x": 732,
-    "y": 272,
-    "width": 1555,
-    "height": 1492
+    "x": 900,
+    "y": 382,
+    "width": 1317,
+    "height": 1287
   },
   "laser_data": {
     "timestamp": 1779441916.5264,
@@ -646,5 +602,8 @@
   "cam_safe_z_cavity": 166.0,
   "cam_safe_z_product": 168.0,
   "cam_work_z": 164.0,
-  "segment_heights": {}
+  "segment_heights": {},
+  "nozzle_offset_x": -98.2,
+  "nozzle_offset_y": -5.0,
+  "z_base": 53.2
 }

@@ -70,11 +70,41 @@ class HalconManager:
             return False
 
     def set_model_path(self, path):
-        """设置当前使用的产品模型路径"""
+        """设置当前使用的产品模型路径（支持中文路径）"""
         if path and os.path.exists(path):
-            self.current_model_path = path
-            print(f"[HalconManager] 已设置模型路径: {path}")
-            return True
+            # 检查路径是否包含非ASCII字符（中文）
+            try:
+                path.encode('ascii')
+                ascii_safe = True
+            except UnicodeEncodeError:
+                ascii_safe = False
+            
+            if not ascii_safe:
+                # Halcon 可能无法处理中文路径，复制到临时 ASCII 路径
+                import shutil
+                import hashlib
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                project_root = os.path.dirname(current_dir)
+                temp_dir = os.path.join(project_root, "config", "_temp_model")
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                # 用 MD5 哈希生成唯一且安全的 ASCII 文件名，防止多个产品模型相互覆盖破坏
+                path_hash = hashlib.md5(os.path.abspath(path).encode('utf-8')).hexdigest()
+                temp_path = os.path.join(temp_dir, f"model_{path_hash}.shm")
+                try:
+                    shutil.copy2(path, temp_path)
+                    self.current_model_path = temp_path
+                    self._original_model_path = path  # 保留原始路径供参考
+                    print(f"[HalconManager] (Unicode -> Temp ASCII): {temp_path}")
+                    return True
+                except Exception as e:
+                    print(f"[HalconManager] Warning: Copy model failed: {e}")
+                    self.current_model_path = path  # 回退到原路径
+                    return True
+            else:
+                self.current_model_path = path
+                print(f"[HalconManager] 已设置模型路径: {path}")
+                return True
         else:
             print(f"[HalconManager] 模型文件不存在: {path}")
             return False
@@ -130,16 +160,16 @@ class HalconManager:
             if self.current_model_path and os.path.exists(self.current_model_path):
                 # 传入绝对路径
                 abs_model_path = os.path.abspath(self.current_model_path)
-                print(f"[HalconManager] 🔍 使用模型: {abs_model_path}")  # 调试日志
+                print(f"[HalconManager] Using model: {abs_model_path}")  # 调试日志
                 try:
                     proc_call.set_input_control_param_by_name("ModelPath", abs_model_path)
-                    print(f"[HalconManager] ✅ ModelPath参数传递成功")  # 调试日志
+                    print(f"[HalconManager] ModelPath param passed successfully")  # 调试日志
                 except Exception as e:
                     # 脚本可能没定义这个参数，忽略警告（兼容旧脚本）
-                    print(f"[HalconManager] ⚠️ ModelPath参数传递失败: {e}")  # 调试日志
+                    print(f"[HalconManager] Warning: ModelPath param pass failed: {e}")  # 调试日志
                     pass
             else:
-                print(f"[HalconManager] ⚠️ 未设置模型路径或文件不存在: {self.current_model_path}")  # 调试日志
+                print(f"[HalconManager] Warning: Model path not set or file missing: {self.current_model_path}")  # 调试日志
             
             # 执行
             proc_call.execute()
@@ -203,7 +233,24 @@ class HalconManager:
             if roi:
                 print(f"[HalconManager] 使用ROI: {roi}")
             
-            # 1. Read Image
+            # 1. Read Image (支持中文路径)
+            import shutil
+            temp_img_path = None
+            temp_model_path = None
+            try:
+                image_path.encode('ascii')
+            except UnicodeEncodeError:
+                # 中文路径：复制到临时 ASCII 路径
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                project_root = os.path.dirname(current_dir)
+                temp_dir = os.path.join(project_root, "config", "_temp_model")
+                os.makedirs(temp_dir, exist_ok=True)
+                ext = os.path.splitext(image_path)[1]
+                temp_img_path = os.path.join(temp_dir, f"train_img{ext}")
+                shutil.copy2(image_path, temp_img_path)
+                image_path = temp_img_path
+                print(f"[HalconManager] (Unicode Image -> Temp ASCII): {temp_img_path}")
+            
             image = ha.read_image(image_path)
             
             # 2. Apply ROI if provided
@@ -218,7 +265,7 @@ class HalconManager:
                 template_image = image
             
             # 3. Create Shape Model
-            # 调整参数以提高对光照差异的鲁棒性
+            # 调整参数以提高对光照差异的鲁棒性，使用双阈值滞后(Contrast=(30, 40))过滤背景噪点，使得模板更干净，匹配分数更高。
             model_id = ha.create_shape_model(
                 template_image, 
                 'auto',                      # NumLevels
@@ -227,8 +274,8 @@ class HalconManager:
                 'auto',                      # AngleStep
                 'auto',                      # Optimization
                 'use_polarity',              # Metric - 🔙 回退到最稳定的基础模式
-                'auto',                      # Contrast
-                20                           # MinContrast - 🔙 回退到默认20（最快速度）
+                (30, 40),                    # Contrast - 使用滞后阈值，提取更连续和鲁棒的边缘
+                10                           # MinContrast - 🔙 默认10，保证低对比度下的鲁棒性
             )
             
             # 4. Get Model Origin
@@ -237,13 +284,27 @@ class HalconManager:
             # 5. Calculate center of gravity
             area, row_g, col_g = ha.area_center(template_image)
             
-            # 6. Write Model
-            ha.write_shape_model(model_id, output_model_path)
+            # 6. Write Model (支持中文路径)
+            actual_output_path = output_model_path
+            try:
+                output_model_path.encode('ascii')
+            except UnicodeEncodeError:
+                # 中文路径：先写入临时路径，再复制过去
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                project_root = os.path.dirname(current_dir)
+                temp_dir = os.path.join(project_root, "config", "_temp_model")
+                os.makedirs(temp_dir, exist_ok=True)
+                temp_model_path = os.path.join(temp_dir, "trained_model.shm")
+                ha.write_shape_model(model_id, temp_model_path)
+                shutil.copy2(temp_model_path, actual_output_path)
+                print(f"[HalconManager] (Unicode Model -> Temp ASCII copy to): {actual_output_path}")
+            else:
+                ha.write_shape_model(model_id, output_model_path)
             
             # 7. Cleanup
             ha.clear_shape_model(model_id)
             
-            print(f"[HalconManager] 模型已保存: {output_model_path}, Origin: ({row_g}, {col_g})")
+            print(f"[HalconManager] 模型已保存: {actual_output_path}, Origin: ({row_g}, {col_g})")
             return True, {"msg": "Success", "origin_row": row_g, "origin_col": col_g}
             
         except Exception as e:

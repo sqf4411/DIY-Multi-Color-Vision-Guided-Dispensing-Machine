@@ -3841,6 +3841,7 @@ class MainWindow(QWidget):
 
     def update_image(self, img: np.ndarray):
         self.last_frame = img.copy()
+        self.frame_counter = getattr(self, 'frame_counter', 0) + 1
         if self.freeze_display:
             return
         self.render_current_frame()
@@ -4183,12 +4184,13 @@ class MainWindow(QWidget):
         )
 
         if save_path:
-            ok = cv2.imwrite(save_path, frame_to_save)
+            from core.cv2_unicode import imwrite_unicode
+            ok = imwrite_unicode(save_path, frame_to_save)
             if ok:
                 self.log(f"📸 已保存图片：{save_path}")
                 self.latest_capture_path = save_path  # ✅ 记录路径
             else:
-                self.log("❌ 保存图片失败（cv2.imwrite 返回 False）")
+                self.log("❌ 保存图片失败（imwrite_unicode 返回 False）")
         else:
             self.log("⚠ 已取消保存图片")
 
@@ -4667,7 +4669,7 @@ class MainWindow(QWidget):
         if not os.path.exists(recipe_dir):
             os.makedirs(recipe_dir)
             
-        model_path = os.path.join(recipe_dir, f"{name}.shm")
+        model_path = os.path.join(recipe_dir, "model.shm")
         
         # Call Halcon Logic (Synchronous for now, or Worker)
         # For this step, we might need to rely on the existing "run_training_script" logic 
@@ -4679,13 +4681,14 @@ class MainWindow(QWidget):
             # [FIX] Ensure the saved image is FLIPPED (Upright) to match path_teach and live view
             dest_img_path = os.path.join(recipe_dir, "reference.png")
             # shutil.copy2(img_path, dest_img_path) 
-            raw_img = cv2.imread(img_path)
+            from core.cv2_unicode import imread_unicode, imwrite_unicode
+            raw_img = imread_unicode(img_path)
             if raw_img is not None:
                 # Assume input from capture is Inverted (Raw). We Flip it Upright.
                 # If it's already upright (external file), this might invert it back, 
                 # but we prioritize consistency with the Camera/Capture workflow.
                 upright_img = cv2.flip(raw_img, -1)
-                cv2.imwrite(dest_img_path, upright_img)
+                imwrite_unicode(dest_img_path, upright_img)
                 self.log(f"✅ 保存并翻转配方图像: {dest_img_path}")
             else:
                 self.log(f"⚠ 无法读取源图像: {img_path}")
@@ -4757,7 +4760,7 @@ class MainWindow(QWidget):
                     'color_delay': getattr(self, 'color_delay', 500),
                     
                     # === Halcon 模型信息 ===
-                    'model_file': f"{name}.shm",
+                    'model_file': "model.shm",
                     'model_row': origin_row,
                     'model_col': origin_col,
                     'use_halcon': self.chk_use_halcon.isChecked() if hasattr(self, 'chk_use_halcon') else False,
@@ -5655,7 +5658,8 @@ class MainWindow(QWidget):
                     if prod_dir:
                         ref_img_path = os.path.join(prod_dir, 'reference.png')
                         if os.path.exists(ref_img_path):
-                            img_dry = cv2.imread(ref_img_path)
+                            from core.cv2_unicode import imread_unicode
+                            img_dry = imread_unicode(ref_img_path)
                             if img_dry is not None:
                                 self.log(f"📷 使用配方参考图作为背景")
                 except Exception as e:
@@ -6508,7 +6512,8 @@ class MainWindow(QWidget):
                     recipe_img_path = os.path.join(self.product_manager.get_product_path(current_recipe), "reference.png")
                     if os.path.exists(recipe_img_path):
                         print(f"[Halcon] Using Product Image: {recipe_img_path}")
-                        img_raw = cv2.imread(recipe_img_path)
+                        from core.cv2_unicode import imread_unicode
+                        img_raw = imread_unicode(recipe_img_path)
                         if img_raw is not None:
                             gray_gold = cv2.cvtColor(img_raw, cv2.COLOR_BGR2GRAY)
                             used_path = recipe_img_path
@@ -6519,7 +6524,8 @@ class MainWindow(QWidget):
             # latest_capture_path is likely absolute if from QFileDialog, but let's be safe
             if gray_gold is None and hasattr(self, 'latest_capture_path') and self.latest_capture_path and os.path.exists(self.latest_capture_path):
                  print(f"[Halcon] Using latest capture: {self.latest_capture_path}")
-                 img_raw = cv2.imread(self.latest_capture_path)
+                 from core.cv2_unicode import imread_unicode
+                 img_raw = imread_unicode(self.latest_capture_path)
                  if img_raw is not None:
                       # ⚠️ CRITICAL: Camera is mounted upside down, so we normally rotate 180 for "Golden" usage
                       # The paths are likely drawn on the ROTATED image.
@@ -6540,31 +6546,39 @@ class MainWindow(QWidget):
                     # Also checked latest capture if available
                     return
 
+            # Get roi_in_ref first to see if we can bypass big_box requirement
+            roi_in_ref = None
+            hpm = getattr(self, 'halcon_product_manager', None)
+            if hpm:
+                roi_in_ref = getattr(hpm, 'roi_in_reference', None)
+
             # B. Get Perspective Matrix (Warped -> Raw)
+            Minv = None
             rect, big_box = _find_big_mold(gray_gold)
             if big_box is None: 
                 print("[Halcon] ERR: Could not find big box in source image")
-                return
-            
-            # Recalculate Minv (Same logic as mold_detector)
-            warp_size_path = os.path.join(config_dir, "warp_size.npy")
-            if os.path.exists(warp_size_path):
-                warp_size = np.load(warp_size_path)
-                goldW, goldH = int(warp_size[0]), int(warp_size[1])
+                if roi_in_ref is None:
+                    return
             else:
-                 # Fallback if missing (should not happen if trained)
-                 goldW, goldH = 1000, 1000 # Guess or fail?
-            
-            pts = big_box.astype(np.float32)
-            s = pts.sum(axis=1)
-            tl, br = pts[np.argmin(s)], pts[np.argmax(s)]
-            diff = np.diff(pts, axis=1)
-            tr, bl = pts[np.argmin(diff)], pts[np.argmax(diff)]
-            rect_pts = np.array([tl, tr, br, bl], dtype=np.float32)
-            dst_pts = np.array([[0, 0], [goldW - 1, 0], [goldW - 1, goldH - 1], [0, goldH - 1]], dtype=np.float32)
-            
-            # Minv: Warped (dst) -> Raw (rect)
-            Minv = cv2.getPerspectiveTransform(dst_pts, rect_pts)
+                # Recalculate Minv (Same logic as mold_detector)
+                warp_size_path = os.path.join(config_dir, "warp_size.npy")
+                if os.path.exists(warp_size_path):
+                    warp_size = np.load(warp_size_path)
+                    goldW, goldH = int(warp_size[0]), int(warp_size[1])
+                else:
+                     # Fallback if missing (should not happen if trained)
+                     goldW, goldH = 1000, 1000 # Guess or fail?
+                
+                pts = big_box.astype(np.float32)
+                s = pts.sum(axis=1)
+                tl, br = pts[np.argmin(s)], pts[np.argmax(s)]
+                diff = np.diff(pts, axis=1)
+                tr, bl = pts[np.argmin(diff)], pts[np.argmax(diff)]
+                rect_pts = np.array([tl, tr, br, bl], dtype=np.float32)
+                dst_pts = np.array([[0, 0], [goldW - 1, 0], [goldW - 1, goldH - 1], [0, goldH - 1]], dtype=np.float32)
+                
+                # Minv: Warped (dst) -> Raw (rect)
+                Minv = cv2.getPerspectiveTransform(dst_pts, rect_pts)
             
             # D. Use saved model origin instead of re-matching!
             # Re-matching may find a different product than the training sample
@@ -6780,6 +6794,9 @@ class MainWindow(QWidget):
         btn_load = QPushButton("加载 (Load)")
         btn_load.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 6px;")
         
+        btn_rename = QPushButton("重命名 (Rename)")
+        btn_rename.setStyleSheet("background-color: #F59E0B; color: black; padding: 6px;")
+        
         btn_delete = QPushButton("删除 (Delete)")
         btn_delete.setStyleSheet("background-color: #EF4444; color: white; padding: 6px;")
         
@@ -6787,6 +6804,7 @@ class MainWindow(QWidget):
         btn_cancel.setStyleSheet("padding: 6px;")
         
         btn_layout.addWidget(btn_load)
+        btn_layout.addWidget(btn_rename)
         btn_layout.addWidget(btn_delete)
         btn_layout.addWidget(btn_cancel)
         layout.addLayout(btn_layout)
@@ -6840,11 +6858,68 @@ class MainWindow(QWidget):
                              dialog.reject()
                 except Exception as e:
                     QMessageBox.critical(dialog, "删除失败", f"无法删除产品: {e}")
+
+        def do_rename():
+            item = list_widget.currentItem()
+            if not item: return
+            old_name = item.text()
+            
+            new_name, ok = QInputDialog.getText(dialog, "重命名产品", 
+                f"当前名称: {old_name}\n\n请输入新名称（支持中文）:",
+                text=old_name)
+            if not ok or not new_name.strip():
+                return
+            new_name = new_name.strip()
+            
+            if new_name == old_name:
+                return
+            
+            if not self.product_manager.is_valid_product_name(new_name):
+                QMessageBox.warning(dialog, "名称不合法",
+                    "产品名称仅支持 1-64 位：中文、英文、数字、下划线(_)和短横线(-)。")
+                return
+            
+            if new_name in self.product_manager.list_products():
+                QMessageBox.warning(dialog, "名称已存在", f"产品 '{new_name}' 已存在！")
+                return
+            
+            try:
+                import shutil
+                old_path = self.product_manager.get_product_path(old_name)
+                new_path = self.product_manager.get_product_path(new_name)
+                
+                # 移动目录
+                shutil.move(old_path, new_path)
+                
+                # 更新config.json中的product_name
+                config_path = os.path.join(new_path, "config.json")
+                if os.path.exists(config_path):
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        cfg = json.load(f)
+                    cfg['product_name'] = new_name
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        json.dump(cfg, f, indent=2, ensure_ascii=False)
+                
+                # 更新列表
+                item.setText(new_name)
+                
+                # 如果是当前加载的产品，更新引用
+                if self.current_product == old_name:
+                    self.current_product = new_name
+                    self.lbl_recipe_name.setText(new_name)
+                    if self.halcon_product_manager:
+                        self.halcon_product_manager.current_product = new_name
+                
+                self.log(f"✅ 产品已重命名: {old_name} → {new_name}")
+                
+            except Exception as e:
+                QMessageBox.critical(dialog, "重命名失败", f"无法重命名: {e}")
         
         # Check double click
         list_widget.itemDoubleClicked.connect(do_load)
         
         btn_load.clicked.connect(do_load)
+        btn_rename.clicked.connect(do_rename)
         btn_delete.clicked.connect(do_delete)
         btn_cancel.clicked.connect(dialog.reject)
         

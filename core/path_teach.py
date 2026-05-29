@@ -70,7 +70,8 @@ def run_path_teach(cell_index: int = 0,
         return False
 
     # ---------- 1. 读入 mold2.png 并重新生成“黄金视角”整板 ----------
-    gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    from core.cv2_unicode import imread_unicode
+    gray = imread_unicode(img_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
         print(f"❌ 无法读取图像: {img_path}")
         return False

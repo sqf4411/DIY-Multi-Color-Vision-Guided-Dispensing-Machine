@@ -3,6 +3,7 @@
 兼容OpenCV和Halcon两种模式，集成多颜色编辑器
 """
 import cv2
+from core.cv2_unicode import imread_unicode as _imread
 import numpy as np
 import os
 import json
@@ -107,7 +108,7 @@ def edit_path_opencv_mode(parent, cell_index=0, img_path="config/mold2.png", sav
         return False
     
     # 读取训练图并生成黄金视角
-    gray = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    gray = _imread(img_path, cv2.IMREAD_GRAYSCALE)
     if gray is None:
         QMessageBox.critical(parent, "错误", f"无法读取图像: {img_path}")
         return False
@@ -252,7 +253,7 @@ def edit_path_halcon_mode(parent, product_name, product_dir):
             f"未找到ROI图像\\n路径: {roi_img_path}\\n\\n请先训练模型并选择ROI区域")
         return False
     
-    template = cv2.imread(roi_img_path, cv2.IMREAD_GRAYSCALE)
+    template = _imread(roi_img_path, cv2.IMREAD_GRAYSCALE)
     if template is None:
         QMessageBox.critical(parent, "错误", f"无法读取ROI图像: {roi_img_path}")
         return False

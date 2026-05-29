@@ -81,7 +81,8 @@ class SimpleROIDialog(QDialog):
         self.setWindowTitle("选择训练区域 (ROI) - 请框选单个产品")
         
         # 加载并缩放图像
-        cv_img = cv2.imread(image_path)
+        from core.cv2_unicode import imread_unicode
+        cv_img = imread_unicode(image_path)
         rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         qt_image = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()

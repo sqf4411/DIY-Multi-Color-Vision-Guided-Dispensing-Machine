@@ -10,6 +10,7 @@ import numpy as np
 import shutil
 from typing import Optional, Dict, List, Tuple
 from core.path_segment import PathSegmentList, PathSegment
+from core.cv2_unicode import imread_unicode as _cv2_imread_unicode, imwrite_unicode as _cv2_imwrite_unicode
 import json
 
 
@@ -58,13 +59,13 @@ class HalconProductManager:
             
             # 2. 保存训练图片（翻转为正向）
             dest_img_path = os.path.join(product_dir, 'reference.png')
-            raw_img = cv2.imread(image_path)
+            raw_img = _cv2_imread_unicode(image_path)
             if raw_img is None:
                 return False, f"无法读取图像: {image_path}"
             
             # 翻转180度，与路径编辑器的warp图方向一致
             upright_img = cv2.flip(raw_img, -1)
-            cv2.imwrite(dest_img_path, upright_img)
+            _cv2_imwrite_unicode(dest_img_path, upright_img)
             
             # 3. 使用OpenCV检测模具外框
             from core.mold_detector import detect_mold_and_cells
@@ -106,11 +107,11 @@ class HalconProductManager:
             x, y, w, h = roi_rect.x(), roi_rect.y(), roi_rect.width(), roi_rect.height()
             roi_image = upright_img[y:y+h, x:x+w]
             roi_img_path = os.path.join(product_dir, 'roi_template.png')
-            cv2.imwrite(roi_img_path, roi_image)
+            _cv2_imwrite_unicode(roi_img_path, roi_image)
             print(f"[HalconProductManager] ✅ ROI图像已保存: {roi_img_path}, 尺寸: {w}x{h}")
             
             # 6. 用裁剪后的ROI图像训练模型（不需要roi参数了！）
-            model_path = os.path.join(product_dir, f'{product_name}.shm')
+            model_path = os.path.join(product_dir, 'model.shm')
             result = self.halcon.train_model(roi_img_path, model_path, roi=None)
             
             # 解析训练结果
@@ -141,7 +142,7 @@ class HalconProductManager:
                 return False, "模型训练失败"
             
             # 7. 更新配置（保存ROI信息用于记录）
-            config_data['model_file'] = f'{product_name}.shm'
+            config_data['model_file'] = 'model.shm'
             config_data['model_row'] = origin_row
             config_data['model_col'] = origin_col
             config_data['product_name'] = product_name
@@ -197,13 +198,23 @@ class HalconProductManager:
             
             # 2. 加载模型
             product_dir = self.products.get_product_path(product_name)
-            model_file = config.get('model_file', f'{product_name}.shm')
+            model_file = config.get('model_file', 'model.shm')
             model_path = os.path.join(product_dir, model_file)
+            
+            # 兼容旧配方：尝试 model.shm → {product_name}.shm
+            if not os.path.exists(model_path):
+                fallback_path = os.path.join(product_dir, 'model.shm')
+                if os.path.exists(fallback_path):
+                    model_path = fallback_path
+                else:
+                    fallback_path2 = os.path.join(product_dir, f'{product_name}.shm')
+                    if os.path.exists(fallback_path2):
+                        model_path = fallback_path2
             
             if os.path.exists(model_path):
                 ok = self.halcon.set_model_path(model_path)
                 if not ok:
-                    return False, f"模型加载失败: {model_file}"
+                    return False, f"模型加载失败: {os.path.basename(model_path)}"
             else:
                 return False, f"模型文件不存在: {model_file}"
             
@@ -333,7 +344,7 @@ class HalconProductManager:
             config_data['model_row'] = self.model_ref_row
             config_data['model_col'] = self.model_ref_col
             config_data['product_name'] = self.current_product
-            config_data['model_file'] = f'{self.current_product}.shm'
+            config_data['model_file'] = 'model.shm'
             
             # 保存配置和路径
             success, msg = self.products.save_product(
@@ -363,13 +374,18 @@ class HalconProductManager:
             for prod in candidate_products:
                 # 获取路径
                 prod_dir = self.products.get_product_path(prod)
-                model_file = f'{prod}.shm'
+                model_file = 'model.shm'
                 # 尝试读取 config 确认文件名 (可选)
                 config = self.products.load_product_config(prod)
                 if config: 
                     model_file = config.get('model_file', model_file)
                 
                 model_path = os.path.join(prod_dir, model_file)
+                # 兼容旧配方
+                if not os.path.exists(model_path):
+                    fallback = os.path.join(prod_dir, f'{prod}.shm')
+                    if os.path.exists(fallback):
+                        model_path = fallback
                 if not os.path.exists(model_path):
                     continue
                     
@@ -538,9 +554,19 @@ class HalconProductManager:
             cx, cy = match['col'], match['row']  # Halcon: Col=X, Row=Y
             score = match['score']
             angle = match['angle']  # 弧度
-            
-            # 绘制匹配中心
             cx_i, cy_i = int(cx), int(cy)
+            
+            # 过滤低分数匹配 (噪音/空槽/未对齐)
+            if score < 0.25:
+                print(f"[HalconProductManager] ⚠️ 忽略低匹配分数的匹配: {score:.2f} < 0.25")
+                # 用红色标记画个叉，并标明是低分匹配
+                cv2.drawMarker(debug_img, (cx_i, cy_i), (0, 0, 255), 
+                              cv2.MARKER_TILTED_CROSS, 30, 2)
+                cv2.putText(debug_img, f"S:{score:.2f} (Low)", (cx_i + 25, cy_i), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                continue
+            
+            # 绘制匹配中心 (绿色十字架)
             cv2.drawMarker(debug_img, (cx_i, cy_i), (0, 255, 0), 
                           cv2.MARKER_CROSS, 40, 3)
             

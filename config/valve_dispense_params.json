@@ -1,11 +1,11 @@
 {
   "version": "1.0",
-  "last_updated": "2026-05-29 16:20:39",
+  "last_updated": "2026-05-29 17:38:52",
   "parameters": {
     "prefeed_time": 0.1,
     "valve_a_dispense_time": 0.77,
     "valve_b_dispense_time": 2.0,
     "line_speed_xy": 800
   },
-  "notes": "Loaded from product 'n_TB2'"
+  "notes": "Loaded from product '向日葵3'"
 }

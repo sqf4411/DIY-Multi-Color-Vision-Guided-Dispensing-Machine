@@ -20,7 +20,8 @@ class ROISelectionDialog(QDialog):
         
         # 加载图像
         self.image_path = image_path
-        self.cv_image = cv2.imread(image_path)
+        from core.cv2_unicode import imread_unicode
+        self.cv_image = imread_unicode(image_path)
         if self.cv_image is None:
             raise ValueError(f"无法加载图像: {image_path}")
         

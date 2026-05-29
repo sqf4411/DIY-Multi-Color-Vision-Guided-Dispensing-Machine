@@ -187,8 +187,11 @@ class BatchWorker(QThread):
                 self.mw.machine.move_to(z=cam_work_z, speed=self.mw.feedrate_z)
                 self.mw.machine.wait_until_idle()
                 
-                # 增加稳定时间，保证相机对焦和曝光稳定 (由 0.5 改为 1.2)
-                time.sleep(1.2) 
+                # 增加稳定时间，保证相机对焦和曝光稳定 (增加至 1.5 秒)
+                time.sleep(1.5) 
+                
+                # 等待并丢弃运动中的旧帧，获取 5 帧完全静止后的最新图像
+                self.wait_for_fresh_frames(count=5) 
 
                 if self.mw.last_frame is None:
                     self.log_signal.emit("❌ 无法获取图像，跳过")
@@ -209,7 +212,7 @@ class BatchWorker(QThread):
                     all_prods = self.mw.product_manager.list_products()
                     best_prod, score = self.mw.halcon_product_manager.find_best_match_product(gray_img, all_prods)
                     
-                    if best_prod and score > 0.4: # Lower threshold to 0.4
+                    if best_prod and score > 0.25:
                         self.log_signal.emit(f"✅ (R{r}C{c}) 识别到产品 [{best_prod}] (Score: {score:.2f})")
                         # 加载该产品
                         ok, msg = self.mw.halcon_product_manager.load_product(best_prod)
@@ -413,6 +416,22 @@ class BatchWorker(QThread):
 
         self.finished_signal.emit(True, f"{title}完成")
 
+
+    def wait_for_fresh_frames(self, count=5, timeout_ms=3000):
+        """等待获取若干个最新的相机帧，确保读取到的画面是在机器停止且稳定后抓取的"""
+        import time
+        if not hasattr(self.mw, 'frame_counter'):
+            self.mw.frame_counter = 0
+        
+        start_count = self.mw.frame_counter
+        start_time = time.time()
+        
+        # 等待计数器增加至少 count 帧
+        while self.mw.frame_counter - start_count < count:
+            if time.time() - start_time > timeout_ms / 1000.0:
+                self.log_signal.emit("⚠️ 等待新图像帧超时，使用当前帧进行识别")
+                break
+            time.sleep(0.02)
 
     def _safe_lift_z(self):
         """辅助函数：抬升到移动安全高度"""

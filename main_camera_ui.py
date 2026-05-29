@@ -1133,6 +1133,7 @@ class MainWindow(QWidget):
         
         # 对刀基准 (上次对刀时的 Z 坐标) - 全局硬件配置
         self.z_base = 0.0
+        self.z_tool_offset = 0.0  # 对刀Z补偿（全局，不写入配方）
         
         # 对刀仪坐标 (XY) - 全局硬件配置
         self.tool_setter_x = None
@@ -1280,6 +1281,12 @@ class MainWindow(QWidget):
         self.lbl_z_base = QLabel(f"当前 Z 基准: {self.z_base:.2f} mm")
         self.lbl_z_base.setStyleSheet("font-weight: bold; font-size: 14px; color: #FCD34D;")
         
+        # 1b. Z 补偿显示
+        offset_str = f"{self.z_tool_offset:+.3f}" if self.z_tool_offset != 0.0 else "0.000"
+        self.lbl_z_offset = QLabel(f"Z 补偿: {offset_str} mm")
+        self.lbl_z_offset.setStyleSheet("font-size: 12px; color: #60A5FA;")
+        self.lbl_z_offset.setToolTip("对刀产生的Z轴补偿量（全局，不影响配方存储值）")
+        
         # 2. 对刀仪状态灯 (圆形 Label)
         status_layout = QHBoxLayout()
         lbl_status_text = QLabel("对刀仪状态:")
@@ -1297,6 +1304,7 @@ class MainWindow(QWidget):
         self.btn_auto_tool_set.clicked.connect(self.on_btn_auto_tool_set)
         
         zbase_layout.addWidget(self.lbl_z_base)
+        zbase_layout.addWidget(self.lbl_z_offset)
         zbase_layout.addLayout(status_layout)
         zbase_layout.addWidget(self.btn_auto_tool_set)
         zbase_group.setLayout(zbase_layout)
@@ -3653,6 +3661,7 @@ class MainWindow(QWidget):
         
             # Load Z Base (tool setting reference)
             self.z_base = self.config.get('z_base', 0.0)
+            self.z_tool_offset = self.config.get('z_tool_offset', 0.0)
 
 
             # [FIX] Load Tool Setter Coordinates (对刀仪坐标) - Previously missing!
@@ -3709,6 +3718,9 @@ class MainWindow(QWidget):
 
             if hasattr(self, 'lbl_z_base'):
                 self.lbl_z_base.setText(f"当前 Z 基准: {self.z_base:.2f} mm")
+            if hasattr(self, 'lbl_z_offset'):
+                offset_str = f"{self.z_tool_offset:+.3f}" if self.z_tool_offset != 0.0 else "0.000"
+                self.lbl_z_offset.setText(f"Z 补偿: {offset_str} mm")
 
             # Apply Vision Offset to UI
             if hasattr(self, 'spn_vision_offset_x'):
@@ -3788,6 +3800,7 @@ class MainWindow(QWidget):
             self.config.set('nozzle_offset_z', self.nozzle_offset_z)
             
             self.config.set('z_base', self.z_base)
+            self.config.set('z_tool_offset', self.z_tool_offset)
             
             # [FIX] Save Tool Setter Coordinates in global settings
             if self.tool_setter_x is not None:
@@ -5521,9 +5534,9 @@ class MainWindow(QWidget):
 
             # === End New ===
 
-            'safe_z_cavity': float(self.safe_z_cavity),
-            'safe_z_product': float(self.safe_z_product),
-            'work_z': float(self.work_z),
+            'safe_z_cavity': float(self.safe_z_cavity) + self.z_tool_offset,
+            'safe_z_product': float(self.safe_z_product) + self.z_tool_offset,
+            'work_z': float(self.work_z) + self.z_tool_offset,
             'speed_xy': int(self.feedrate_xy),
             'speed_z': int(self.feedrate_z),
             'dwell_ms': self.dwell_ms,
@@ -5533,10 +5546,10 @@ class MainWindow(QWidget):
 
         def save_nozzle_params(dialog):
             # 更新主界面控件，控件会自动更新变量
-            # 直接更新变量（spinbox 已从 UI 移除，改为直接赋值）
-            self.safe_z_cavity  = dialog.safe_z_cavity
-            self.safe_z_product = dialog.safe_z_product
-            self.work_z         = dialog.work_z
+            # ✅ [FIX] dialog返回的值包含了z_tool_offset，保存时要减去
+            self.safe_z_cavity  = dialog.safe_z_cavity - self.z_tool_offset
+            self.safe_z_product = dialog.safe_z_product - self.z_tool_offset
+            self.work_z         = dialog.work_z - self.z_tool_offset
 
                         
             # 速度参数是共享的，同步更新变量和 UI 滑块
@@ -5621,9 +5634,9 @@ class MainWindow(QWidget):
             # 如果没有传入参数，就用默认的 (防呆)
             if initial_params is None:
                 initial_params = {
-                    'safe_z_cavity': float(self.safe_z_cavity),
-                    'safe_z_product': float(self.safe_z_product),
-                    'work_z': float(self.work_z),
+                    'safe_z_cavity': float(self.safe_z_cavity) + self.z_tool_offset,
+                    'safe_z_product': float(self.safe_z_product) + self.z_tool_offset,
+                    'work_z': float(self.work_z) + self.z_tool_offset,
                     'speed_xy': int(self.feedrate_xy),
                     'speed_z': int(self.feedrate_z)
                 }
@@ -5783,9 +5796,9 @@ class MainWindow(QWidget):
             center_x, center_y = w_img / 2, h_img / 2
             
             initial_params = {
-                'safe_z_cavity': float(self.safe_z_cavity),
-                'safe_z_product': float(self.safe_z_product),
-                'work_z': float(self.work_z),
+                'safe_z_cavity': float(self.safe_z_cavity) + self.z_tool_offset,
+                'safe_z_product': float(self.safe_z_product) + self.z_tool_offset,
+                'work_z': float(self.work_z) + self.z_tool_offset,
                 'speed_xy': int(self.feedrate_xy),
                 'speed_z': int(self.feedrate_z)
             }
@@ -5819,10 +5832,10 @@ class MainWindow(QWidget):
                 self.dry_run_worker.start()
                 
                 # 保存参数
-                # 直接更新变量（spinbox 已从 UI 移除）
-                self.safe_z_cavity  = dialog.safe_z_cavity
-                self.safe_z_product = dialog.safe_z_product
-                self.work_z         = dialog.work_z
+                # ✅ [FIX] dialog返回的值包含了z_tool_offset，保存时要减去
+                self.safe_z_cavity  = dialog.safe_z_cavity - self.z_tool_offset
+                self.safe_z_product = dialog.safe_z_product - self.z_tool_offset
+                self.work_z         = dialog.work_z - self.z_tool_offset
 
                 self.feedrate_xy = dialog.speed_xy
                 self.feedrate_z = dialog.speed_z
@@ -6220,28 +6233,24 @@ class MainWindow(QWidget):
                 self.z_base = trigger_z
                 self.log(f"✅ 首次对刀，基准 Z 已设为: {self.z_base:.3f}")
             else:
-                # 计算差值
+                # 计算差值 → 存入 z_tool_offset（不修改配方Z值）
                 diff = trigger_z - self.z_base
                 self.log(f"ℹ️ 旧基准: {self.z_base:.3f}, 新基准: {trigger_z:.3f}, 偏差: {diff:.3f}")
                 
-                # 更新 Z 参数
-                self.safe_z_cavity += diff
-                self.safe_z_product += diff
-                self.work_z += diff
-                
-                # 更新 UI
-                self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
-                self.spn_safe_z_product.setValue(self.safe_z_product)
-                self.spn_work_z.setValue(self.work_z)
+                # ✅ [FIX] 只更新全局补偿量，不修改配方Z值
+                self.z_tool_offset += diff
                 
                 self.z_base = trigger_z
-                self.log(f"✅ 所有 Z 高度已自动修正 (Offset: {diff:.3f})")
+                self.log(f"✅ Z 补偿已更新: {self.z_tool_offset:+.3f} mm（配方Z值不变）")
 
-            # 更新 Label
+            # 更新 Labels
             self.lbl_z_base.setText(f"当前 Z 基准: {self.z_base:.2f} mm")
+            offset_str = f"{self.z_tool_offset:+.3f}" if self.z_tool_offset != 0.0 else "0.000"
+            self.lbl_z_offset.setText(f"Z 补偿: {offset_str} mm")
             
             # 保存到全局配置
             self.config_mgr.set('z_base', self.z_base)
+            self.config_mgr.set('z_tool_offset', self.z_tool_offset)
             
             # [FIX] Also save tool_setter coordinates (used during auto tool setting but not persisted)
             if self.tool_setter_x is not None and self.tool_setter_y is not None:

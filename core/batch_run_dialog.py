@@ -448,9 +448,9 @@ class BatchWorker(QThread):
             # 针头空跑 / 真实点胶：有偏移，用针头高度
             off_x = self.mw.nozzle_offset_x
             off_y = self.mw.nozzle_offset_y
-            safe_z_cavity  = float(self.mw.safe_z_cavity  or 0.0)
-            safe_z_product = float(self.mw.safe_z_product or 0.0)
-            work_z         = float(self.mw.work_z         or 0.0)
+            safe_z_cavity  = float(self.mw.safe_z_cavity  or 0.0) + self.mw.z_tool_offset
+            safe_z_product = float(self.mw.safe_z_product or 0.0) + self.mw.z_tool_offset
+            work_z         = float(self.mw.work_z         or 0.0) + self.mw.z_tool_offset
             # [FIX] 如果取消了“模拟出胶”，针头模式下也应该真实出胶
             valve_on = not self.cfg.get('disable_valves', False)
 
@@ -674,9 +674,11 @@ class BatchWorker(QThread):
         except Exception as e:
             self.log_signal.emit(f"[WARN] 无法加载段高度配置: {e}")
 
-        global_safe_z_cavity  = float(self.mw.safe_z_cavity  or 0.0)
-        global_safe_z_product = float(self.mw.safe_z_product or 0.0)
-        global_work_z         = float(self.mw.work_z         or 0.0)
+        # ✅ [FIX] 应用对刀补偿偏移
+        z_offset = getattr(self.mw, 'z_tool_offset', 0.0)
+        global_safe_z_cavity  = float(self.mw.safe_z_cavity  or 0.0) + z_offset
+        global_safe_z_product = float(self.mw.safe_z_product or 0.0) + z_offset
+        global_work_z         = float(self.mw.work_z         or 0.0) + z_offset
 
         for p_idx, prod_paths in enumerate(paths_groups):
             for s_idx, seg in enumerate(prod_paths):
@@ -994,9 +996,11 @@ class BatchRunDialog(QDialog):
         self.spn_cam_safe_cavity.setValue(mw.cam_safe_z_cavity  or 0.0)
         self.spn_cam_safe_product.setValue(mw.cam_safe_z_product or 0.0)
         self.spn_cam_work.setValue(mw.cam_work_z             or 0.0)
-        self.spn_nozzle_safe_cavity.setValue(mw.safe_z_cavity    or 0.0)
-        self.spn_nozzle_safe_product.setValue(mw.safe_z_product   or 0.0)
-        self.spn_nozzle_work.setValue(mw.work_z               or 0.0)
+        # ✅ [FIX] 显示加上对刀补偿后的实际值
+        z_offset = getattr(mw, 'z_tool_offset', 0.0)
+        self.spn_nozzle_safe_cavity.setValue((mw.safe_z_cavity  or 0.0) + z_offset)
+        self.spn_nozzle_safe_product.setValue((mw.safe_z_product or 0.0) + z_offset)
+        self.spn_nozzle_work.setValue((mw.work_z              or 0.0) + z_offset)
 
     def get_config(self):
         return {
@@ -1011,9 +1015,10 @@ class BatchRunDialog(QDialog):
             'cam_safe_z_cavity':  self.mw.cam_safe_z_cavity  or 0.0,
             'cam_safe_z_product': self.mw.cam_safe_z_product or 0.0,
             'cam_work_z':         self.mw.cam_work_z         or 0.0,
-            'nozzle_safe_z_cavity':  self.mw.safe_z_cavity   or 0.0,
-            'nozzle_safe_z_product': self.mw.safe_z_product  or 0.0,
-            'nozzle_work_z':         self.mw.work_z          or 0.0,
+            # ✅ [FIX] 应用对刀补偿偏移
+            'nozzle_safe_z_cavity':  (self.mw.safe_z_cavity  or 0.0) + getattr(self.mw, 'z_tool_offset', 0.0),
+            'nozzle_safe_z_product': (self.mw.safe_z_product or 0.0) + getattr(self.mw, 'z_tool_offset', 0.0),
+            'nozzle_work_z':         (self.mw.work_z         or 0.0) + getattr(self.mw, 'z_tool_offset', 0.0),
             # [NEW] Simulation
             'disable_valves': self.chk_simulate.isChecked(),
             'mixed_mode': self.chk_mixed_mode.isChecked(),

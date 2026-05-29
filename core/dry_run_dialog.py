@@ -148,6 +148,9 @@ class DryRunDialog(QDialog):
         self.btn_detail_adjust = QPushButton("详细调整...")
         self.btn_detail_adjust.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold;")
         self.btn_detail_adjust.clicked.connect(self.on_detail_adjust_clicked)
+        if not self.products:
+            self.btn_detail_adjust.setEnabled(False)
+            self.btn_detail_adjust.setToolTip("无模具路径数据，无法详细调整")
         param_layout.addWidget(self.btn_detail_adjust, 1, 2, 1, 2)
 
         # Laser Z checkbox — Row 2, full width (no longer conflicts with Product Z)

@@ -5618,14 +5618,48 @@ class MainWindow(QWidget):
                  gray_dry = img_dry
 
             paths_px, _ = self.get_vision_result(gray_dry)
+            param_only_mode = False
             if not paths_px:
-                QMessageBox.warning(self, "未识别", "未识别到模具路径！")
-                return
+                reply = QMessageBox.question(self, "未识别到模具",
+                    "未识别到模具路径！\n\n"
+                    "是否仍然打开参数调整？\n"
+                    "（可调整高度参数并保存，但无法执行空跑）",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                if reply != QMessageBox.Yes:
+                    return
+                param_only_mode = True
+                
+                # ✅ 从配方模板加载路径段（用于详细调整）
+                self._compute_halcon_template()
+                template_segs = getattr(self, 'halcon_path_template', None)
+                if template_segs:
+                    # 使用模板路径（像素坐标），聚类为穴位组
+                    from core.path_segment import PathSegment
+                    n_cavities = getattr(self.halcon_product_manager, 'n_cavities', 4) if self.halcon_product_manager else 4
+                    cavity_groups = self.halcon_product_manager._cluster_segments_to_cavities(template_segs, n_cavities) if self.halcon_product_manager else [template_segs]
+                    paths_px = cavity_groups
+                    self.log(f"📋 从配方模板加载了 {len(template_segs)} 个段（{len(paths_px)} 个穴位组）")
+                else:
+                    paths_px = []
+                    self.log("⚠️ 配方中无模板路径，仅可调整全局高度参数")
 
             # --- B. 视觉反馈 ---
             self.dry_run_paths_to_draw = paths_px
             self.show_crosshair = True
             self.render_current_frame()
+
+            # ✅ 参数调整模式：使用配方的参考图作为背景（路径坐标与参考图匹配）
+            if param_only_mode and self.halcon_product_manager:
+                try:
+                    prod_dir = self.halcon_product_manager.get_product_directory()
+                    if prod_dir:
+                        ref_img_path = os.path.join(prod_dir, 'reference.png')
+                        if os.path.exists(ref_img_path):
+                            img_dry = cv2.imread(ref_img_path)
+                            if img_dry is not None:
+                                self.log(f"📷 使用配方参考图作为背景")
+                except Exception as e:
+                    self.log(f"⚠️ 加载参考图失败: {e}")
 
             # --- C. 弹出参数对话框 ---
             h_img, w_img = img_dry.shape[:2]
@@ -5690,31 +5724,46 @@ class MainWindow(QWidget):
             
             dialog.setWindowTitle(f"{title} - 参数确认")
 
-            if dialog.exec_() == QDialog.Accepted:
-                # --- D. 执行 ---
-                
-                # [NEW] Save machine coordinates if this is Camera Dry Run
-                # use_nozzle_offset=False implies Camera Dry Run
-                if not use_nozzle_offset and hasattr(dialog, 'machine_paths'):
-                    self._save_machine_coords_to_product(dialog.machine_paths)
-                
-                full_script = dialog.get_gcode()
-                self.log(f"🚀 开始执行【{title}】...")
-                
-                lines = full_script.split('\n')
-                self.dry_run_worker = GCodeLineWorker(self.machine, lines)
-                self.dry_run_worker.finished_signal.connect(self.on_dry_run_finished)
-                self.dry_run_worker.log_signal.connect(self.log)
-                self.dry_run_worker.start()
-                
-                # 回调保存参数
-                if save_callback:
-                    save_callback(dialog)
+            # ✅ 参数调整模式：禁用执行按钮，只允许保存
+            if param_only_mode:
+                dialog.setWindowTitle(f"{title} - 参数调整（无模具）")
+                # 找到 OK 按钮并禁用
+                for btn in dialog.findChildren(QDialogButtonBox):
+                    ok_btn = btn.button(QDialogButtonBox.Ok)
+                    if ok_btn:
+                        ok_btn.setEnabled(False)
+                        ok_btn.setToolTip("未识别到模具路径，无法执行空跑")
 
-                # 弹出控制面板
-                self.dry_run_ctrl_dlg = DryRunControlDialog(self, self.dry_run_worker, full_script)
-                self.dry_run_ctrl_dlg.setWindowTitle(f"{title} - 运行中")
-                self.dry_run_ctrl_dlg.exec_()
+            if dialog.exec_() == QDialog.Accepted:
+                # --- D. 执行（仅在有路径时才执行） ---
+                if param_only_mode:
+                    # 参数调整模式不执行，只保存
+                    if save_callback:
+                        save_callback(dialog)
+                    self.log(f"✅ 参数已保存（仅调整模式，未执行空跑）")
+                else:
+                    # [NEW] Save machine coordinates if this is Camera Dry Run
+                    # use_nozzle_offset=False implies Camera Dry Run
+                    if not use_nozzle_offset and hasattr(dialog, 'machine_paths'):
+                        self._save_machine_coords_to_product(dialog.machine_paths)
+                    
+                    full_script = dialog.get_gcode()
+                    self.log(f"🚀 开始执行【{title}】...")
+                    
+                    lines = full_script.split('\n')
+                    self.dry_run_worker = GCodeLineWorker(self.machine, lines)
+                    self.dry_run_worker.finished_signal.connect(self.on_dry_run_finished)
+                    self.dry_run_worker.log_signal.connect(self.log)
+                    self.dry_run_worker.start()
+                    
+                    # 回调保存参数
+                    if save_callback:
+                        save_callback(dialog)
+
+                    # 弹出控制面板
+                    self.dry_run_ctrl_dlg = DryRunControlDialog(self, self.dry_run_worker, full_script)
+                    self.dry_run_ctrl_dlg.setWindowTitle(f"{title} - 运行中")
+                    self.dry_run_ctrl_dlg.exec_()
             else:
                 self.log(f"🚫 用户取消{title}")
                 self.dry_run_paths_to_draw = []

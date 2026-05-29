@@ -1800,44 +1800,61 @@ class MainWindow(QWidget):
         speed_group = QGroupBox("速度 & 加速度调节")
         speed_layout = QVBoxLayout()
 
-        # 1. XY 速度
+        # 1. XY 速度 (500 ~ 2500)
         row_sxy = QHBoxLayout()
-        self.lbl_spd_xy = QLabel(f"XY速度: {int(self.feedrate_xy)}")
+        self.lbl_spd_xy = QLabel("XY速度 (mm/min):")
+        self.spn_spd_xy = QSpinBox()
+        self.spn_spd_xy.setRange(500, 2500)
+        self.spn_spd_xy.setValue(int(self.feedrate_xy))
+        self.spn_spd_xy.setFixedWidth(80)
         self.sld_spd_xy = QSlider(Qt.Horizontal)
-        self.sld_spd_xy.setRange(100, 10000)  # 范围 100 ~ 10000
-        # Block signals to prevent overwriting config during init
-        self.sld_spd_xy.blockSignals(True)
+        self.sld_spd_xy.setRange(500, 2500)
         self.sld_spd_xy.setValue(int(self.feedrate_xy))
-        self.sld_spd_xy.blockSignals(False)
-        self.sld_spd_xy.valueChanged.connect(self.on_speed_changed)
+        
         row_sxy.addWidget(self.lbl_spd_xy)
+        row_sxy.addWidget(self.spn_spd_xy)
         row_sxy.addWidget(self.sld_spd_xy)
 
-        # 2. Z 速度
+        # 2. Z 速度 (100 ~ 800)
         row_sz = QHBoxLayout()
-        self.lbl_spd_z = QLabel(f"Z 速度: {int(self.feedrate_z)}")
+        self.lbl_spd_z = QLabel("Z 速度 (mm/min):")
+        self.spn_spd_z = QSpinBox()
+        self.spn_spd_z.setRange(100, 800)
+        self.spn_spd_z.setValue(int(self.feedrate_z))
+        self.spn_spd_z.setFixedWidth(80)
         self.sld_spd_z = QSlider(Qt.Horizontal)
-        self.sld_spd_z.setRange(100, 2000)  # 范围 100 ~ 2000 (Z轴慢点)
-        self.sld_spd_z.blockSignals(True)
+        self.sld_spd_z.setRange(100, 800)
         self.sld_spd_z.setValue(int(self.feedrate_z))
-        self.sld_spd_z.blockSignals(False)
-        self.sld_spd_z.valueChanged.connect(self.on_speed_changed)
+        
         row_sz.addWidget(self.lbl_spd_z)
+        row_sz.addWidget(self.spn_spd_z)
         row_sz.addWidget(self.sld_spd_z)
 
-        # 3. 加速度 (Accel)
+        # 3. 加速度 (200 ~ 800)
         row_acc = QHBoxLayout()
-        self.lbl_acc = QLabel(f"加速度: {int(self.accel)}")
+        self.lbl_acc = QLabel("加速度 (mm/s²):")
+        self.spn_acc = QSpinBox()
+        self.spn_acc.setRange(200, 800)
+        self.spn_acc.setValue(int(self.accel))
+        self.spn_acc.setFixedWidth(80)
         self.sld_acc = QSlider(Qt.Horizontal)
-        self.sld_acc.setRange(100, 3000)  # 范围 100 ~ 3000
+        self.sld_acc.setRange(200, 800)
         self.sld_acc.setValue(int(self.accel))
-        # 加速度需要松开鼠标才发送指令，防止拖动时发送太多指令卡死 Klipper
-        self.sld_acc.sliderReleased.connect(self.on_accel_changed)
-        # 同时也连接 valueChanged 只为了更新显示文字
-        self.sld_acc.valueChanged.connect(lambda v: self.lbl_acc.setText(f"加速度: {v}"))
-
+        
         row_acc.addWidget(self.lbl_acc)
+        row_acc.addWidget(self.spn_acc)
         row_acc.addWidget(self.sld_acc)
+
+        # Connections
+        self.spn_spd_xy.valueChanged.connect(self.on_speed_changed)
+        self.sld_spd_xy.valueChanged.connect(self.spn_spd_xy.setValue)
+
+        self.spn_spd_z.valueChanged.connect(self.on_speed_changed)
+        self.sld_spd_z.valueChanged.connect(self.spn_spd_z.setValue)
+
+        self.spn_acc.editingFinished.connect(self.on_accel_changed)
+        self.sld_acc.valueChanged.connect(self.spn_acc.setValue)
+        self.sld_acc.sliderReleased.connect(self.on_accel_changed)
 
         speed_layout.addLayout(row_sxy)
         speed_layout.addLayout(row_sz)
@@ -3689,19 +3706,28 @@ class MainWindow(QWidget):
                 self.sld_spd_xy.blockSignals(True)
                 self.sld_spd_xy.setValue(int(self.feedrate_xy))
                 self.sld_spd_xy.blockSignals(False)
-                self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+            if hasattr(self, 'spn_spd_xy'):
+                self.spn_spd_xy.blockSignals(True)
+                self.spn_spd_xy.setValue(int(self.feedrate_xy))
+                self.spn_spd_xy.blockSignals(False)
 
             if hasattr(self, 'sld_spd_z'):
                 self.sld_spd_z.blockSignals(True)
                 self.sld_spd_z.setValue(int(self.feedrate_z))
                 self.sld_spd_z.blockSignals(False)
-                self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+            if hasattr(self, 'spn_spd_z'):
+                self.spn_spd_z.blockSignals(True)
+                self.spn_spd_z.setValue(int(self.feedrate_z))
+                self.spn_spd_z.blockSignals(False)
 
             if hasattr(self, 'sld_acc'):
                 self.sld_acc.blockSignals(True)
                 self.sld_acc.setValue(int(self.accel))
                 self.sld_acc.blockSignals(False)
-                self.lbl_acc.setText(f"加速度: {int(self.accel)}")
+            if hasattr(self, 'spn_acc'):
+                self.spn_acc.blockSignals(True)
+                self.spn_acc.setValue(int(self.accel))
+                self.spn_acc.blockSignals(False)
 
             if hasattr(self, 'spn_safe_z_cavity'):
                 self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
@@ -6029,21 +6055,30 @@ class MainWindow(QWidget):
 
     def on_speed_changed(self):
         """更新 XY 和 Z 的速度变量"""
-        self.feedrate_xy = float(self.sld_spd_xy.value())
-        self.feedrate_z = float(self.sld_spd_z.value())
+        self.feedrate_xy = float(self.spn_spd_xy.value())
+        self.feedrate_z = float(self.spn_spd_z.value())
 
-        # 更新标签文字
-        self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
-        self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+        # 同步滑块
+        self.sld_spd_xy.blockSignals(True)
+        self.sld_spd_xy.setValue(int(self.feedrate_xy))
+        self.sld_spd_xy.blockSignals(False)
+
+        self.sld_spd_z.blockSignals(True)
+        self.sld_spd_z.setValue(int(self.feedrate_z))
+        self.sld_spd_z.blockSignals(False)
 
         # 【新增】调节后立即保存
         self.save_app_settings()
 
     def on_accel_changed(self):
         """更新加速度，并直接发送 SET_VELOCITY_LIMIT 指令给 Klipper"""
-        val = self.sld_acc.value()
+        val = self.spn_acc.value()
         self.accel = float(val)
-        self.lbl_acc.setText(f"加速度: {val}")
+
+        # 同步滑块
+        self.sld_acc.blockSignals(True)
+        self.sld_acc.setValue(val)
+        self.sld_acc.blockSignals(False)
 
         # 发送 Klipper 指令
         if self.machine.connected:

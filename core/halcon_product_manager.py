@@ -462,11 +462,8 @@ class HalconProductManager:
     def _cluster_segments_to_cavities(segments: list, n_cavities: int) -> list:
         """
         将单次识别出的所有路径段按空间位置聚类成 n_cavities 个穴位组。
-
-        策略（适用于 2×2 四穴布局）：
-          - 计算每段的质心 (cx, cy)
-          - 以所有质心 X 中位数为左右分界，Y 中位数为上下分界
-          - 分成 4 象限：TL / TR / BL / BR，按阅读顺序排列
+        使用 2D K-Means 算法进行空间聚类，以解决使用中位数划分（轴对齐分割）时，
+        当段的边界重叠或分布不均导致路径段被错划到相邻穴位的问题。
 
         Args:
             segments: 所有路径段（混合所有穴位）
@@ -478,7 +475,7 @@ class HalconProductManager:
         if not segments or n_cavities <= 1:
             return [segments]
 
-        # 计算每段质心
+        # 1. 计算每段质心作为聚类特征点
         centroids = []
         for seg in segments:
             pts = seg.points if hasattr(seg, 'points') else []
@@ -493,29 +490,88 @@ class HalconProductManager:
             print(f"[HalconPM] ⚠️ 路径段数({len(centroids)}) < 穴位数({n_cavities})，跳过聚类")
             return [segments]
 
-        xs = np.array([c[0] for c in centroids])
-        ys = np.array([c[1] for c in centroids])
+        X = np.array(centroids, dtype=np.float32)
+
+        # 2. 运行 2D K-Means 算法
+        # 针对 4 穴位（2x2 布局），为确保稳定收敛，初始化质心于 4 象限中心
+        min_x, min_y = X.min(axis=0)
+        max_x, max_y = X.max(axis=0)
+        mid_x = (min_x + max_x) / 2
+        mid_y = (min_y + max_y) / 2
 
         if n_cavities == 4:
-            # 2×2 布局：以质心中位线分割四象限
-            mid_x = float(np.median(xs))
-            mid_y = float(np.median(ys))
-
-            groups = {'TL': [], 'TR': [], 'BL': [], 'BR': []}
-            for seg, (cx, cy) in zip(segments, centroids):
-                left = cx <= mid_x
-                top  = cy <= mid_y
-                if top  and left:  groups['TL'].append(seg)
-                elif top:          groups['TR'].append(seg)
-                elif left:         groups['BL'].append(seg)
-                else:              groups['BR'].append(seg)
-
-            # 按阅读顺序 TL→TR→BL→BR 返回非空组
-            result = [groups[k] for k in ('TL', 'TR', 'BL', 'BR') if groups[k]]
-            return result if result else [segments]
+            init_centroids = np.array([
+                [min_x + (mid_x - min_x) / 2, min_y + (mid_y - min_y) / 2],  # TL
+                [mid_x + (max_x - mid_x) / 2, min_y + (mid_y - min_y) / 2],  # TR
+                [min_x + (mid_x - min_x) / 2, mid_y + (max_y - mid_y) / 2],  # BL
+                [mid_x + (max_x - mid_x) / 2, mid_y + (max_y - mid_y) / 2]   # BR
+            ], dtype=np.float32)
         else:
-            print(f"[HalconPM] n_cavities={n_cavities} 暂不支持自动聚类，使用单组模式")
-            return [segments]
+            # 其它穴位数：使用最远点初始化或均匀采样初始化，这里使用随机种子确保结果可复现
+            np.random.seed(42)
+            idx = np.random.choice(len(X), n_cavities, replace=False)
+            init_centroids = X[idx]
+
+        centroids_coords = init_centroids.copy()
+        max_iters = 100
+        labels = np.zeros(len(X), dtype=np.int32)
+        
+        for _ in range(max_iters):
+            # 计算到每个中心点的欧式距离
+            # X shape: (N, 2), centroids_coords shape: (n_cavities, 2)
+            distances = np.linalg.norm(X[:, np.newaxis] - centroids_coords, axis=2)
+            new_labels = np.argmin(distances, axis=1)
+            
+            # 计算新的中心点
+            new_centroids = []
+            for i in range(n_cavities):
+                pts_in_cluster = X[new_labels == i]
+                if len(pts_in_cluster) > 0:
+                    new_centroids.append(pts_in_cluster.mean(axis=0))
+                else:
+                    new_centroids.append(centroids_coords[i])
+            new_centroids = np.array(new_centroids, dtype=np.float32)
+            
+            if np.allclose(centroids_coords, new_centroids, atol=1e-4):
+                labels = new_labels
+                break
+            centroids_coords = new_centroids
+            labels = new_labels
+
+        # 3. 对聚类中心进行物理位置排序，映射到标准的阅读顺序（TL -> TR -> BL -> BR）
+        if n_cavities == 4:
+            # 2x2 布局排序：
+            # 先按 Y 排序，分成前 2 个（Top行）和后 2 个（Bottom行）
+            sorted_by_y = np.argsort(centroids_coords[:, 1])
+            top_row = sorted_by_y[:2]
+            bottom_row = sorted_by_y[2:]
+            
+            # 再按 X 排序，分出左右
+            tl_idx, tr_idx = top_row[np.argsort(centroids_coords[top_row, 0])]
+            bl_idx, br_idx = bottom_row[np.argsort(centroids_coords[bottom_row, 0])]
+            ordered_indices = [tl_idx, tr_idx, bl_idx, br_idx]
+        elif n_cavities == 2:
+            # 2 穴位排序：判断是水平布局还是垂直布局
+            dx = abs(centroids_coords[0, 0] - centroids_coords[1, 0])
+            dy = abs(centroids_coords[0, 1] - centroids_coords[1, 1])
+            if dx > dy:
+                ordered_indices = list(np.argsort(centroids_coords[:, 0]))  # 从左到右
+            else:
+                ordered_indices = list(np.argsort(centroids_coords[:, 1]))  # 从上到下
+        else:
+            # 其它穴位数：默认按 Y 排序
+            ordered_indices = list(np.argsort(centroids_coords[:, 1]))
+
+        # 4. 根据排序好的索引，将段分入对应的穴位组
+        grouped_segments = [[] for _ in range(n_cavities)]
+        for seg, label in zip(segments, labels):
+            if label in ordered_indices:
+                mapped_idx = ordered_indices.index(label)
+                grouped_segments[mapped_idx].append(seg)
+
+        # 过滤空组，并按排序返回
+        result = [g for g in grouped_segments if g]
+        return result if result else [segments]
 
     def process_image(self, gray_img: np.ndarray) -> Tuple[List, np.ndarray]:
 

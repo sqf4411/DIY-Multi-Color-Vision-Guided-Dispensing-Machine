@@ -1,0 +1,1000 @@
+{
+  "vision_offset_x": 0.0,
+  "vision_offset_y": 0.0,
+  "exposure": 2.7,
+  "gain": 2.4,
+  "gamma": 1.5,
+  "feedrate_xy": 1000,
+  "feedrate_z": 300,
+  "accel": 452.0,
+  "jog_step_mm": 1.0,
+  "safe_z_cavity": 65.0,
+  "safe_z_product": 75.0,
+  "work_z": 64.0,
+  "nozzle_offset_x": -98.2,
+  "nozzle_offset_y": -5.0,
+  "z_base": 53.2,
+  "model_file": "model.shm",
+  "model_row": 1042.0,
+  "model_col": 1557.0,
+  "product_name": "1发财7",
+  "roi_in_reference": {
+    "x": 882,
+    "y": 376,
+    "width": 1350,
+    "height": 1332
+  },
+  "valve_prefeed_time": 0.1,
+  "valve_a_dispense_time": 0.77,
+  "valve_b_dispense_time": 2.0,
+  "line_speed_xy": 800,
+  "recognized_coordinates": {
+    "segments": [
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1086.44,
+            506.58
+          ],
+          [
+            1369.54,
+            496.56
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1372.35,
+            545.16
+          ],
+          [
+            1380.03,
+            805.41
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1310.5,
+            810.52
+          ],
+          [
+            1089.23,
+            811.76
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1088.05,
+            747.87
+          ],
+          [
+            1080.61,
+            552.47
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1749.05,
+            490.49
+          ],
+          [
+            2037.02,
+            485.16
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            2037.0,
+            535.71
+          ],
+          [
+            2042.69,
+            791.23
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1990.28,
+            794.11
+          ],
+          [
+            1755.72,
+            798.45
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1750.65,
+            730.82
+          ],
+          [
+            1744.22,
+            538.27
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1100.57,
+            1166.37
+          ],
+          [
+            1383.71,
+            1158.26
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1391.56,
+            1222.03
+          ],
+          [
+            1398.99,
+            1467.98
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1338.01,
+            1471.97
+          ],
+          [
+            1108.23,
+            1477.18
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1102.64,
+            1432.45
+          ],
+          [
+            1099.31,
+            1201.69
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1768.27,
+            1155.81
+          ],
+          [
+            2048.93,
+            1145.31
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            2053.8,
+            1179.13
+          ],
+          [
+            2062.01,
+            1451.35
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1995.35,
+            1456.83
+          ],
+          [
+            1772.92,
+            1464.13
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "line",
+        "color": 0,
+        "points": [
+          [
+            1767.86,
+            1419.71
+          ],
+          [
+            1763.66,
+            1192.98
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1191.43,
+            580.59
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1160.32,
+            609.8
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1163.6,
+            664.75
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1216.47,
+            630.62
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1224.47,
+            656.09
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1157.43,
+            698.02
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1221.53,
+            700.61
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1164.21,
+            738.6
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1216.95,
+            738.37
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1255.98,
+            566.59
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1292.89,
+            606.6
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1326.35,
+            623.31
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1262.12,
+            653.89
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1316.2,
+            685.29
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1266.77,
+            702.03
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1284.07,
+            740.9
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1855.05,
+            566.04
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1822.53,
+            600.56
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1824.21,
+            650.26
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1881.63,
+            617.55
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1891.93,
+            645.24
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1818.08,
+            685.79
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1886.65,
+            685.28
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1824.13,
+            727.88
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1879.88,
+            726.85
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1920.37,
+            552.78
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1958.81,
+            594.26
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1987.66,
+            605.78
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1928.75,
+            639.28
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1976.16,
+            676.84
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1928.93,
+            689.76
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1956.8,
+            729.94
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1211.21,
+            1241.86
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1172.28,
+            1275.3
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1183.28,
+            1309.61
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1163.77,
+            1328.09
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1237.35,
+            1293.94
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1244.01,
+            1327.47
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1174.75,
+            1361.54
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1246.46,
+            1366.25
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1185.8,
+            1399.31
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1231.57,
+            1401.04
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1279.3,
+            1229.3
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1310.23,
+            1268.42
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1340.72,
+            1284.26
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1277.29,
+            1307.0
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1332.4,
+            1347.4
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1278.31,
+            1362.21
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1313.58,
+            1402.98
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1869.46,
+            1225.28
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1836.39,
+            1256.95
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1844.15,
+            1302.54
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1892.82,
+            1274.89
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1907.23,
+            1307.41
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1836.22,
+            1340.66
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1905.39,
+            1348.0
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1842.18,
+            1382.83
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1892.27,
+            1384.49
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1935.78,
+            1218.01
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1967.35,
+            1245.04
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            2009.21,
+            1269.29
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1942.44,
+            1298.14
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1990.49,
+            1330.03
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1939.88,
+            1346.5
+          ]
+        ],
+        "dwell_ms": 100
+      },
+      {
+        "type": "dot",
+        "color": 1,
+        "points": [
+          [
+            1963.98,
+            1389.2
+          ]
+        ],
+        "dwell_ms": 100
+      }
+    ],
+    "timestamp": 1780297737.086203,
+    "transform_data": {
+      "cx": 1589.75,
+      "cy": 1015.52,
+      "angle": 0.0185,
+      "score": 0.3025
+    }
+  },
+  "cam_safe_z_cavity": 166.0,
+  "cam_safe_z_product": 168.0,
+  "cam_work_z": 164.0
+}

@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QSpinBox, QPushButton, QGroupBox, QFormLayout, QMessageBox, QTextEdit,
     QProgressBar, QCheckBox, QComboBox
 )
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 
 from core.mold_detector import get_calculated_paths, get_paths_and_image
 
@@ -481,11 +481,31 @@ class BatchWorker(QThread):
         lines = []
         lines.append("G90") # 绝对模式
         
-        # 先 XY 移动到本模具中心上方（此时仍在相机扫描安全高度，最高最安全）
+        # 直接 XY 移动到第一个产品的起点上方（此时在当前安全高度移动，无多余横向动作）
         # 再下探到产品安全高度 —— 保证横向移动时 Z 不会碰到模具
-        mold_center_x = current_x + off_x
-        mold_center_y = current_y + off_y
-        lines.append(f"G0 X{mold_center_x:.3f} Y{mold_center_y:.3f} F{speed_xy}  ; XY 先到模具中心上方")
+        first_pt = None
+        if paths_groups and paths_groups[0] and len(paths_groups[0]) > 0:
+            first_seg = paths_groups[0][0]
+            if hasattr(first_seg, 'points'):
+                first_pt = first_seg.points[0]
+            else:
+                first_pt = first_seg[0]
+
+        if first_pt is not None:
+            # 像素 -> 相对 mm
+            dx_pix = first_pt[0] - center_x
+            dy_pix = first_pt[1] - center_y
+            dx_mm = M[0, 0] * dx_pix + M[0, 1] * dy_pix
+            dy_mm = M[1, 0] * dx_pix + M[1, 1] * dy_pix
+            first_mach_x = current_x + dx_mm + off_x
+            first_mach_y = current_y + dy_mm + off_y
+            lines.append(f"G0 X{first_mach_x:.3f} Y{first_mach_y:.3f} F{speed_xy}  ; XY 直接到第一个点上方")
+        else:
+            # 备用：如无路径则到模具中心
+            mold_center_x = current_x + off_x
+            mold_center_y = current_y + off_y
+            lines.append(f"G0 X{mold_center_x:.3f} Y{mold_center_y:.3f} F{speed_xy}  ; XY 先到模具中心上方")
+            
         lines.append(f"G1 Z{safe_z_product:.2f} F{speed_z}  ; 到位后再下探至产品安全高度")
 
 
@@ -722,6 +742,13 @@ class BatchRunDialog(QDialog):
         self.mw = main_window
         self.setWindowTitle("批量运行 (Batch Run)")
         self.resize(1200, 750) # 增加宽度和高度以适应左右布局
+        
+        # 耗时和预计剩余时间计时器
+        self.start_time = None
+        self.pause_start_time = None
+        self.elapsed_timer = QTimer(self)
+        self.elapsed_timer.setInterval(1000)
+        self.elapsed_timer.timeout.connect(self.update_timer_elapsed)
         
         self.init_ui()
         self.load_settings()
@@ -1125,6 +1152,12 @@ class BatchRunDialog(QDialog):
         # total = cfg['rows'] * cfg['cols']
         # self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("%p%") # 重置格式
+        
+        # 启动计时器
+        self.start_time = time.time()
+        self.pause_start_time = None
+        self.elapsed_timer.start()
         
         self.worker.start()
 
@@ -1132,18 +1165,52 @@ class BatchRunDialog(QDialog):
         self.progress_bar.setMaximum(total)
         self.progress_bar.setValue(current)
 
+    def update_timer_elapsed(self):
+        if not self.start_time:
+            return
+        import time
+        elapsed = time.time() - self.start_time
+        minutes = int(elapsed // 60)
+        seconds = int(elapsed % 60)
+        elapsed_str = f"{minutes:02d}:{seconds:02d}"
+        
+        # Calculate ETA (Estimated Time of Arrival)
+        val = self.progress_bar.value()
+        max_val = self.progress_bar.maximum()
+        
+        if val > 0 and max_val > val:
+            remaining = int((elapsed / val) * (max_val - val))
+            rem_min = remaining // 60
+            rem_sec = remaining % 60
+            self.progress_bar.setFormat(f"%p% (已用: {elapsed_str} | 预计剩余: {rem_min:02d}:{rem_sec:02d})")
+        else:
+            self.progress_bar.setFormat(f"%p% (已用: {elapsed_str})")
+
     def on_pause(self):
         if hasattr(self, 'worker'):
             self.worker.pause()
             self.btn_pause.setVisible(False)
             self.btn_resume.setVisible(True)
             self.btn_resume.setEnabled(True)
+            
+            # 暂停计时器
+            self.pause_start_time = time.time()
+            if hasattr(self, 'elapsed_timer'):
+                self.elapsed_timer.stop()
 
     def on_resume(self):
         if hasattr(self, 'worker'):
             self.worker.resume()
             self.btn_resume.setVisible(False)
             self.btn_pause.setVisible(True)
+            
+            # 恢复计时器并调整起始时间
+            if hasattr(self, 'pause_start_time') and self.pause_start_time and self.start_time:
+                import time
+                self.start_time += (time.time() - self.pause_start_time)
+                self.pause_start_time = None
+            if hasattr(self, 'elapsed_timer'):
+                self.elapsed_timer.start()
 
     def on_stop(self):
         if hasattr(self, 'worker'):
@@ -1203,6 +1270,10 @@ class BatchRunDialog(QDialog):
             break
 
     def on_finished(self, success, msg):
+        # 停止计时器
+        if hasattr(self, 'elapsed_timer'):
+            self.elapsed_timer.stop()
+            
         self.btn_cam_dry.setEnabled(True)
         self.btn_nozzle_dry.setEnabled(True)
         self.btn_start.setEnabled(True)
@@ -1380,5 +1451,7 @@ class BatchRunDialog(QDialog):
 
     def closeEvent(self, event):
         """关闭窗口时自动保存"""
+        if hasattr(self, 'elapsed_timer'):
+            self.elapsed_timer.stop()
         self.save_settings(silent=True)
         event.accept()

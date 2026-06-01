@@ -1,7 +1,7 @@
 {
-    "feedrate_xy": 1500,
-    "feedrate_z": 500,
-    "accel": 452.0,
+    "feedrate_xy": 1500.0,
+    "feedrate_z": 500.0,
+    "accel": 450.0,
     "safe_z_cavity": 62.5,
     "safe_z_product": 78.0,
     "work_z": 59.1,
@@ -38,8 +38,8 @@
     "batch_space_y": 75.0,
     "vision_optimal_z": 164.0,
     "line_speed_xy": 800,
-    "batch_color_change_x": 203.004,
-    "batch_color_change_y": 91.088,
+    "batch_color_change_x": 203.0,
+    "batch_color_change_y": 91.09,
     "batch_color_change_pause": 1,
     "z_tool_offset": 0.0
 }

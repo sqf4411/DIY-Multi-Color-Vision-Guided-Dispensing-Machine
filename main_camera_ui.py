@@ -2192,7 +2192,7 @@ class MainWindow(QWidget):
         self.spn_work_z.valueChanged.connect(self.on_z_params_changed)
 
     def init_sys_status_group(self):
-        """初始化系统状态（温度监控）组"""
+        """初始化系统状态（温度监控与风扇控制）组"""
         group = QGroupBox("系统状态 & 温控")
         layout = QGridLayout()
         
@@ -2208,7 +2208,6 @@ class MainWindow(QWidget):
         
         # 设置字体稍微大一点，加粗
         style_header = "font-weight: bold; font-size: 14px; color: #9CA3AF;"
-        #style_header_big = "font-weight: bold; font-size: 16px; color: #E5E7EB;" # 重点加大
         
         lbl_dev.setStyleSheet(style_header)
         lbl_cur.setStyleSheet(style_header)
@@ -2244,7 +2243,6 @@ class MainWindow(QWidget):
         self.spn_syringe_target.setRange(0, 80) 
         self.spn_syringe_target.setSuffix("°C")
         self.spn_syringe_target.setDecimals(1)
-        # self.spn_syringe_target.setFixedWidth(70) # [CHANGE] Remove fixed width to fill column
         self.spn_syringe_target.setStyleSheet("font-size: 14px; height: 24px;")
         
         # 加载上次保存的设定值 (如果存在)
@@ -2259,10 +2257,35 @@ class MainWindow(QWidget):
         
         # 执行按钮（放在FLY-pi行）
         self.btn_set_syringe_temp = QPushButton("执行")
-        # self.btn_set_syringe_temp.setFixedWidth(70) # [CHANGE] Remove fixed width
         self.btn_set_syringe_temp.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold; height: 26px;")
         self.btn_set_syringe_temp.clicked.connect(self.on_set_syringe_temp)
         layout.addWidget(self.btn_set_syringe_temp, 3, 2)
+
+        # 5. FAN8 Control (风扇控制)
+        layout.addWidget(QLabel("风扇 FAN8:"), 4, 0)
+        self.lbl_fan_speed = QLabel("Off")
+        self.lbl_fan_speed.setStyleSheet("color: #9CA3AF; font-weight: bold;")
+        layout.addWidget(self.lbl_fan_speed, 4, 1)
+
+        # 风扇转速设置与执行按钮
+        fan_layout = QHBoxLayout()
+        self.spn_fan_speed = QSpinBox()
+        self.spn_fan_speed.setRange(0, 100)
+        self.spn_fan_speed.setSuffix("%")
+        self.spn_fan_speed.setValue(71)  # 默认 71%
+        self.spn_fan_speed.setStyleSheet("font-size: 14px; height: 24px;")
+        
+        self.btn_set_fan_speed = QPushButton("设置")
+        self.btn_set_fan_speed.setStyleSheet("background-color: #10B981; color: white; font-weight: bold; height: 26px;")
+        self.btn_set_fan_speed.clicked.connect(self.on_set_fan_speed)
+        
+        fan_layout.addWidget(self.spn_fan_speed)
+        fan_layout.addWidget(self.btn_set_fan_speed)
+        fan_layout.setContentsMargins(0, 0, 0, 0)
+        
+        fan_container = QWidget()
+        fan_container.setLayout(fan_layout)
+        layout.addWidget(fan_container, 4, 2)
         
         group.setLayout(layout)
         return group
@@ -2275,13 +2298,20 @@ class MainWindow(QWidget):
         # 保存用户偏好
         self.saved_params['last_syringe_target'] = val
         self.save_app_settings()
+
+    def on_set_fan_speed(self):
+        val = self.spn_fan_speed.value()
+        speed = val / 100.0
+        self.machine.set_fan_speed("FAN8", speed)
+        self.log(f"🍃 设置风扇 FAN8 速度: {val}%")
         
     def update_temp_ui(self, data):
         """
         data = {
             'syringe': {'current': ..., 'target': ..., 'power': ...},
             'mcu': ...,
-            'host': ...
+            'host': ...,
+            'fan_speed': ...
         }
         """
         if not data: return
@@ -2310,10 +2340,49 @@ class MainWindow(QWidget):
         # Host
         self.lbl_host_temp.setText(f"{data.get('host', 0.0):.1f}°C")
 
+        # Fan Speed
+        fan_speed = data.get('fan_speed', 0.0)
+        pct = fan_speed * 100.0
+        if pct > 0.01:
+            self.lbl_fan_speed.setText(f"🎯 {pct:.0f}%")
+            self.lbl_fan_speed.setStyleSheet("color: #10B981; font-weight: bold;") # Green
+        else:
+            self.lbl_fan_speed.setText("Off")
+            self.lbl_fan_speed.setStyleSheet("color: #9CA3AF;") # Gray
+
     # ================== ✅ 激光测高相关 ==================
     def init_laser_group(self):
         """初始化激光测距控制组"""
-        laser_group = QGroupBox("激光测距 (HGC)")
+        container = QWidget()
+        container_layout = QVBoxLayout()
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(4)
+
+        # 1. 折叠按钮
+        self.btn_toggle_laser = QPushButton("▶ 激光测距 (HGC) [点击展开]")
+        self.btn_toggle_laser.setCheckable(True)
+        self.btn_toggle_laser.setChecked(False) # 默认折叠
+        self.btn_toggle_laser.setStyleSheet("""
+            QPushButton {
+                background-color: #1F2937;
+                color: #F9FAFB;
+                border: 1px solid #374151;
+                border-radius: 4px;
+                font-weight: bold;
+                text-align: left;
+                padding: 6px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #374151;
+            }
+        """)
+        self.btn_toggle_laser.clicked.connect(self.toggle_laser_group)
+        container_layout.addWidget(self.btn_toggle_laser)
+
+        # 2. 实际内容 GroupBox
+        self.laser_group_box = QGroupBox()
+        self.laser_group_box.setStyleSheet("QGroupBox { border: 1px solid #374151; border-radius: 4px; margin-top: 6px; }")
         laser_layout = QGridLayout()
 
         # 1. 偏移设置
@@ -2379,8 +2448,20 @@ class MainWindow(QWidget):
         self.btn_laser_measure.setStyleSheet("background-color: #D97706; color: white; font-weight: bold;")
         self.btn_laser_measure.clicked.connect(self.on_btn_laser_measure_clicked)
         laser_layout.addWidget(self.btn_laser_measure, 4, 0, 1, 4)
-        laser_group.setLayout(laser_layout)
-        return laser_group
+        self.laser_group_box.setLayout(laser_layout)
+        self.laser_group_box.setVisible(False) # 默认折叠
+
+        container_layout.addWidget(self.laser_group_box)
+        container.setLayout(container_layout)
+        return container
+
+    def toggle_laser_group(self):
+        visible = self.btn_toggle_laser.isChecked()
+        self.laser_group_box.setVisible(visible)
+        if visible:
+            self.btn_toggle_laser.setText("▼ 激光测距 (HGC) [点击折叠]")
+        else:
+            self.btn_toggle_laser.setText("▶ 激光测距 (HGC) [点击展开]")
 
     def on_laser_param_changed(self):
         """激光参数变化时自动保存"""
@@ -3073,6 +3154,13 @@ class MainWindow(QWidget):
             self.temp_worker = TempWorker(self.machine)
             self.temp_worker.temp_signal.connect(self.update_temp_ui)
             self.temp_worker.start()
+            
+            # 默认启动风扇设定 FAN8 转速为 71% (SET_FAN_SPEED FAN=FAN8 SPEED=0.71)
+            try:
+                self.machine.set_fan_speed("FAN8", 0.71)
+                self.log("🍃 已自动设置风扇 FAN8 速度为 71%")
+            except Exception as e:
+                self.log(f"⚠️ 自动设置风扇速度失败: {e}")
             # ===========================================
         else:
             self.btn_connect_klipper.setText("重试")

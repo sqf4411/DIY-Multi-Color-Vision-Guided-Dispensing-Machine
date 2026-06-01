@@ -540,11 +540,12 @@ class MachineClient:
     # ------------------------------------------------------------------ #
     def get_temp_status(self):
         """
-        获取温度信息
+        获取温度与风扇信息
         返回 dict: {
             'syringe': {'current': 0.0, 'target': 0.0, 'power': 0.0},
-            'mcu': 0.0,   # Fly-Super8
-            'host': 0.0   # FLY-pi
+            'mcu': 0.0,        # Fly-Super8
+            'host': 0.0,       # FLY-pi
+            'fan_speed': 0.0   # FAN8 speed (0.0 to 1.0)
         }
         """
         if not self.base_url or not self.connected:
@@ -555,12 +556,14 @@ class MachineClient:
         params = {
             "heater_generic syringe_heater": "",
             "temperature_sensor Fly-Super8": "",
-            "temperature_sensor FLY-pi": ""
+            "temperature_sensor FLY-pi": "",
+            "fan_generic FAN8": ""
         }
         
         url = f"{self.base_url}/printer/objects/query"
         try:
             r = self.session.get(url, params=params, headers=self._headers(), timeout=2)
+            r.raise_for_status()
             data = r.json()
             status = data.get("result", {}).get("status", {})
             
@@ -584,25 +587,15 @@ class MachineClient:
             res['mcu'] = sensor_mcu.get("temperature", 0.0) if sensor_mcu else 0.0
             
             # 3. Host Temp (FLY-pi)
-            # 常见名称: 'temperature_sensor FLY-pi', 'temperature_sensor raspberry_pi', 'temperature_host'
-            # 如果找不到，打印一下所有 status keys 方便调试
-            host_keys = [k for k in status.keys() if 'temperature_sensor' in k or 'temperature_host' in k]
-            
             sensor_host = status.get("temperature_sensor FLY-pi", {})
             if not sensor_host:
-                 # Backup try
                  if "temperature_host" in status:
                      sensor_host = status["temperature_host"]
                  elif "temperature_sensor raspberry_pi" in status:
                      sensor_host = status["temperature_sensor raspberry_pi"]
             
-            # Debug Log (Only once or occasionally)
-            # print(f">>> DEBUG CHECK HOST KEYS: {host_keys}", flush=True)
-            # raw_val = status.get("temperature_sensor FLY-pi")
-            
             res['host'] = 0.0
             
-            # Helper logic to extract temperature from diverse return types
             def extract_temp(val):
                 if isinstance(val, dict):
                     return val.get("temperature", 0.0)
@@ -615,18 +608,18 @@ class MachineClient:
             if sensor_host_val > 0:
                 res['host'] = sensor_host_val
             else:
-                # Fallback: Try Moonraker /machine/proc_stats
-                # This is more reliable for Host CPU temp
                 try:
                     url_stats = f"{self.base_url}/machine/proc_stats"
                     r_stats = self.session.get(url_stats, headers=self._headers(), timeout=1)
                     if r_stats.ok:
-                        s_data = r_stats.json().get("result", {})
-                        # usually in 'cpu_temp'
-                        res['host'] = s_data.get("cpu_temp", 0.0)
-                        # print(f"[DEBUG] Fallback to proc_stats: {res['host']}")
+                         s_data = r_stats.json().get("result", {})
+                         res['host'] = s_data.get("cpu_temp", 0.0)
                 except Exception:
-                    pass
+                     pass
+                     
+            # 4. Fan speed (FAN8)
+            fg = status.get("fan_generic FAN8", {})
+            res['fan_speed'] = fg.get('speed', 0.0) if fg else 0.0
             
             return res
             
@@ -640,4 +633,9 @@ class MachineClient:
         if not self.connected: return
         # SET_HEATER_TEMPERATURE HEATER=syringe_heater TARGET=xxx
         self._post_gcode(f"SET_HEATER_TEMPERATURE HEATER=syringe_heater TARGET={temp:.1f}")
+
+    def set_fan_speed(self, fan_name: str, speed: float):
+        """设置风扇转速 (speed 范围 0.0 到 1.0)"""
+        if not self.connected: return
+        self._post_gcode(f"SET_FAN_SPEED FAN={fan_name} SPEED={speed:.2f}")
 

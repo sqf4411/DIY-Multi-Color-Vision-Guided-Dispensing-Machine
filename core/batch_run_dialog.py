@@ -161,7 +161,8 @@ class BatchWorker(QThread):
         # Phase 1: Global Scan Loop
         # ========================================================
         for r in range(rows):
-            for c in range(cols):
+            cols_range = range(cols) if r % 2 == 0 else range(cols - 1, -1, -1)
+            for c in cols_range:
                 if not self.running:
                     self.finished_signal.emit(False, "用户停止")
                     return
@@ -270,7 +271,8 @@ class BatchWorker(QThread):
             
             # --- Inner Loop: Grid ---
             for r in range(rows):
-                for c in range(cols):
+                cols_range = range(cols) if r % 2 == 0 else range(cols - 1, -1, -1)
+                for c in cols_range:
                     if not self.running:
                         self.finished_signal.emit(False, "用户停止")
                         return

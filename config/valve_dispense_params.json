@@ -1,11 +1,11 @@
 {
   "version": "1.0",
-  "last_updated": "2026-06-01 18:11:25",
+  "last_updated": "2026-06-01 18:19:13",
   "parameters": {
     "prefeed_time": 0.1,
     "valve_a_dispense_time": 0.77,
     "valve_b_dispense_time": 2.0,
     "line_speed_xy": 800
   },
-  "notes": "Loaded from product '2向日葵6'"
+  "notes": "Loaded from product '点赞1'"
 }

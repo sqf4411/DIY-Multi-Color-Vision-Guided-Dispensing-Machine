@@ -1171,6 +1171,28 @@ class MainWindow(QWidget):
         # 初始化按钮状态（确保Halcon按钮默认禁用）
         self.update_button_states()
 
+        # ====== ✅ 新增：启动时自动启用 Halcon、启动相机、连接 Klipper ======
+        # 1. 默认勾选并启用 Halcon 识别
+        if hasattr(self, 'chk_use_halcon'):
+            self.chk_use_halcon.setChecked(True)
+            self.on_halcon_toggled()
+            
+        # 2. 自动启动相机
+        if hasattr(self, 'btn_camera'):
+            self.btn_camera.setChecked(True)
+            self.on_toggle_camera()
+
+        # 3. 延迟自动连接 Klipper (避免初始化时界面卡顿)
+        if hasattr(self, 'btn_connect_klipper'):
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(100, self._auto_connect_klipper_startup)
+
+    def _auto_connect_klipper_startup(self):
+        """启动时自动连接 Klipper"""
+        if hasattr(self, 'btn_connect_klipper') and not self.machine.connected:
+            self.btn_connect_klipper.setChecked(True)
+            self.on_toggle_klipper_connection()
+
     def _log_impl(self, msg):
         """实际更新 UI 的槽函数，运行在主线程"""
         timestamp = datetime.now().strftime("[%H:%M:%S] ")

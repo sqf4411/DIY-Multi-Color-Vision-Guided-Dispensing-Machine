@@ -1,5 +1,33 @@
 import os
 import sys
+
+# ====== Silence OpenCV and FFmpeg internal log spam ======
+# Redirect Python's stderr to stdout so we still see Python exceptions/errors in console
+sys.stderr = sys.stdout
+
+# Redirect OS-level stderr (file descriptor 2) to devnull to mute C++ warnings (e.g., MJPEG decode warn)
+try:
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull_fd, 2)
+    os.close(devnull_fd)
+except Exception:
+    pass
+
+try:
+    import ctypes
+    if sys.platform == "win32":
+        # Process-level Win32 environment variables (visible to all CRTs and dynamically loaded DLLs)
+        ctypes.windll.kernel32.SetEnvironmentVariableW("OPENCV_LOG_LEVEL", "OFF")
+        ctypes.windll.kernel32.SetEnvironmentVariableW("OPENCV_FFMPEG_LOGLEVEL", "-8")
+        ctypes.windll.kernel32.SetEnvironmentVariableW("OPENCV_VIDEOIO_DEBUG", "0")
+except Exception:
+    pass
+
+os.environ["OPENCV_LOG_LEVEL"] = "OFF"
+os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "-8"
+os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
+# =========================================================
+
 import shutil
 import ctypes
 from datetime import datetime
@@ -107,61 +135,90 @@ class USBCameraWorker(QThread):
         super().__init__()
         self.url = url
         self.running = True
-        self.cap = None
+        self.stream = None
 
     def run(self):
+        import urllib.request
+        import urllib.error
+        
         print(f"[USBCamera] Connecting to {self.url}...")
         
-        # 屏蔽 OpenCV/FFmpeg 的 MJPEG 警告日志
-        cv2.setLogLevel(3)  # 0=Debug, 1=Info, 2=Warning, 3=Error, 4=Fatal
-        
-        self.cap = cv2.VideoCapture(self.url)
-        
-        if not self.cap.isOpened():
-            print(f"[USBCamera] Failed to open URL: {self.url}")
-            self.status_signal.emit(False)
-            return
-        
-        self.status_signal.emit(True)
-        print(f"[USBCamera] Connected.")
-
         while self.running:
-            ret, frame = self.cap.read()
-            if not ret:
-                # Stream ended or error
-                print("[USBCamera] Stream disconnected.")
-                self.status_signal.emit(False)
-                time.sleep(1) # Retry delay
-                self.cap.release()
-                self.cap = cv2.VideoCapture(self.url) # Reconnect attempt
-                continue
-
-            # Process frame
-            if frame is not None:
-                try:
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    h, w, ch = rgb.shape
-                    # QImage.Format_RGB888
-                    qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
-                    self.frame_signal.emit(qimg)
+            self.stream = None
+            try:
+                req = urllib.request.Request(self.url, headers={'User-Agent': 'Mozilla/5.0'})
+                self.stream = urllib.request.urlopen(req, timeout=5)
+                self.status_signal.emit(True)
+                print(f"[USBCamera] Connected.")
+                
+                bytes_buffer = b""
+                while self.running:
+                    chunk = self.stream.read(8192)
+                    if not chunk:
+                        print("[USBCamera] Stream disconnected (empty read).")
+                        break
                     
-                    # Debug: print dot every 10 frames to avoid spam but confirm liveness
-                    # self.frame_count = getattr(self, 'frame_count', 0) + 1
-                    # if self.frame_count % 10 == 0:
-                    #     sys.stdout.write('.')
-                    #     sys.stdout.flush()
-                except Exception as e:
-                     print(f"[USBCamera] Error processing frame: {e}")
+                    bytes_buffer += chunk
+                    
+                    while self.running:
+                        a = bytes_buffer.find(b'\xff\xd8')
+                        if a == -1:
+                            if len(bytes_buffer) > 2:
+                                bytes_buffer = bytes_buffer[-2:]
+                            break
+                        
+                        if a > 0:
+                            bytes_buffer = bytes_buffer[a:]
+                            a = 0
+                            
+                        b = bytes_buffer.find(b'\xff\xd9', a + 2)
+                        if b == -1:
+                            break
+                        
+                        jpg = bytes_buffer[a:b+2]
+                        bytes_buffer = bytes_buffer[b+2:]
+                        
+                        try:
+                            frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                            if frame is not None:
+                                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                                h, w, ch = rgb.shape
+                                qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888).copy()
+                                self.frame_signal.emit(qimg)
+                        except Exception as e:
+                            if self.running:
+                                print(f"[USBCamera] Error decoding frame: {e}")
+                            
+                        time.sleep(0.001)
+                            
+            except Exception as e:
+                if self.running:
+                    print(f"[USBCamera] Connection failed or interrupted: {e}")
+                self.status_signal.emit(False)
+                
+            finally:
+                if self.stream:
+                    try:
+                        self.stream.close()
+                    except Exception:
+                        pass
+                    self.stream = None
             
-            # Limit FPS
-            time.sleep(0.01)
+            if self.running:
+                for _ in range(20):
+                    if not self.running:
+                        break
+                    time.sleep(0.1)
 
-        if self.cap:
-            self.cap.release()
         print("[USBCamera] Stopped.")
 
     def stop(self):
         self.running = False
+        if self.stream:
+            try:
+                self.stream.close()
+            except Exception:
+                pass
         self.wait()
 
 # ================== 线程：异步移动 (解决 UI 卡顿) ==================
@@ -1267,6 +1324,22 @@ class MainWindow(QWidget):
 
         if npy_path and os.path.exists(npy_path):
             arr = self._safe_load_npy(npy_path)
+            # Handle object arrays containing multiple polyline segments
+            if isinstance(arr, np.ndarray) and arr.dtype == np.object_:
+                segments = []
+                for item in arr:
+                    if item is not None:
+                        item_arr = np.asarray(item, dtype=np.float32)
+                        if item_arr.size == 0:
+                            continue
+                        if item_arr.ndim == 1:
+                            if item_arr.shape[0] != 2:
+                                continue
+                            item_arr = item_arr.reshape(1, 2)
+                        if item_arr.ndim == 2 and item_arr.shape[1] == 2:
+                            segments.append(item_arr)
+                return segments
+
             arr = np.asarray(arr, dtype=np.float32)
             if arr.ndim == 2 and arr.shape[1] == 2:
                 return [arr]

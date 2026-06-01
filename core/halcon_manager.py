@@ -109,7 +109,7 @@ class HalconManager:
             print(f"[HalconManager] 模型文件不存在: {path}")
             return False
 
-    def process_image(self, image_np: np.ndarray):
+    def process_image(self, image_np: np.ndarray, silent: bool = False):
         """
         运行 'scripts/detect_mold.hdev' 进行检测。
         """
@@ -123,7 +123,8 @@ class HalconManager:
             h_image = self._numpy_to_himage(image_np)
             if h_image is None: return None
         except Exception as e:
-            print(f"[HalconManager] 图像转换失败: {e}")
+            if not silent:
+                print(f"[HalconManager] 图像转换失败: {e}")
             return None
 
         # 2. 加载并运行脚本
@@ -133,7 +134,8 @@ class HalconManager:
         script_file = os.path.join(project_root, "scripts", "detect_mold.hdev")
         
         if not os.path.exists(script_file):
-            print(f"[HalconManager] 脚本不存在: {script_file}")
+            if not silent:
+                print(f"[HalconManager] 脚本不存在: {script_file}")
             return None
 
         try:
@@ -144,7 +146,8 @@ class HalconManager:
             try:
                 proc = ha.HDevProcedure.load_local(program, "detect_mold")
             except Exception as e:
-                print(f"[HalconManager] 无法在脚本中找到过程 'detect_mold': {e}")
+                if not silent:
+                    print(f"[HalconManager] 无法在脚本中找到过程 'detect_mold': {e}")
                 return None
 
             # 创建调用
@@ -160,16 +163,20 @@ class HalconManager:
             if self.current_model_path and os.path.exists(self.current_model_path):
                 # 传入绝对路径
                 abs_model_path = os.path.abspath(self.current_model_path)
-                print(f"[HalconManager] Using model: {abs_model_path}")  # 调试日志
+                if not silent:
+                    print(f"[HalconManager] Using model: {abs_model_path}")  # 调试日志
                 try:
                     proc_call.set_input_control_param_by_name("ModelPath", abs_model_path)
-                    print(f"[HalconManager] ModelPath param passed successfully")  # 调试日志
+                    if not silent:
+                        print(f"[HalconManager] ModelPath param passed successfully")  # 调试日志
                 except Exception as e:
                     # 脚本可能没定义这个参数，忽略警告（兼容旧脚本）
-                    print(f"[HalconManager] Warning: ModelPath param pass failed: {e}")  # 调试日志
+                    if not silent:
+                        print(f"[HalconManager] Warning: ModelPath param pass failed: {e}")  # 调试日志
                     pass
             else:
-                print(f"[HalconManager] Warning: Model path not set or file missing: {self.current_model_path}")  # 调试日志
+                if not silent:
+                    print(f"[HalconManager] Warning: Model path not set or file missing: {self.current_model_path}")  # 调试日志
             
             # 执行
             proc_call.execute()
@@ -207,15 +214,17 @@ class HalconManager:
                     "score": s
                 })
             
-            print(f"[HalconManager] 识别成功，找到 {len(results)} 个目标。")
+            if not silent:
+                print(f"[HalconManager] 识别成功，找到 {len(results)} 个目标。")
             return {
                 "success": True,
                 "matches": results
             }
             
         except Exception as e:
-            print(f"[HalconManager] 执行 HDev 过程失败: {e}")
-            return None
+            if not silent:
+                print(f"[HalconManager] 执行 HDev 过程失败: {e}")
+
 
     def train_model(self, image_path, output_model_path, roi=None):
         """

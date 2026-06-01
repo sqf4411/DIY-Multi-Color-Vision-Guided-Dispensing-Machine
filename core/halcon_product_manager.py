@@ -573,13 +573,15 @@ class HalconProductManager:
         result = [g for g in grouped_segments if g]
         return result if result else [segments]
 
-    def process_image(self, gray_img: np.ndarray) -> Tuple[List, np.ndarray]:
+    def process_image(self, gray_img: np.ndarray, save_to_config: bool = False, silent: bool = True) -> Tuple[List, np.ndarray]:
 
         """
         处理图像并绘制路径（完整识别逻辑）
         
         Args:
             gray_img: 灰度图像
+            save_to_config: 是否保存到配置文件
+            silent: 是否静默（不打印日志）
             
         Returns:
             (found_paths, debug_img)
@@ -591,7 +593,7 @@ class HalconProductManager:
         gray_img_upright = gray_img
         
         # 2. 运行Halcon识别
-        res = self.halcon.process_image(gray_img_upright)
+        res = self.halcon.process_image(gray_img_upright, silent=silent)
         debug_img = cv2.cvtColor(gray_img_upright, cv2.COLOR_GRAY2BGR)
         found_paths = []
         
@@ -614,7 +616,8 @@ class HalconProductManager:
             
             # 过滤低分数匹配 (噪音/空槽/未对齐)
             if score < 0.25:
-                print(f"[HalconProductManager] ⚠️ 忽略低匹配分数的匹配: {score:.2f} < 0.25")
+                if not silent:
+                    print(f"[HalconProductManager] ⚠️ 忽略低匹配分数的匹配: {score:.2f} < 0.25")
                 # 用红色标记画个叉，并标明是低分匹配
                 cv2.drawMarker(debug_img, (cx_i, cy_i), (0, 0, 255), 
                               cv2.MARKER_TILTED_CROSS, 30, 2)
@@ -637,14 +640,16 @@ class HalconProductManager:
                 cavity_groups = self._cluster_segments_to_cavities(mold_segments, n)
                 found_paths.extend(cavity_groups)  # 每个穴位组对应 DryRunDialog 的一个"产品"
 
-                print(f"[HalconPM] 识别 {len(mold_segments)} 段 → 聚类为 {len(cavity_groups)} 穴位")
-                for i, g in enumerate(cavity_groups):
-                    print(f"  穴位 {i+1}: {len(g)} 段路径")
+                if not silent:
+                    print(f"[HalconPM] 识别 {len(mold_segments)} 段 → 聚类为 {len(cavity_groups)} 穴位")
+                    for i, g in enumerate(cavity_groups):
+                        print(f"  穴位 {i+1}: {len(g)} 段路径")
 
                 # ✅ 保存识别结果到产品配方（保存完整混合段）
-                self._save_recognized_coordinates(
-                    mold_segments, cx, cy, angle, score
-                )
+                if save_to_config:
+                    self._save_recognized_coordinates(
+                        mold_segments, cx, cy, angle, score
+                    )
 
             
             # 绘制分数

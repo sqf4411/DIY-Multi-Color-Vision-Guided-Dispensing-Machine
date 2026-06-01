@@ -1037,6 +1037,7 @@ class MainWindow(QWidget):
         self.last_frame = None
         self.freeze_display = False  # 是否冻结画面
         self.live_detect = False     # 是否实时识别模具
+        self._last_detected_img = None # 缓存的识别图像
         # 缩放相关
         self.zoom_scale = 1.0        # 在“自适应基准”上的倍数
         
@@ -4205,39 +4206,30 @@ class MainWindow(QWidget):
                 cv2.arrowedLine(vis_img, (cx, cy), (tx, ty), (0, 255, 0), 3)
                 cv2.circle(vis_img, (tx, ty), 10, (0, 255, 255), 2)
 
-        # ====== D. 正常检测模式 (优化：跳帧检测) ======
+        # ====== D. 正常检测模式 (实时识别，跳帧检测) ======
         elif self.live_detect:
-            # 初始化计数器
             if not hasattr(self, '_detect_frame_count'):
                 self._detect_frame_count = 0
-                self._last_detected_img = None
-            
             self._detect_frame_count += 1
             
             # 每 3 帧检测一次 (降低 66% 负荷)
-            # 每 3 帧检测一次 (降低 66% 负荷)
             if self._detect_frame_count % 3 == 0:
-                # Ensure grayscale for vision processing
                 if len(img.shape) == 3:
                      gray_for_proc = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 else:
                      gray_for_proc = img
                      
-                _, detected_vis_img = self.get_vision_result(gray_for_proc)
-                
+                # 实时循环：不保存坐标，不打印日志 (save_to_config=False, silent=True)
+                _, detected_vis_img = self.get_vision_result(gray_for_proc, save_to_config=False, silent=True)
                 self._last_detected_img = detected_vis_img
                 vis_img = detected_vis_img
             else:
-                # 中间帧：如果有缓存就用缓存，没有就用原图
                 if self._last_detected_img is not None:
                     vis_img = self._last_detected_img
                 else:
                     vis_img = img
         else:
-            # 如果关闭了检测，重置计数器
-            if hasattr(self, '_detect_frame_count'):
-                self._detect_frame_count = 0
-                self._last_detected_img = None
+            self._last_detected_img = None
 
         # -----------------------------------------------------------
         # 3. 显示
@@ -4346,9 +4338,19 @@ class MainWindow(QWidget):
 
         if self.live_detect:
             self.btn_detect.setText("停止识别")
-            self.log("✅ 已开启实时识别（每帧都会画大框+小框）")
+            self.log("✅ 已开启实时识别")
+            
+            # 点击开启时，我们对当前帧显式执行一次包含保存坐标和打印日志的识别
+            img = self.last_frame.copy()
+            img = cv2.flip(img, -1)
+            if len(img.shape) == 3:
+                gray_for_proc = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            else:
+                gray_for_proc = img
+            self.get_vision_result(gray_for_proc, save_to_config=True, silent=False)
         else:
             self.btn_detect.setText("识别模具")
+            self._last_detected_img = None
             self.log("⏹ 已关闭实时识别")
 
         # 切换状态后，用当前帧重新渲染一次
@@ -6542,7 +6544,7 @@ class MainWindow(QWidget):
             else:
                 self.log(f"❌ Failed to load Halcon script: {path}")
 
-    def get_vision_result(self, gray_img):
+    def get_vision_result(self, gray_img, save_to_config=False, silent=True):
         """
         Unified vision interface.
         Returns: (paths_pixels, debug_img_bgr)
@@ -6551,7 +6553,7 @@ class MainWindow(QWidget):
             # [Refactor] Use HalconProductManager for all processing
             # This ensures ROI offsets and new path logic are used.
             if self.halcon_product_manager:
-                res = self.halcon_product_manager.process_image(gray_img)
+                res = self.halcon_product_manager.process_image(gray_img, save_to_config=save_to_config, silent=silent)
                 
                 # Extract results
                 found_paths = res.get('found_paths', [])

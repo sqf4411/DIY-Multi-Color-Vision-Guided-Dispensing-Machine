@@ -5052,6 +5052,10 @@ class MainWindow(QWidget):
                 self.sld_spd_xy.setValue(int(self.feedrate_xy))
                 self.sld_spd_xy.blockSignals(False)
                 self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+            if hasattr(self, 'spn_spd_xy'):
+                self.spn_spd_xy.blockSignals(True)
+                self.spn_spd_xy.setValue(int(self.feedrate_xy))
+                self.spn_spd_xy.blockSignals(False)
         
         if 'feedrate_z' in config:
             self.feedrate_z = config['feedrate_z']
@@ -5060,6 +5064,10 @@ class MainWindow(QWidget):
                 self.sld_spd_z.setValue(int(self.feedrate_z))
                 self.sld_spd_z.blockSignals(False)
                 self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+            if hasattr(self, 'spn_spd_z'):
+                self.spn_spd_z.blockSignals(True)
+                self.spn_spd_z.setValue(int(self.feedrate_z))
+                self.spn_spd_z.blockSignals(False)
         
         if 'accel' in config:
             self.accel = config['accel']
@@ -5068,9 +5076,17 @@ class MainWindow(QWidget):
                 self.sld_acc.setValue(int(self.accel))
                 self.sld_acc.blockSignals(False)
                 self.lbl_acc.setText(f"加速度: {int(self.accel)}")
+            if hasattr(self, 'spn_acc'):
+                self.spn_acc.blockSignals(True)
+                self.spn_acc.setValue(int(self.accel))
+                self.spn_acc.blockSignals(False)
         
         if 'jog_step_mm' in config:
             self.jog_step_mm = config['jog_step_mm']
+            if hasattr(self, 'spn_step'):
+                self.spn_step.blockSignals(True)
+                self.spn_step.setValue(self.jog_step_mm)
+                self.spn_step.blockSignals(False)
         
         # === ⭐ Z高度参数 ===
         if 'safe_z_cavity' in config:
@@ -5445,20 +5461,32 @@ class MainWindow(QWidget):
             self.cam_safe_z_product = dialog.safe_z_product
             self.cam_work_z = dialog.work_z
             
-            # 速度参数是共享的，同步更新变量和 UI 滑块
+            # 速度参数是共享的，同步更新变量和 UI 滑块/数值框
             self.feedrate_xy = dialog.speed_xy
             self.feedrate_z = dialog.speed_z
             
-            # Update Sliders & Labels (Block signals to avoid double-save)
-            self.sld_spd_xy.blockSignals(True)
-            self.sld_spd_xy.setValue(int(self.feedrate_xy))
-            self.sld_spd_xy.blockSignals(False)
-            self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+            # Update Sliders & Labels & SpinBoxes (Block signals to avoid double-save)
+            if hasattr(self, 'sld_spd_xy'):
+                self.sld_spd_xy.blockSignals(True)
+                self.sld_spd_xy.setValue(int(self.feedrate_xy))
+                self.sld_spd_xy.blockSignals(False)
+            if hasattr(self, 'spn_spd_xy'):
+                self.spn_spd_xy.blockSignals(True)
+                self.spn_spd_xy.setValue(int(self.feedrate_xy))
+                self.spn_spd_xy.blockSignals(False)
+            if hasattr(self, 'lbl_spd_xy'):
+                self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
 
-            self.sld_spd_z.blockSignals(True)
-            self.sld_spd_z.setValue(int(self.feedrate_z))
-            self.sld_spd_z.blockSignals(False)
-            self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+            if hasattr(self, 'sld_spd_z'):
+                self.sld_spd_z.blockSignals(True)
+                self.sld_spd_z.setValue(int(self.feedrate_z))
+                self.sld_spd_z.blockSignals(False)
+            if hasattr(self, 'spn_spd_z'):
+                self.spn_spd_z.blockSignals(True)
+                self.spn_spd_z.setValue(int(self.feedrate_z))
+                self.spn_spd_z.blockSignals(False)
+            if hasattr(self, 'lbl_spd_z'):
+                self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
 
             # Save dwell times
             self.dwell_ms = dialog.dwell_ms
@@ -5466,11 +5494,17 @@ class MainWindow(QWidget):
             self.color_delay = dialog.color_delay
 
             self.save_app_settings()
-            # 同时将相机 Z 高度写入产品 config.json（避免下次加载配方时被覆盖）
+            # 同时将相机 Z 高度、速度和延时写入产品 config.json（避免下次加载配方时被覆盖）
             self._save_z_heights_to_product({
                 'cam_safe_z_cavity':  self.cam_safe_z_cavity,
                 'cam_safe_z_product': self.cam_safe_z_product,
                 'cam_work_z':         self.cam_work_z,
+                'feedrate_xy':        self.feedrate_xy,
+                'feedrate_z':         self.feedrate_z,
+                'line_speed_xy':      dialog.line_speed_xy,
+                'dwell_ms':           self.dwell_ms,
+                'line_dwell_ms':      self.line_dwell_ms,
+                'color_delay':        self.color_delay,
             })
 
         self._prepare_dry_run(
@@ -5581,20 +5615,32 @@ class MainWindow(QWidget):
             self.work_z         = dialog.work_z - self.z_tool_offset
 
                         
-            # 速度参数是共享的，同步更新变量和 UI 滑块
+            # 速度参数是共享的，同步更新变量和 UI 滑块/数值框
             self.feedrate_xy = dialog.speed_xy
             self.feedrate_z = dialog.speed_z
             
-            # Update Sliders & Labels (Block signals to avoid double-save)
-            self.sld_spd_xy.blockSignals(True)
-            self.sld_spd_xy.setValue(int(self.feedrate_xy))
-            self.sld_spd_xy.blockSignals(False)
-            self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+            # Update Sliders & Labels & SpinBoxes (Block signals to avoid double-save)
+            if hasattr(self, 'sld_spd_xy'):
+                self.sld_spd_xy.blockSignals(True)
+                self.sld_spd_xy.setValue(int(self.feedrate_xy))
+                self.sld_spd_xy.blockSignals(False)
+            if hasattr(self, 'spn_spd_xy'):
+                self.spn_spd_xy.blockSignals(True)
+                self.spn_spd_xy.setValue(int(self.feedrate_xy))
+                self.spn_spd_xy.blockSignals(False)
+            if hasattr(self, 'lbl_spd_xy'):
+                self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
 
-            self.sld_spd_z.blockSignals(True)
-            self.sld_spd_z.setValue(int(self.feedrate_z))
-            self.sld_spd_z.blockSignals(False)
-            self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+            if hasattr(self, 'sld_spd_z'):
+                self.sld_spd_z.blockSignals(True)
+                self.sld_spd_z.setValue(int(self.feedrate_z))
+                self.sld_spd_z.blockSignals(False)
+            if hasattr(self, 'spn_spd_z'):
+                self.spn_spd_z.blockSignals(True)
+                self.spn_spd_z.setValue(int(self.feedrate_z))
+                self.spn_spd_z.blockSignals(False)
+            if hasattr(self, 'lbl_spd_z'):
+                self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
 
             # Save dwell times
             self.dwell_ms = dialog.dwell_ms
@@ -5602,11 +5648,17 @@ class MainWindow(QWidget):
             self.color_delay = dialog.color_delay
 
             self.save_app_settings()
-            # 同时将针头 Z 高度写入产品 config.json（避免下次加载配方时被覆盖）
+            # 同时将针头 Z 高度、速度和延时写入产品 config.json（避免下次加载配方时被覆盖）
             self._save_z_heights_to_product({
                 'safe_z_cavity':  self.safe_z_cavity,
                 'safe_z_product': self.safe_z_product,
                 'work_z':         self.work_z,
+                'feedrate_xy':    self.feedrate_xy,
+                'feedrate_z':     self.feedrate_z,
+                'line_speed_xy':  dialog.line_speed_xy,
+                'dwell_ms':       self.dwell_ms,
+                'line_dwell_ms':  self.line_dwell_ms,
+                'color_delay':    self.color_delay,
             })
 
         self._prepare_dry_run(
@@ -7070,7 +7122,11 @@ class MainWindow(QWidget):
                         self.sld_spd_xy.setValue(int(self.feedrate_xy))
                         self.sld_spd_xy.blockSignals(False)
                         self.lbl_spd_xy.setText(f"XY 速度: {int(self.feedrate_xy)}")
-                
+                    if hasattr(self, 'spn_spd_xy'):
+                        self.spn_spd_xy.blockSignals(True)
+                        self.spn_spd_xy.setValue(int(self.feedrate_xy))
+                        self.spn_spd_xy.blockSignals(False)
+
                 if 'feedrate_z' in config:
                     self.feedrate_z = config['feedrate_z']
                     if hasattr(self, 'sld_spd_z'):
@@ -7078,22 +7134,46 @@ class MainWindow(QWidget):
                         self.sld_spd_z.setValue(int(self.feedrate_z))
                         self.sld_spd_z.blockSignals(False)
                         self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
-                
+                    if hasattr(self, 'spn_spd_z'):
+                        self.spn_spd_z.blockSignals(True)
+                        self.spn_spd_z.setValue(int(self.feedrate_z))
+                        self.spn_spd_z.blockSignals(False)
+
                 if 'accel' in config:
                     self.accel = config['accel']
-                
+                    if hasattr(self, 'sld_acc'):
+                        self.sld_acc.blockSignals(True)
+                        self.sld_acc.setValue(int(self.accel))
+                        self.sld_acc.blockSignals(False)
+                    if hasattr(self, 'spn_acc'):
+                        self.spn_acc.blockSignals(True)
+                        self.spn_acc.setValue(int(self.accel))
+                        self.spn_acc.blockSignals(False)
+                    if hasattr(self, 'lbl_acc'):
+                        self.lbl_acc.setText(f"加速度: {int(self.accel)}")
+
                 if 'jog_step_mm' in config:
                     self.jog_step_mm = config['jog_step_mm']
-                
+                    if hasattr(self, 'spn_step'):
+                        self.spn_step.blockSignals(True)
+                        self.spn_step.setValue(self.jog_step_mm)
+                        self.spn_step.blockSignals(False)
+
                 # 3. Z高度参数
                 if 'safe_z_cavity' in config:
                     self.safe_z_cavity = config['safe_z_cavity']
-                
+                    if hasattr(self, 'spn_safe_z_cavity'):
+                        self.spn_safe_z_cavity.setValue(self.safe_z_cavity)
+
                 if 'safe_z_product' in config:
                     self.safe_z_product = config['safe_z_product']
-                
+                    if hasattr(self, 'spn_safe_z_product'):
+                        self.spn_safe_z_product.setValue(self.safe_z_product)
+
                 if 'work_z' in config:
                     self.work_z = config['work_z']
+                    if hasattr(self, 'spn_work_z'):
+                        self.spn_work_z.setValue(self.work_z)
                 
                 # [NEW] Load Laser Params (All Global now)
                 # No product specific load needed for Ref or K.

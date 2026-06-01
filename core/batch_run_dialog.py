@@ -251,8 +251,10 @@ class BatchWorker(QThread):
             if cached_data:
                 paths_groups, _, _, _ = cached_data
                 for group in paths_groups:
-                    if hasattr(group, 'color'):
-                        actual_colors.add(group.color)
+                    # group 是一个产品（穴位）的段列表，遍历段获取颜色
+                    for seg in group:
+                        p_color = getattr(seg, 'color', 0)
+                        actual_colors.add(int(p_color))
         
         if actual_colors:
             sorted_colors = sorted(list(actual_colors))

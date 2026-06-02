@@ -7039,175 +7039,13 @@ class MainWindow(QWidget):
         """加载产品（保持方法名兼容性）"""
         self.on_load_product()
     
-    def on_load_product(self):
-        """加载产品 (Enhanced Dialog)"""
-        products = self.product_manager.list_products()
-        if not products:
-            QMessageBox.information(self, "提示", "没有可用的产品\n请先训练新模型")
-            return
-        
-        # --- Create Custom Dialog ---
-        dialog = QDialog(self)
-        dialog.setWindowTitle("加载产品配方")
-        dialog.resize(400, 500)
-        
-        layout = QVBoxLayout()
-        
-        layout.addWidget(QLabel("可用产品列表:"))
-        
-        list_widget = QListWidget()
-        list_widget.addItems(products)
-        list_widget.setCurrentRow(0) # Default select first
-        layout.addWidget(list_widget)
-        
-        # --- Action Buttons ---
-        btn_layout = QHBoxLayout()
-        
-        btn_load = QPushButton("加载 (Load)")
-        btn_load.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 6px;")
-        
-        btn_rename = QPushButton("重命名 (Rename)")
-        btn_rename.setStyleSheet("background-color: #F59E0B; color: black; padding: 6px;")
-        
-        btn_delete = QPushButton("删除 (Delete)")
-        btn_delete.setStyleSheet("background-color: #EF4444; color: white; padding: 6px;")
-        
-        btn_cancel = QPushButton("取消 (Cancel)")
-        btn_cancel.setStyleSheet("padding: 6px;")
-        
-        btn_layout.addWidget(btn_load)
-        btn_layout.addWidget(btn_rename)
-        btn_layout.addWidget(btn_delete)
-        btn_layout.addWidget(btn_cancel)
-        layout.addLayout(btn_layout)
-        
-        dialog.setLayout(layout)
-        
-        # --- Internal Functions ---
-        self._selected_product_to_load = None
-        
-        def do_load():
-            item = list_widget.currentItem()
-            if not item: return
-            self._selected_product_to_load = item.text()
-            dialog.accept()
-            
-        def do_delete():
-            item = list_widget.currentItem()
-            if not item: return
-            name = item.text()
-            
-            # Confirm
-            reply = QMessageBox.question(
-                dialog, "确认删除",
-                f"确定要删除产品 '{name}' 吗？\n此操作不可恢复！",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            
-            if reply == QMessageBox.Yes:
-                try:
-                    import shutil
-                    product_path = self.product_manager.get_product_path(name)
-                    if os.path.exists(product_path):
-                        shutil.rmtree(product_path)
-                        self.log(f"✅ 已删除产品: {name}")
-                        
-                        # Remove from list
-                        row = list_widget.row(item)
-                        list_widget.takeItem(row)
-                        
-                        # Reset current if matches
-                        if self.current_product == name:
-                             self.current_product = None
-                             self.lbl_recipe_name.setText("未加载")
-                             self.lbl_recipe_name.setStyleSheet("color: red; font-weight: bold;")
-                             self.dots = []
-                             self.polys = []
-                             self.update_button_states()
-                             
-                        if list_widget.count() == 0:
-                             QMessageBox.information(dialog, "提示", "所有产品已删除")
-                             dialog.reject()
-                except Exception as e:
-                    QMessageBox.critical(dialog, "删除失败", f"无法删除产品: {e}")
-
-        def do_rename():
-            item = list_widget.currentItem()
-            if not item: return
-            old_name = item.text()
-            
-            new_name, ok = QInputDialog.getText(dialog, "重命名产品", 
-                f"当前名称: {old_name}\n\n请输入新名称（支持中文）:",
-                text=old_name)
-            if not ok or not new_name.strip():
-                return
-            new_name = new_name.strip()
-            
-            if new_name == old_name:
-                return
-            
-            if not self.product_manager.is_valid_product_name(new_name):
-                QMessageBox.warning(dialog, "名称不合法",
-                    "产品名称仅支持 1-64 位：中文、英文、数字、下划线(_)和短横线(-)。")
-                return
-            
-            if new_name in self.product_manager.list_products():
-                QMessageBox.warning(dialog, "名称已存在", f"产品 '{new_name}' 已存在！")
-                return
-            
-            try:
-                import shutil
-                old_path = self.product_manager.get_product_path(old_name)
-                new_path = self.product_manager.get_product_path(new_name)
-                
-                # 移动目录
-                shutil.move(old_path, new_path)
-                
-                # 更新config.json中的product_name
-                config_path = os.path.join(new_path, "config.json")
-                if os.path.exists(config_path):
-                    with open(config_path, 'r', encoding='utf-8') as f:
-                        cfg = json.load(f)
-                    cfg['product_name'] = new_name
-                    with open(config_path, 'w', encoding='utf-8') as f:
-                        json.dump(cfg, f, indent=2, ensure_ascii=False)
-                
-                # 更新列表
-                item.setText(new_name)
-                
-                # 如果是当前加载的产品，更新引用
-                if self.current_product == old_name:
-                    self.current_product = new_name
-                    self.lbl_recipe_name.setText(new_name)
-                    if self.halcon_product_manager:
-                        self.halcon_product_manager.current_product = new_name
-                
-                self.log(f"✅ 产品已重命名: {old_name} → {new_name}")
-                
-            except Exception as e:
-                QMessageBox.critical(dialog, "重命名失败", f"无法重命名: {e}")
-        
-        # Check double click
-        list_widget.itemDoubleClicked.connect(do_load)
-        
-        btn_load.clicked.connect(do_load)
-        btn_rename.clicked.connect(do_rename)
-        btn_delete.clicked.connect(do_delete)
-        btn_cancel.clicked.connect(dialog.reject)
-        
-        # --- Execute Dialog ---
-        if dialog.exec_() == QDialog.Accepted and self._selected_product_to_load:
-            name = self._selected_product_to_load
-            
-            # Exec Loading Logic
-            self.log(f"📂 正在加载产品: {name}")
-            
+    def load_product_programmatic(self, name: str):
+        """非交互式加载产品，更新所有UI和硬件参数，应用至相机和主程序"""
+        try:
             success, msg = self.halcon_product_manager.load_product(name)
-
             if not success:
-                QMessageBox.critical(self, "加载失败", msg)
-                self.log(f"❌ {msg}")
-                return
+                self.last_load_success = False
+                return False, msg
 
             self.current_product = name
             self.lbl_recipe_name.setText(name)
@@ -7405,6 +7243,184 @@ class MainWindow(QWidget):
             self.update_button_states()
             self.log(f"✅ 产品加载成功")
             self.log(f"📊 路径: {len(self.dots)} 点, {len(self.polys)} 线")
+            
+            self.last_load_success = True
+            return True, "成功"
+            
+        except Exception as e:
+            self.last_load_success = False
+            import traceback
+            traceback.print_exc()
+            return False, f"加载异常: {e}"
+
+    def on_load_product(self):
+        """加载产品 (Enhanced Dialog)"""
+        products = self.product_manager.list_products()
+        if not products:
+            QMessageBox.information(self, "提示", "没有可用的产品\n请先训练新模型")
+            return
+        
+        # --- Create Custom Dialog ---
+        dialog = QDialog(self)
+        dialog.setWindowTitle("加载产品配方")
+        dialog.resize(400, 500)
+        
+        layout = QVBoxLayout()
+        
+        layout.addWidget(QLabel("可用产品列表:"))
+        
+        list_widget = QListWidget()
+        list_widget.addItems(products)
+        list_widget.setCurrentRow(0) # Default select first
+        layout.addWidget(list_widget)
+        
+        # --- Action Buttons ---
+        btn_layout = QHBoxLayout()
+        
+        btn_load = QPushButton("加载 (Load)")
+        btn_load.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 6px;")
+        
+        btn_rename = QPushButton("重命名 (Rename)")
+        btn_rename.setStyleSheet("background-color: #F59E0B; color: black; padding: 6px;")
+        
+        btn_delete = QPushButton("删除 (Delete)")
+        btn_delete.setStyleSheet("background-color: #EF4444; color: white; padding: 6px;")
+        
+        btn_cancel = QPushButton("取消 (Cancel)")
+        btn_cancel.setStyleSheet("padding: 6px;")
+        
+        btn_layout.addWidget(btn_load)
+        btn_layout.addWidget(btn_rename)
+        btn_layout.addWidget(btn_delete)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+        
+        dialog.setLayout(layout)
+        
+        # --- Internal Functions ---
+        self._selected_product_to_load = None
+        
+        def do_load():
+            item = list_widget.currentItem()
+            if not item: return
+            self._selected_product_to_load = item.text()
+            dialog.accept()
+            
+        def do_delete():
+            item = list_widget.currentItem()
+            if not item: return
+            name = item.text()
+            
+            # Confirm
+            reply = QMessageBox.question(
+                dialog, "确认删除",
+                f"确定要删除产品 '{name}' 吗？\n此操作不可恢复！",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            
+            if reply == QMessageBox.Yes:
+                try:
+                    import shutil
+                    product_path = self.product_manager.get_product_path(name)
+                    if os.path.exists(product_path):
+                        shutil.rmtree(product_path)
+                        self.log(f"✅ 已删除产品: {name}")
+                        
+                        # Remove from list
+                        row = list_widget.row(item)
+                        list_widget.takeItem(row)
+                        
+                        # Reset current if matches
+                        if self.current_product == name:
+                             self.current_product = None
+                             self.lbl_recipe_name.setText("未加载")
+                             self.lbl_recipe_name.setStyleSheet("color: red; font-weight: bold;")
+                             self.dots = []
+                             self.polys = []
+                             self.update_button_states()
+                             
+                        if list_widget.count() == 0:
+                             QMessageBox.information(dialog, "提示", "所有产品已删除")
+                             dialog.reject()
+                except Exception as e:
+                    QMessageBox.critical(dialog, "删除失败", f"无法删除产品: {e}")
+
+        def do_rename():
+            item = list_widget.currentItem()
+            if not item: return
+            old_name = item.text()
+            
+            new_name, ok = QInputDialog.getText(dialog, "重命名产品", 
+                f"当前名称: {old_name}\n\n请输入新名称（支持中文）:",
+                text=old_name)
+            if not ok or not new_name.strip():
+                return
+            new_name = new_name.strip()
+            
+            if new_name == old_name:
+                return
+            
+            if not self.product_manager.is_valid_product_name(new_name):
+                QMessageBox.warning(dialog, "名称不合法",
+                    "产品名称仅支持 1-64 位：中文、英文、数字、下划线(_)和短横线(-)。")
+                return
+            
+            if new_name in self.product_manager.list_products():
+                QMessageBox.warning(dialog, "名称已存在", f"产品 '{new_name}' 已存在！")
+                return
+            
+            try:
+                import shutil
+                old_path = self.product_manager.get_product_path(old_name)
+                new_path = self.product_manager.get_product_path(new_name)
+                
+                # 移动目录
+                shutil.move(old_path, new_path)
+                
+                # 更新config.json中的product_name
+                config_path = os.path.join(new_path, "config.json")
+                if os.path.exists(config_path):
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        cfg = json.load(f)
+                    cfg['product_name'] = new_name
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        json.dump(cfg, f, indent=2, ensure_ascii=False)
+                
+                # 更新列表
+                item.setText(new_name)
+                
+                # 如果是当前加载的产品，更新引用
+                if self.current_product == old_name:
+                    self.current_product = new_name
+                    self.lbl_recipe_name.setText(new_name)
+                    if self.halcon_product_manager:
+                        self.halcon_product_manager.current_product = new_name
+                
+                self.log(f"✅ 产品已重命名: {old_name} → {new_name}")
+                
+            except Exception as e:
+                QMessageBox.critical(dialog, "重命名失败", f"无法重命名: {e}")
+        
+        # Check double click
+        list_widget.itemDoubleClicked.connect(do_load)
+        
+        btn_load.clicked.connect(do_load)
+        btn_rename.clicked.connect(do_rename)
+        btn_delete.clicked.connect(do_delete)
+        btn_cancel.clicked.connect(dialog.reject)
+        
+        # --- Execute Dialog ---
+        if dialog.exec_() == QDialog.Accepted and self._selected_product_to_load:
+            name = self._selected_product_to_load
+            
+            # Exec Loading Logic
+            self.log(f"📂 正在加载产品: {name}")
+            
+            success, msg = self.load_product_programmatic(name)
+            if not success:
+                QMessageBox.critical(self, "加载失败", msg)
+                self.log(f"❌ {msg}")
+                return
     
     def on_save_recipe(self):
         """保存产品（保持方法名兼容性）"""

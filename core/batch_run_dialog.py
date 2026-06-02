@@ -25,6 +25,7 @@ class BatchWorker(QThread):
     current_index_signal = pyqtSignal(int)  # 新增：发送当前执行的 G-code 行号 (用于准确高亮)
     path_update_signal = pyqtSignal(list)   # 新增：发送当前产品的路径数据用于实时显示
     color_change_request_signal = pyqtSignal(str, str, float, float)  # finished_color, next_color, park_x, park_y
+    load_product_request = pyqtSignal(str)  # [NEW] 请求主界面加载并应用产品参数 (曝光、Z高度、偏移等)
 
     def __init__(self, main_window, grid_config, mode='real'):
         super().__init__()
@@ -215,13 +216,23 @@ class BatchWorker(QThread):
                     
                     if best_prod and score > 0.25:
                         self.log_signal.emit(f"✅ (R{r}C{c}) 识别到产品 [{best_prod}] (Score: {score:.2f})")
-                        # 加载该产品
-                        ok, msg = self.mw.halcon_product_manager.load_product(best_prod)
-                        if ok:
-                            # 重要：更新主界面模板缓存，否则后续识别会用旧模板
-                            self.mw._compute_halcon_template()
-                        else:
-                            self.log_signal.emit(f"❌ 加载产品失败: {msg}")
+                        current_loaded = getattr(self.mw, 'current_product', None)
+                        if best_prod != current_loaded:
+                            # 发送信号同步请求主界面加载该产品，确保主线程应用所有参数（如相机曝光参数）
+                            self.load_product_request.emit(best_prod)
+                            
+                            if getattr(self.mw, 'last_load_success', False):
+                                # 📸 重新获取一帧：使用新加载产品的最佳相机曝光参数进行精准识别定位
+                                self.log_signal.emit(f"📷 已同步 [{best_prod}] 参数到相机，重新获取图像...")
+                                time.sleep(0.5) # 给相机硬件参数生效并稳定的时间
+                                self.wait_for_fresh_frames(count=5)
+                                if self.mw.last_frame is not None:
+                                    img = self.mw.last_frame.copy()
+                                    img = cv2.flip(img, -1)
+                                    if len(img.shape) == 3: gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                                    else: gray_img = img
+                            else:
+                                self.log_signal.emit(f"❌ 加载产品参数失败: {best_prod}")
                     else:
                         self.log_signal.emit(f"⚠️ (R{r}C{c}) 未能识别已知产品 (Best: {best_prod}, Score: {score:.2f})")
                         # 可能会继续用当前产品尝试，或者跳过
@@ -308,12 +319,10 @@ class BatchWorker(QThread):
                     is_mixed = self.cfg.get('mixed_mode', False)
                     if is_mixed and cached_product:
                         # Check if we need to switch products
-                        current_loaded = getattr(self.mw.halcon_product_manager, 'current_product', None)
+                        current_loaded = getattr(self.mw, 'current_product', None)
                         if current_loaded != cached_product:
-                            # Load cached product
-                            ok, msg = self.mw.halcon_product_manager.load_product(cached_product)
-                            if ok:
-                                self.mw._compute_halcon_template()
+                            # 发送信号同步请求主界面加载该产品，确保主线程应用所有参数（如XY速度、工作高度、对刀偏移等）
+                            self.load_product_request.emit(cached_product)
                                 
                         # Always update path visualization when returning to a position
                         # Use cached paths_groups for visualization
@@ -1132,6 +1141,7 @@ class BatchRunDialog(QDialog):
         self.worker.current_index_signal.connect(self.highlight_current_line)
         self.worker.path_update_signal.connect(self.mw.on_batch_path_update)  # [NEW] Dynamic path visualization
         self.worker.color_change_request_signal.connect(self.on_color_change_request)  # [NEW V3.1]
+        self.worker.load_product_request.connect(self.mw.load_product_programmatic, Qt.BlockingQueuedConnection)  # [NEW] 线程安全同步加载产品及参数
         
         # 关闭实时识别 (防止卡顿和Z轴变化导致的误识别)
         self.mw.live_detect = False

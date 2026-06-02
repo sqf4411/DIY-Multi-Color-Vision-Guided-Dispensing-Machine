@@ -4,8 +4,8 @@
   "exposure": 2.6,
   "gain": 2.4,
   "gamma": 2.2,
-  "feedrate_xy": 1000,
-  "feedrate_z": 300,
+  "feedrate_xy": 1500.0,
+  "feedrate_z": 500.0,
   "accel": 452.0,
   "jog_step_mm": 1.0,
   "safe_z_cavity": 65.0,
@@ -14,7 +14,7 @@
   "nozzle_offset_x": -96.9,
   "nozzle_offset_y": -5.2,
   "z_base": 52.6,
-  "model_file": "n_XX2.shm",
+  "model_file": "model.shm",
   "model_row": 1028.0,
   "model_col": 1483.0,
   "product_name": "exp",
@@ -183,16 +183,16 @@
         "dwell_ms": 100
       }
     ],
-    "timestamp": 1777371137.2294312,
+    "timestamp": 1777371137.2294,
     "transform_data": {
       "cx": 1494.78,
       "cy": 946.48,
-      "angle": 0.0054,
-      "score": 0.6574
+      "angle": 0.01,
+      "score": 0.66
     }
   },
   "laser_data": {
-    "timestamp": 1777370080.4372,
+    "timestamp": 1780390046.6838,
     "points": [
       {
         "x": 185.08,
@@ -236,6 +236,6 @@
       }
     ],
     "avg_depth": 6.8839,
-    "avg_z": 59.4839
+    "avg_z": 57.3839
   }
 }

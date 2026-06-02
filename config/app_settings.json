@@ -1,10 +1,10 @@
 {
     "feedrate_xy": 1500,
     "feedrate_z": 500,
-    "accel": 450.0,
-    "safe_z_cavity": 62.5,
+    "accel": 452.0,
+    "safe_z_cavity": 64.7,
     "safe_z_product": 75.0,
-    "work_z": 59.1,
+    "work_z": 61.400000000000006,
     "jog_step": 1.0,
     "z_base": 50.499999999999964,
     "nozzle_offset_x": -98.49999999999997,

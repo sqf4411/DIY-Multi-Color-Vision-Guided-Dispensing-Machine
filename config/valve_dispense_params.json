@@ -1,11 +1,11 @@
 {
   "version": "1.0",
-  "last_updated": "2026-06-02 15:31:15",
+  "last_updated": "2026-06-02 15:58:13",
   "parameters": {
     "prefeed_time": 0.1,
     "valve_a_dispense_time": 0.77,
     "valve_b_dispense_time": 2.0,
     "line_speed_xy": 800
   },
-  "notes": "Loaded from product '1点赞1'"
+  "notes": "Loaded from product '2投币1'"
 }

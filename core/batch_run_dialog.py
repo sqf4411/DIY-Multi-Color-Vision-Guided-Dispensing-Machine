@@ -770,7 +770,7 @@ class BatchRunDialog(QDialog):
         super().__init__(main_window)
         self.mw = main_window
         self.setWindowTitle("批量运行 (Batch Run)")
-        self.resize(1200, 750) # 增加宽度和高度以适应左右布局
+        self.resize(1400, 850) # 增加宽度和高度以适应左右布局
         
         # 耗时和预计剩余时间计时器
         self.start_time = None
@@ -986,7 +986,7 @@ class BatchRunDialog(QDialog):
         mid_layout.addLayout(h_comp)
 
         self.progress_panel = GridProgressPanel(self)
-        self.progress_panel.setMinimumHeight(220)
+        self.progress_panel.setMinimumHeight(320)
         mid_layout.addWidget(self.progress_panel)
 
         # --- Right: G-code 预览 ---
@@ -1511,6 +1511,7 @@ class CellProgressWidget(QFrame):
         self.row = row
         self.col = col
         self.active_colors = []
+        self.last_completed_color_idx = -1
         
         self.setFrameShape(QFrame.StyledPanel)
         self.setMinimumSize(100, 85)
@@ -1596,6 +1597,7 @@ class CellProgressWidget(QFrame):
             }
         """)
         self.active_colors = []
+        self.last_completed_color_idx = -1
         for idx, info in self.color_widgets.items():
             info['led'].setStyleSheet("background-color: #374151; border-radius: 5px;")
             info['label'].setText(f"{info['name']}:-")
@@ -1654,6 +1656,18 @@ class CellProgressWidget(QFrame):
             info['label'].setStyleSheet("color: #F59E0B; font-size: 11px; font-weight: bold;")
             
     def set_color_done(self, color_idx):
+        self.last_completed_color_idx = color_idx
+        color_hex = "#374151"
+        if color_idx in self.color_widgets:
+            color_hex = self.color_widgets[color_idx]['hex']
+            
+        self.setStyleSheet(f"""
+            CellProgressWidget {{
+                background-color: #111827;
+                border: 1.5px solid {color_hex};
+                border-radius: 6px;
+            }}
+        """)
         if color_idx in self.color_widgets:
             info = self.color_widgets[color_idx]
             info['led'].setStyleSheet(f"background-color: {info['hex']}; border-radius: 5px;")

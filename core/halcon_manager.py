@@ -224,6 +224,7 @@ class HalconManager:
         except Exception as e:
             if not silent:
                 print(f"[HalconManager] 执行 HDev 过程失败: {e}")
+            return None
 
 
     def train_model(self, image_path, output_model_path, roi=None):

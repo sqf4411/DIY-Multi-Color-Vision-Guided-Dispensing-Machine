@@ -6,7 +6,7 @@ import numpy as np
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QDoubleSpinBox, 
     QSpinBox, QPushButton, QGroupBox, QFormLayout, QMessageBox, QTextEdit,
-    QProgressBar, QCheckBox, QComboBox
+    QProgressBar, QCheckBox, QComboBox, QFrame, QScrollArea, QGridLayout, QWidget
 )
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 
@@ -26,6 +26,7 @@ class BatchWorker(QThread):
     path_update_signal = pyqtSignal(list)   # 新增：发送当前产品的路径数据用于实时显示
     color_change_request_signal = pyqtSignal(str, str, float, float)  # finished_color, next_color, park_x, park_y
     load_product_request = pyqtSignal(str)  # [NEW] 请求主界面加载并应用产品参数 (曝光、Z高度、偏移等)
+    cell_status_signal = pyqtSignal(int, int, str, dict)  # [NEW] 发送矩阵点胶进度单元格状态更新: row, col, status, data
 
     def __init__(self, main_window, grid_config, mode='real'):
         super().__init__()
@@ -179,6 +180,7 @@ class BatchWorker(QThread):
                 target_x = start_x + c * space_x
                 target_y = start_y + r * space_y
                 
+                self.cell_status_signal.emit(r, c, 'scanning', {})
                 self.log_signal.emit(f"📍 [{ops_finished + 1}/{total_ops}] (R{r}, C{c}) 首次定位 & 识别...")
                 
                 # 移动到扫描位置（XY在相机移动安全高度，不会触碰模具）
@@ -198,6 +200,7 @@ class BatchWorker(QThread):
                 if self.mw.last_frame is None:
                     self.log_signal.emit("❌ 无法获取图像，跳过")
                     self._safe_lift_z()
+                    self.cell_status_signal.emit(r, c, 'scanned', {'product_name': '无图像', 'active_colors': []})
                     vision_cache[cache_key] = None
                     ops_finished += 1
                     continue
@@ -241,6 +244,7 @@ class BatchWorker(QThread):
                 
                 if not paths_groups:
                     self.log_signal.emit(f"⚠ 未识别到模具 (R{r}, C{c})")
+                    self.cell_status_signal.emit(r, c, 'scanned', {'product_name': '未识别', 'active_colors': []})
                     vision_cache[cache_key] = None # Mark as processed but empty
                 else:
                     self.path_update_signal.emit(paths_groups)
@@ -249,6 +253,15 @@ class BatchWorker(QThread):
                     # Store in cache (including product name for mixed mode)
                     current_product = getattr(self.mw.halcon_product_manager, 'current_product', None)
                     vision_cache[cache_key] = (paths_groups, target_x, target_y, current_product)
+                    
+                    active_colors_in_cell = set()
+                    for group in paths_groups:
+                        for seg in group:
+                            active_colors_in_cell.add(int(getattr(seg, 'color', 0)))
+                    self.cell_status_signal.emit(r, c, 'scanned', {
+                        'product_name': current_product or '已识别',
+                        'active_colors': list(active_colors_in_cell)
+                    })
                     
                 # 扫描后抬回相机移动安全高度（为下一个模具的 XY 移动做准备）
                 self.mw.machine.move_to(z=cam_scan_safe_z, speed=self.mw.feedrate_z)
@@ -352,6 +365,7 @@ class BatchWorker(QThread):
                         continue
 
                     self.log_signal.emit(f"💉 (R{r}, C{c}) {color_name} 出胶...")
+                    self.cell_status_signal.emit(r, c, 'dispensing', {'color_idx': color_idx, 'progress': 0})
                     
                     # [DEBUG]
                     debug_colors = []
@@ -380,6 +394,9 @@ class BatchWorker(QThread):
                                 global_current = (ops_finished * RESOLUTION) + current_mold_progress
                                 self.progress_signal.emit(global_current, global_total_steps)
                                 
+                                color_progress = int((i + 1) / total_lines * 100)
+                                self.cell_status_signal.emit(r, c, 'dispensing', {'color_idx': color_idx, 'progress': color_progress})
+                                
                                 if not self.running: return
                                 while self.paused: 
                                     if not self.running: return
@@ -388,6 +405,7 @@ class BatchWorker(QThread):
                                 self.mw.machine._post_gcode(line)
                             
                             self.mw.machine.wait_until_idle()
+                            self.cell_status_signal.emit(r, c, 'color_done', {'color_idx': color_idx})
                     except Exception as e:
                         self.log_signal.emit(f"❌ 执行出错: {e}")
                         self._safe_lift_z()
@@ -815,6 +833,9 @@ class BatchRunDialog(QDialog):
         self.spn_cols.setRange(1, 100)
         self.spn_cols.setValue(4)
         
+        self.spn_rows.valueChanged.connect(self.rebuild_progress_grid)
+        self.spn_cols.valueChanged.connect(self.rebuild_progress_grid)
+        
         h_grid = QHBoxLayout()
         h_grid.addWidget(QLabel("行 (Rows):"))
         h_grid.addWidget(self.spn_rows)
@@ -964,7 +985,9 @@ class BatchRunDialog(QDialog):
         h_comp.addStretch()
         mid_layout.addLayout(h_comp)
 
-        mid_layout.addStretch()
+        self.progress_panel = GridProgressPanel(self)
+        self.progress_panel.setMinimumHeight(220)
+        mid_layout.addWidget(self.progress_panel)
 
         # --- Right: G-code 预览 ---
         right_layout.addWidget(QLabel("G-code 实时预览:"))
@@ -1036,6 +1059,12 @@ class BatchRunDialog(QDialog):
         
         main_layout.addLayout(btn_layout)
         self.setLayout(main_layout)
+
+    def rebuild_progress_grid(self, *args):
+        rows = self.spn_rows.value()
+        cols = self.spn_cols.value()
+        if hasattr(self, 'progress_panel'):
+            self.progress_panel.rebuild_grid(rows, cols)
 
     def on_teach_start(self):
         x, y, z = self.mw.machine.get_position()
@@ -1133,6 +1162,8 @@ class BatchRunDialog(QDialog):
         # 不再反向更新主界面参数，保持独立性
         # self.mw.cam_safe_z_cavity = cfg['cam_safe_z'] ...
         
+        self.progress_panel.rebuild_grid(cfg['rows'], cfg['cols'])
+
         self.worker = BatchWorker(self.mw, cfg, mode)
         self.worker.log_signal.connect(self.log)
         self.worker.progress_signal.connect(self.update_progress)
@@ -1142,6 +1173,7 @@ class BatchRunDialog(QDialog):
         self.worker.path_update_signal.connect(self.mw.on_batch_path_update)  # [NEW] Dynamic path visualization
         self.worker.color_change_request_signal.connect(self.on_color_change_request)  # [NEW V3.1]
         self.worker.load_product_request.connect(self.mw.load_product_programmatic, Qt.BlockingQueuedConnection)  # [NEW] 线程安全同步加载产品及参数
+        self.worker.cell_status_signal.connect(self.progress_panel.update_cell_status)
         
         # 关闭实时识别 (防止卡顿和Z轴变化导致的误识别)
         self.mw.live_detect = False
@@ -1380,6 +1412,7 @@ class BatchRunDialog(QDialog):
             self.cmb_viscosity_comp.setCurrentIndex(comp_idx)
             self.spn_viscosity_comp.setValue(cfg.get('viscosity_comp_val', 0.0))
             self.on_viscosity_comp_changed(comp_idx)
+            self.rebuild_progress_grid()
             
         except Exception as e:
             self.log(f"加载配置失败: {e}")
@@ -1467,3 +1500,221 @@ class BatchRunDialog(QDialog):
             self.elapsed_timer.stop()
         self.save_settings(silent=True)
         event.accept()
+
+
+class CellProgressWidget(QFrame):
+    """
+    单个模具点胶进度单元格
+    """
+    def __init__(self, row, col, parent=None):
+        super().__init__(parent)
+        self.row = row
+        self.col = col
+        self.active_colors = []
+        
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setMinimumSize(100, 85)
+        self.setStyleSheet("""
+            CellProgressWidget {
+                background-color: #1F2937;
+                border: 1px solid #374151;
+                border-radius: 6px;
+            }
+        """)
+        
+        # 主布局
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(3)
+        
+        # 标题：(R0, C0)
+        self.lbl_title = QLabel(f"(R{row}, C{col})")
+        self.lbl_title.setStyleSheet("color: #F3F4F6; font-weight: bold; font-size: 13px;")
+        layout.addWidget(self.lbl_title)
+        
+        # 产品名称
+        self.lbl_product = QLabel("等待扫描")
+        self.lbl_product.setStyleSheet("color: #9CA3AF; font-size: 12px; font-weight: bold;")
+        self.lbl_product.setWordWrap(True)
+        layout.addWidget(self.lbl_product)
+        
+        # 2x2 颜色状态网格
+        self.grid_layout = QGridLayout()
+        self.grid_layout.setSpacing(4)
+        self.grid_layout.setContentsMargins(0, 2, 0, 0)
+        
+        self.color_widgets = {}
+        color_info = [
+            (0, "红", "#EF4444", "rgba(239, 68, 68, 0.25)"),   # 红 (A1)
+            (1, "绿", "#10B981", "rgba(16, 185, 129, 0.25)"),   # 绿 (A2)
+            (2, "蓝", "#3B82F6", "rgba(59, 130, 246, 0.25)"),   # 蓝 (A3)
+            (3, "黄", "#F59E0B", "rgba(245, 158, 11, 0.25)")    # 黄 (A4)
+        ]
+        
+        for idx, name, hex_color, rgba_waiting in color_info:
+            w = QWidget()
+            h_lay = QHBoxLayout(w)
+            h_lay.setContentsMargins(0, 0, 0, 0)
+            h_lay.setSpacing(3)
+            
+            # LED 指示灯 (变大为 10x10)
+            led = QLabel()
+            led.setFixedSize(10, 10)
+            led.setStyleSheet("background-color: #374151; border-radius: 5px;")
+            
+            # 文字标签 (变大为 11px)
+            lbl = QLabel(f"{name}:-")
+            lbl.setStyleSheet("color: #4B5563; font-size: 11px;")
+            
+            h_lay.addWidget(led)
+            h_lay.addWidget(lbl)
+            h_lay.addStretch()
+            
+            r_pos = idx // 2
+            c_pos = idx % 2
+            self.grid_layout.addWidget(w, r_pos, c_pos)
+            
+            self.color_widgets[idx] = {
+                'widget': w,
+                'led': led,
+                'label': lbl,
+                'name': name,
+                'hex': hex_color,
+                'rgba_waiting': rgba_waiting
+            }
+            
+        layout.addLayout(self.grid_layout)
+        
+    def reset_status(self):
+        self.lbl_product.setText("等待扫描")
+        self.lbl_product.setStyleSheet("color: #9CA3AF; font-size: 12px; font-weight: bold;")
+        self.setStyleSheet("""
+            CellProgressWidget {
+                background-color: #1F2937;
+                border: 1px solid #374151;
+                border-radius: 6px;
+            }
+        """)
+        self.active_colors = []
+        for idx, info in self.color_widgets.items():
+            info['led'].setStyleSheet("background-color: #374151; border-radius: 5px;")
+            info['label'].setText(f"{info['name']}:-")
+            info['label'].setStyleSheet("color: #4B5563; font-size: 11px;")
+            
+    def set_scanning(self):
+        self.lbl_product.setText("正在扫描...")
+        self.lbl_product.setStyleSheet("color: #3B82F6; font-size: 12px; font-weight: bold;")
+        self.setStyleSheet("""
+            CellProgressWidget {
+                background-color: #1F2937;
+                border: 1.5px solid #3B82F6;
+                border-radius: 6px;
+            }
+        """)
+        
+    def set_scanned(self, product_name, active_colors):
+        self.lbl_product.setText(product_name)
+        if product_name in ["未识别", "无图像", "无模具"]:
+            self.lbl_product.setStyleSheet("color: #EF4444; font-size: 12px; font-weight: bold;")
+        else:
+            self.lbl_product.setStyleSheet("color: #10B981; font-size: 12px; font-weight: bold;")
+            
+        self.setStyleSheet("""
+            CellProgressWidget {
+                background-color: #111827;
+                border: 1px solid #374151;
+                border-radius: 6px;
+            }
+        """)
+        self.active_colors = active_colors
+        for idx, info in self.color_widgets.items():
+            if idx in active_colors:
+                # 激活但等待中：半透明彩色LED + 等待
+                info['led'].setStyleSheet(f"background-color: {info['rgba_waiting']}; border-radius: 5px;")
+                info['label'].setText(f"{info['name']}:等待")
+                info['label'].setStyleSheet("color: #9CA3AF; font-size: 11px;")
+            else:
+                # 不包含此颜色：置灰
+                info['led'].setStyleSheet("background-color: #1F2937; border-radius: 5px;")
+                info['label'].setText(f"{info['name']}:-")
+                info['label'].setStyleSheet("color: #4B5563; font-size: 11px;")
+                
+    def set_dispensing(self, color_idx, progress):
+        self.setStyleSheet("""
+            CellProgressWidget {
+                background-color: #1F2937;
+                border: 1.5px solid #F59E0B;
+                border-radius: 6px;
+            }
+        """)
+        if color_idx in self.color_widgets:
+            info = self.color_widgets[color_idx]
+            info['led'].setStyleSheet(f"background-color: {info['hex']}; border-radius: 5px;")
+            info['label'].setText(f"{info['name']}:{progress}%")
+            info['label'].setStyleSheet("color: #F59E0B; font-size: 11px; font-weight: bold;")
+            
+    def set_color_done(self, color_idx):
+        if color_idx in self.color_widgets:
+            info = self.color_widgets[color_idx]
+            info['led'].setStyleSheet(f"background-color: {info['hex']}; border-radius: 5px;")
+            info['label'].setText(f"{info['name']}:✔")
+            info['label'].setStyleSheet("color: #10B981; font-size: 11px; font-weight: bold;")
+
+
+class GridProgressPanel(QScrollArea):
+    """
+    包含所有单元格的矩阵滚动面板
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setStyleSheet("""
+            GridProgressPanel {
+                background-color: #111827;
+                border: 1px solid #374151;
+                border-radius: 6px;
+            }
+        """)
+        
+        self.container = QWidget()
+        self.container.setStyleSheet("background-color: #111827;")
+        self.grid_layout = QGridLayout(self.container)
+        self.grid_layout.setSpacing(4)
+        self.grid_layout.setContentsMargins(4, 4, 4, 4)
+        
+        self.setWidget(self.container)
+        self.cells = {}
+        
+    def rebuild_grid(self, rows, cols):
+        # 清除现有单元格
+        for cell in self.cells.values():
+            self.grid_layout.removeWidget(cell)
+            cell.deleteLater()
+        self.cells.clear()
+        
+        for r in range(rows):
+            for c in range(cols):
+                cell = CellProgressWidget(r, c, self)
+                self.grid_layout.addWidget(cell, r, c)
+                self.cells[(r, c)] = cell
+                
+    def update_cell_status(self, row, col, status, data):
+        key = (row, col)
+        if key not in self.cells:
+            return
+        cell = self.cells[key]
+        if status == 'scanning':
+            cell.set_scanning()
+        elif status == 'scanned':
+            prod_name = data.get('product_name', '未识别')
+            active_colors = data.get('active_colors', [])
+            cell.set_scanned(prod_name, active_colors)
+        elif status == 'dispensing':
+            color_idx = data.get('color_idx', 0)
+            progress = data.get('progress', 0)
+            cell.set_dispensing(color_idx, progress)
+        elif status == 'color_done':
+            color_idx = data.get('color_idx', 0)
+            cell.set_color_done(color_idx)
+        elif status == 'reset':
+            cell.reset_status()

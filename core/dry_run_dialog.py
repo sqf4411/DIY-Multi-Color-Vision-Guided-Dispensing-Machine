@@ -13,10 +13,11 @@ import os
 import json
 
 class DryRunDialog(QDialog):
-    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None, laser_data=None, z_base=0.0, img_dry=None):
+    def __init__(self, parent, paths_px, cam2mach_matrix, machine_origin, nozzle_offset, initial_params, img_center, is_real_run=False, save_callback=None, laser_data=None, z_base=0.0, img_dry=None, use_nozzle_offset=False):
         super().__init__(parent)
         self.save_callback = save_callback
         self.is_real_run = is_real_run
+        self.use_nozzle_offset = use_nozzle_offset or is_real_run
         self.setWindowTitle("点胶参数设置 & G-code 预览" if is_real_run else "空跑参数设置 & G-code 预览")
         self.resize(800, 600)
 
@@ -94,14 +95,25 @@ class DryRunDialog(QDialog):
                     print(f"[DryRunDialog] Error loading heights config: {e}")
 
         # Apply heights from config, or default to global parameters
+        z_offset = 0.0
+        if self.use_nozzle_offset:
+            if parent and hasattr(parent, 'z_tool_offset'):
+                z_offset = getattr(parent, 'z_tool_offset', 0.0)
+            elif parent and hasattr(parent, 'mw') and hasattr(parent.mw, 'z_tool_offset'):
+                z_offset = getattr(parent.mw, 'z_tool_offset', 0.0)
+
         for prod_idx, prod_segs in enumerate(self.products):
             for seg_idx, seg in enumerate(prod_segs):
                 key = f"prod_{prod_idx}_seg_{seg_idx}"
                 custom = self.segment_heights_config.get(key, {})
                 if custom:
-                    seg.custom_safe_z_product = custom.get("safe_z_product", self.safe_z_product)
-                    seg.custom_safe_z_cavity = custom.get("safe_z_cavity", self.safe_z_cavity)
-                    seg.custom_work_z = custom.get("work_z", self.work_z)
+                    raw_safe_z_product = self.safe_z_product - z_offset
+                    raw_safe_z_cavity = self.safe_z_cavity - z_offset
+                    raw_work_z = self.work_z - z_offset
+                    
+                    seg.custom_safe_z_product = custom.get("safe_z_product", raw_safe_z_product) + z_offset
+                    seg.custom_safe_z_cavity = custom.get("safe_z_cavity", raw_safe_z_cavity) + z_offset
+                    seg.custom_work_z = custom.get("work_z", raw_work_z) + z_offset
                     seg.has_custom_height = True
                 else:
                     seg.custom_safe_z_product = self.safe_z_product
@@ -1240,15 +1252,29 @@ class DetailedHeightAdjustDialog(QDialog):
         self.canvas.update()
 
     def save_to_recipe(self):
+        # Get active z_tool_offset if we are in nozzle run mode
+        z_offset = 0.0
+        if self.parent() and getattr(self.parent(), 'use_nozzle_offset', False):
+            dry_run_dlg = self.parent()
+            mw = dry_run_dlg.parent()
+            if mw and hasattr(mw, 'z_tool_offset'):
+                z_offset = getattr(mw, 'z_tool_offset', 0.0)
+            elif mw and hasattr(mw, 'mw') and hasattr(mw.mw, 'z_tool_offset'):
+                z_offset = getattr(mw.mw, 'z_tool_offset', 0.0)
+
         segment_heights = {}
         for prod_idx, prod_segs in enumerate(self.products):
             for seg_idx, seg in enumerate(prod_segs):
                 if getattr(seg, 'has_custom_height', False):
                     key = f"prod_{prod_idx}_seg_{seg_idx}"
+                    val_safe_z_product = getattr(seg, 'custom_safe_z_product', self.global_params['safe_z_product']) - z_offset
+                    val_safe_z_cavity  = getattr(seg, 'custom_safe_z_cavity',  self.global_params['safe_z_cavity']) - z_offset
+                    val_work_z         = getattr(seg, 'custom_work_z',         self.global_params['work_z']) - z_offset
+                    
                     segment_heights[key] = {
-                        "safe_z_product": getattr(seg, 'custom_safe_z_product', self.global_params['safe_z_product']),
-                        "safe_z_cavity": getattr(seg, 'custom_safe_z_cavity', self.global_params['safe_z_cavity']),
-                        "work_z": getattr(seg, 'custom_work_z', self.global_params['work_z'])
+                        "safe_z_product": val_safe_z_product,
+                        "safe_z_cavity": val_safe_z_cavity,
+                        "work_z": val_work_z
                     }
                     
         if self.product_dir:

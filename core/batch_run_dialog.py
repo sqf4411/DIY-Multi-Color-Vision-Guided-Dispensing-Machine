@@ -756,9 +756,9 @@ class BatchWorker(QThread):
                 custom = segment_heights.get(key, {})
                 if custom:
                     seg.has_custom_height = True
-                    seg.custom_safe_z_product = custom.get('safe_z_product', global_safe_z_product)
-                    seg.custom_safe_z_cavity  = custom.get('safe_z_cavity',  global_safe_z_cavity)
-                    seg.custom_work_z         = custom.get('work_z',         global_work_z)
+                    seg.custom_safe_z_product = custom.get('safe_z_product', float(self.mw.safe_z_product or 0.0)) + z_offset
+                    seg.custom_safe_z_cavity  = custom.get('safe_z_cavity',  float(self.mw.safe_z_cavity or 0.0)) + z_offset
+                    seg.custom_work_z         = custom.get('work_z',         float(self.mw.work_z or 0.0)) + z_offset
                 else:
                     seg.has_custom_height     = False
                     seg.custom_safe_z_product = global_safe_z_product
@@ -1455,13 +1455,14 @@ class BatchRunDialog(QDialog):
             cfg.set('batch_color_change_pause', 1 if self.chk_color_change_pause.isChecked() else 0)
 
             # 2. 保存高度参数
+            z_offset = getattr(self.mw, 'z_tool_offset', 0.0)
             val_csc = self.spn_cam_safe_cavity.value()
             val_csp = self.spn_cam_safe_product.value()
             val_cw = self.spn_cam_work.value()
             
-            val_sc = self.spn_nozzle_safe_cavity.value()
-            val_sp = self.spn_nozzle_safe_product.value()
-            val_w = self.spn_nozzle_work.value()
+            val_sc = self.spn_nozzle_safe_cavity.value() - z_offset
+            val_sp = self.spn_nozzle_safe_product.value() - z_offset
+            val_w = self.spn_nozzle_work.value() - z_offset
 
             cfg.set('cam_safe_z_cavity', val_csc)
             cfg.set('cam_safe_z_product', val_csp)

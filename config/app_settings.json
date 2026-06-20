@@ -2,9 +2,9 @@
     "feedrate_xy": 1500,
     "feedrate_z": 500,
     "accel": 452.0,
-    "safe_z_cavity": 58.4,
-    "safe_z_product": 70.9,
-    "work_z": 55.7,
+    "safe_z_cavity": 64.7,
+    "safe_z_product": 75.0,
+    "work_z": 59.0,
     "jog_step": 1.0,
     "z_base": 52.099999999999966,
     "nozzle_offset_x": -97.0,
@@ -95,8 +95,8 @@
             80.01100000000002
         ]
     ],
-    "batch_start_x": 199.32,
-    "batch_start_y": 96.29,
+    "batch_start_x": 202.71,
+    "batch_start_y": 92.55,
     "batch_start_z": 164.0,
     "batch_rows": 2,
     "batch_cols": 4,
@@ -104,8 +104,8 @@
     "batch_space_y": 73.5,
     "vision_optimal_z": 164.0,
     "line_speed_xy": 800,
-    "batch_color_change_x": 199.317,
-    "batch_color_change_y": 96.289,
+    "batch_color_change_x": 202.71,
+    "batch_color_change_y": 92.548,
     "batch_color_change_pause": 1,
     "z_tool_offset": -1.1000000000000014
 }

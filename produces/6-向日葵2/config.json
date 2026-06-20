@@ -10,7 +10,7 @@
   "jog_step_mm": 1.0,
   "safe_z_cavity": 64.7,
   "safe_z_product": 75.0,
-  "work_z": 60.0,
+  "work_z": 59.0,
   "nozzle_offset_x": -98.5,
   "nozzle_offset_y": -5.3,
   "z_base": 50.5,

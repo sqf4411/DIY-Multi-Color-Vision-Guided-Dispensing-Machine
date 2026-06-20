@@ -5640,63 +5640,12 @@ class MainWindow(QWidget):
             'line_dwell_ms': self.line_dwell_ms,
             'color_delay': getattr(self, 'color_delay', 500)
         }
-        
-        def save_cam_params(dialog):
-            self.cam_safe_z_cavity = dialog.safe_z_cavity
-            self.cam_safe_z_product = dialog.safe_z_product
-            self.cam_work_z = dialog.work_z
-            
-            # 速度参数是共享的，同步更新变量和 UI 滑块/数值框
-            self.feedrate_xy = dialog.speed_xy
-            self.feedrate_z = dialog.speed_z
-            
-            # Update Sliders & Labels & SpinBoxes (Block signals to avoid double-save)
-            if hasattr(self, 'sld_spd_xy'):
-                self.sld_spd_xy.blockSignals(True)
-                self.sld_spd_xy.setValue(int(self.feedrate_xy))
-                self.sld_spd_xy.blockSignals(False)
-            if hasattr(self, 'spn_spd_xy'):
-                self.spn_spd_xy.blockSignals(True)
-                self.spn_spd_xy.setValue(int(self.feedrate_xy))
-                self.spn_spd_xy.blockSignals(False)
-            if hasattr(self, 'lbl_spd_xy'):
-                self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
-
-            if hasattr(self, 'sld_spd_z'):
-                self.sld_spd_z.blockSignals(True)
-                self.sld_spd_z.setValue(int(self.feedrate_z))
-                self.sld_spd_z.blockSignals(False)
-            if hasattr(self, 'spn_spd_z'):
-                self.spn_spd_z.blockSignals(True)
-                self.spn_spd_z.setValue(int(self.feedrate_z))
-                self.spn_spd_z.blockSignals(False)
-            if hasattr(self, 'lbl_spd_z'):
-                self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
-
-            # Save dwell times
-            self.dwell_ms = dialog.dwell_ms
-            self.line_dwell_ms = dialog.line_dwell_ms
-            self.color_delay = dialog.color_delay
-
-            self.save_app_settings()
-            # 同时将相机 Z 高度、速度和延时写入产品 config.json（避免下次加载配方时被覆盖）
-            self._save_z_heights_to_product({
-                'cam_safe_z_cavity':  self.cam_safe_z_cavity,
-                'cam_safe_z_product': self.cam_safe_z_product,
-                'cam_work_z':         self.cam_work_z,
-                'feedrate_xy':        self.feedrate_xy,
-                'feedrate_z':         self.feedrate_z,
-                'line_speed_xy':      dialog.line_speed_xy,
-                'dwell_ms':           self.dwell_ms,
-                'line_dwell_ms':      self.line_dwell_ms,
-                'color_delay':        self.color_delay,
-            })
 
         self._prepare_dry_run(
             use_nozzle_offset=False, 
             title="相机空跑 (Camera Dry Run)",
             initial_params=height_params,
-            save_callback=save_cam_params
+            save_callback=self.save_cam_params
         )
 
         if hasattr(self, 'dry_run_ctrl_dlg') and self.dry_run_ctrl_dlg.isVisible():
@@ -5757,6 +5706,111 @@ class MainWindow(QWidget):
         except Exception as e:
             self.log(f"❌ 保存 laser_points.json 失败: {e}")
 
+    def save_cam_params(self, dialog):
+        self.cam_safe_z_cavity = dialog.safe_z_cavity
+        self.cam_safe_z_product = dialog.safe_z_product
+        self.cam_work_z = dialog.work_z
+        
+        # 速度参数是共享的，同步更新变量和 UI 滑块/数值框
+        self.feedrate_xy = dialog.speed_xy
+        self.feedrate_z = dialog.speed_z
+        
+        # Update Sliders & Labels & SpinBoxes (Block signals to avoid double-save)
+        if hasattr(self, 'sld_spd_xy'):
+            self.sld_spd_xy.blockSignals(True)
+            self.sld_spd_xy.setValue(int(self.feedrate_xy))
+            self.sld_spd_xy.blockSignals(False)
+        if hasattr(self, 'spn_spd_xy'):
+            self.spn_spd_xy.blockSignals(True)
+            self.spn_spd_xy.setValue(int(self.feedrate_xy))
+            self.spn_spd_xy.blockSignals(False)
+        if hasattr(self, 'lbl_spd_xy'):
+            self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+
+        if hasattr(self, 'sld_spd_z'):
+            self.sld_spd_z.blockSignals(True)
+            self.sld_spd_z.setValue(int(self.feedrate_z))
+            self.sld_spd_z.blockSignals(False)
+        if hasattr(self, 'spn_spd_z'):
+            self.spn_spd_z.blockSignals(True)
+            self.spn_spd_z.setValue(int(self.feedrate_z))
+            self.spn_spd_z.blockSignals(False)
+        if hasattr(self, 'lbl_spd_z'):
+            self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+
+        # Save dwell times
+        self.dwell_ms = dialog.dwell_ms
+        self.line_dwell_ms = dialog.line_dwell_ms
+        self.color_delay = dialog.color_delay
+
+        self.save_app_settings()
+        # 同时将相机 Z 高度、速度和延时写入产品 config.json（避免下次加载配方时被覆盖）
+        self._save_z_heights_to_product({
+            'cam_safe_z_cavity':  self.cam_safe_z_cavity,
+            'cam_safe_z_product': self.cam_safe_z_product,
+            'cam_work_z':         self.cam_work_z,
+            'feedrate_xy':        self.feedrate_xy,
+            'feedrate_z':         self.feedrate_z,
+            'line_speed_xy':      dialog.line_speed_xy,
+            'dwell_ms':           self.dwell_ms,
+            'line_dwell_ms':      self.line_dwell_ms,
+            'color_delay':        self.color_delay,
+        })
+
+    def save_nozzle_params(self, dialog):
+        # 更新主界面控件，控件会自动更新变量
+        # ✅ [FIX] dialog返回的值包含了z_tool_offset，保存时要减去
+        self.safe_z_cavity  = dialog.safe_z_cavity - self.z_tool_offset
+        self.safe_z_product = dialog.safe_z_product - self.z_tool_offset
+        self.work_z         = dialog.work_z - self.z_tool_offset
+
+                    
+        # 速度参数是共享的，同步更新变量和 UI 滑块/数值框
+        self.feedrate_xy = dialog.speed_xy
+        self.feedrate_z = dialog.speed_z
+        
+        # Update Sliders & Labels & SpinBoxes (Block signals to avoid double-save)
+        if hasattr(self, 'sld_spd_xy'):
+            self.sld_spd_xy.blockSignals(True)
+            self.sld_spd_xy.setValue(int(self.feedrate_xy))
+            self.sld_spd_xy.blockSignals(False)
+        if hasattr(self, 'spn_spd_xy'):
+            self.spn_spd_xy.blockSignals(True)
+            self.spn_spd_xy.setValue(int(self.feedrate_xy))
+            self.spn_spd_xy.blockSignals(False)
+        if hasattr(self, 'lbl_spd_xy'):
+            self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
+
+        if hasattr(self, 'sld_spd_z'):
+            self.sld_spd_z.blockSignals(True)
+            self.sld_spd_z.setValue(int(self.feedrate_z))
+            self.sld_spd_z.blockSignals(False)
+        if hasattr(self, 'spn_spd_z'):
+            self.spn_spd_z.blockSignals(True)
+            self.spn_spd_z.setValue(int(self.feedrate_z))
+            self.spn_spd_z.blockSignals(False)
+        if hasattr(self, 'lbl_spd_z'):
+            self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
+
+        # Save dwell times
+        self.dwell_ms = dialog.dwell_ms
+        self.line_dwell_ms = dialog.line_dwell_ms
+        self.color_delay = dialog.color_delay
+
+        self.save_app_settings()
+        # 同时将针头 Z 高度、速度和延时写入产品 config.json（避免下次加载配方时被覆盖）
+        self._save_z_heights_to_product({
+            'safe_z_cavity':  self.safe_z_cavity,
+            'safe_z_product': self.safe_z_product,
+            'work_z':         self.work_z,
+            'feedrate_xy':    self.feedrate_xy,
+            'feedrate_z':     self.feedrate_z,
+            'line_speed_xy':  dialog.line_speed_xy,
+            'dwell_ms':       self.dwell_ms,
+            'line_dwell_ms':  self.line_dwell_ms,
+            'color_delay':    self.color_delay,
+        })
+
     def on_dry_run(self):
         """
         按钮：针头空跑
@@ -5792,65 +5846,11 @@ class MainWindow(QWidget):
             'color_delay': getattr(self, 'color_delay', 500)
         }
 
-        def save_nozzle_params(dialog):
-            # 更新主界面控件，控件会自动更新变量
-            # ✅ [FIX] dialog返回的值包含了z_tool_offset，保存时要减去
-            self.safe_z_cavity  = dialog.safe_z_cavity - self.z_tool_offset
-            self.safe_z_product = dialog.safe_z_product - self.z_tool_offset
-            self.work_z         = dialog.work_z - self.z_tool_offset
-
-                        
-            # 速度参数是共享的，同步更新变量和 UI 滑块/数值框
-            self.feedrate_xy = dialog.speed_xy
-            self.feedrate_z = dialog.speed_z
-            
-            # Update Sliders & Labels & SpinBoxes (Block signals to avoid double-save)
-            if hasattr(self, 'sld_spd_xy'):
-                self.sld_spd_xy.blockSignals(True)
-                self.sld_spd_xy.setValue(int(self.feedrate_xy))
-                self.sld_spd_xy.blockSignals(False)
-            if hasattr(self, 'spn_spd_xy'):
-                self.spn_spd_xy.blockSignals(True)
-                self.spn_spd_xy.setValue(int(self.feedrate_xy))
-                self.spn_spd_xy.blockSignals(False)
-            if hasattr(self, 'lbl_spd_xy'):
-                self.lbl_spd_xy.setText(f"XY速度: {int(self.feedrate_xy)}")
-
-            if hasattr(self, 'sld_spd_z'):
-                self.sld_spd_z.blockSignals(True)
-                self.sld_spd_z.setValue(int(self.feedrate_z))
-                self.sld_spd_z.blockSignals(False)
-            if hasattr(self, 'spn_spd_z'):
-                self.spn_spd_z.blockSignals(True)
-                self.spn_spd_z.setValue(int(self.feedrate_z))
-                self.spn_spd_z.blockSignals(False)
-            if hasattr(self, 'lbl_spd_z'):
-                self.lbl_spd_z.setText(f"Z 速度: {int(self.feedrate_z)}")
-
-            # Save dwell times
-            self.dwell_ms = dialog.dwell_ms
-            self.line_dwell_ms = dialog.line_dwell_ms
-            self.color_delay = dialog.color_delay
-
-            self.save_app_settings()
-            # 同时将针头 Z 高度、速度和延时写入产品 config.json（避免下次加载配方时被覆盖）
-            self._save_z_heights_to_product({
-                'safe_z_cavity':  self.safe_z_cavity,
-                'safe_z_product': self.safe_z_product,
-                'work_z':         self.work_z,
-                'feedrate_xy':    self.feedrate_xy,
-                'feedrate_z':     self.feedrate_z,
-                'line_speed_xy':  dialog.line_speed_xy,
-                'dwell_ms':       self.dwell_ms,
-                'line_dwell_ms':  self.line_dwell_ms,
-                'color_delay':    self.color_delay,
-            })
-
         self._prepare_dry_run(
             use_nozzle_offset=True, 
             title="针头空跑 (Nozzle Dry Run)",
             initial_params=height_params,
-            save_callback=save_nozzle_params
+            save_callback=self.save_nozzle_params
         )
 
     def _prepare_dry_run(self, use_nozzle_offset=False, title="空跑", initial_params=None, save_callback=None):
@@ -5986,7 +5986,8 @@ class MainWindow(QWidget):
                 save_callback=save_callback,  # ✅ 传入回调，供“仅保存”按钮使用
                 laser_data=laser_data_points,
                 z_base=z_base,
-                img_dry=img_dry
+                img_dry=img_dry,
+                use_nozzle_offset=use_nozzle_offset
             )
             
             dialog.setWindowTitle(f"{title} - 参数确认")
@@ -6132,8 +6133,9 @@ class MainWindow(QWidget):
                 initial_params,
                 (center_x, center_y),
                 is_real_run=True,
-                save_callback=self.on_dry_run.save_nozzle_params, # 复用针头参数保存逻辑
-                img_dry=img_dry
+                save_callback=self.save_nozzle_params, # 复用针头参数保存逻辑
+                img_dry=img_dry,
+                use_nozzle_offset=True
             )
 
             if dialog.exec_() == QDialog.Accepted:

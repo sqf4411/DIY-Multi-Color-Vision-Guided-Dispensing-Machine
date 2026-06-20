@@ -312,9 +312,9 @@ class PathCanvas(QWidget):
                 painter.setBrush(QBrush(color))
                 painter.drawEllipse(px-5, py-5, 10, 10)
                 
-                # 选中高亮：额外绘制白色圆圈
+                # 选中高亮：额外绘制亮青色圆圈 (Cyan)
                 if is_selected:
-                    painter.setPen(QPen(QColor(255, 255, 255), 3))
+                    painter.setPen(QPen(QColor(0, 255, 255), 4)) # 亮青色，加粗
                     painter.setBrush(Qt.NoBrush)
                     painter.drawEllipse(px-10, py-10, 20, 20)
                 
@@ -335,9 +335,9 @@ class PathCanvas(QWidget):
                     p1 = QPoint(int(x1 * self.scale), int(y1 * self.scale))
                     p2 = QPoint(int(x2 * self.scale), int(y2 * self.scale))
                     
-                    # 选中高亮：先绘制白色粗线
+                    # 选中高亮：先绘制亮青色粗底线 (Cyan)
                     if is_selected:
-                        painter.setPen(QPen(QColor(255, 255, 255), 5))
+                        painter.setPen(QPen(QColor(0, 255, 255), 6)) # 亮青色，加粗
                         painter.drawLine(p1, p2)
                         painter.setPen(QPen(color, 2))  # 恢复原色
                     
@@ -350,9 +350,9 @@ class PathCanvas(QWidget):
                     py = int(y * self.scale)
                     painter.drawEllipse(px-4, py-4, 8, 8)
                     
-                    # 选中高亮：节点外圈
+                    # 选中高亮：节点外圈 (Cyan)
                     if is_selected:
-                        painter.setPen(QPen(QColor(255, 255, 255), 2))
+                        painter.setPen(QPen(QColor(0, 255, 255), 3)) # 亮青色，加粗
                         painter.setBrush(Qt.NoBrush)
                         painter.drawEllipse(px-7, py-7, 14, 14)
                         painter.setPen(QPen(color, 2))  # 恢复

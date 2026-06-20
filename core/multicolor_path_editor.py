@@ -139,7 +139,7 @@ class MultiColorPathEditor(QDialog):
                     font-weight: bold;
                 }}
                 QPushButton:checked {{
-                    border: 4px solid #000000;
+                    border: 4px solid #FFFFFF;
                 }}
             """)
             btn.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -151,6 +151,7 @@ class MultiColorPathEditor(QDialog):
             self.color_btns.append(btn)
         
         self.color_btns[0].setChecked(True)
+        self.color_btns[0].setText(f"✓ {names[0]}")
         
         group.setLayout(layout)
         return group
@@ -299,9 +300,15 @@ class MultiColorPathEditor(QDialog):
     def on_color_changed(self, color):
         """颜色切换"""
         self.current_color = color
-        # 更新按钮状态
+        # 更新按钮状态并添加✓标识
+        names = PathSegment.COLOR_NAMES
         for i, btn in enumerate(self.color_btns):
-            btn.setChecked(i == color)
+            is_checked = (i == color)
+            btn.setChecked(is_checked)
+            if is_checked:
+                btn.setText(f"✓ {names[i]}")
+            else:
+                btn.setText(names[i])
         # 更新画布
         self.canvas.set_color(color)
         
@@ -323,12 +330,25 @@ class MultiColorPathEditor(QDialog):
     
     def on_segment_added(self, segment):
         """添加新路径段"""
-        self.path_list.add(segment)
-        self.refresh_table()
-        self.update_canvas()
-        
-        # 清除表格选中（新建模式）
-        self.table.clearSelection()
+        selected_rows = set()
+        for item in self.table.selectedItems():
+            selected_rows.add(item.row())
+            
+        if selected_rows:
+            # 插入到当前选中行的位置
+            insert_idx = min(selected_rows)
+            self.path_list.segments.insert(insert_idx, segment)
+            self.refresh_table()
+            self.update_canvas()
+            
+            # 插入完毕后立即清除选中状态，使后续新画的点/线能够自动追加到最末尾
+            self.table.clearSelection()
+        else:
+            # 默认追加到末尾
+            self.path_list.add(segment)
+            self.refresh_table()
+            self.update_canvas()
+            self.table.clearSelection()
     
     def on_canvas_segment_clicked(self, index):
         """画布中的路径段被点击"""
@@ -453,6 +473,13 @@ class MultiColorPathEditor(QDialog):
             self.path_list.remove(row)
             self.refresh_table()
             self.update_canvas()
+            
+            # 自动选中被删除行的下一行（即当前同一个行号的新行），如果已经是最后一行则选中新的最后一行
+            new_count = self.path_list.count()
+            if new_count > 0:
+                target_row = min(row, new_count - 1)
+                self.table.selectRow(target_row)
+                self.table.setCurrentCell(target_row, 0)
     
     def move_up(self):
         """上移"""
@@ -626,6 +653,47 @@ class MultiColorPathEditor(QDialog):
         """键盘事件处理"""
         key = event.key()
         
+        # 获取当前选中的行
+        selected_rows = set()
+        for item in self.table.selectedItems():
+            selected_rows.add(item.row())
+            
+        # 移动控制：如果选中了路径，且按下了WASD或方向键
+        is_move_key = key in [Qt.Key_W, Qt.Key_A, Qt.Key_S, Qt.Key_D, Qt.Key_Up, Qt.Key_Left, Qt.Key_Down, Qt.Key_Right]
+        if selected_rows and is_move_key:
+            # 确定移动步长：按住Shift移动更快 (5像素)，否则精准移动 (1像素)
+            from PyQt5.QtWidgets import QApplication
+            modifiers = QApplication.keyboardModifiers()
+            step = 5.0 if (modifiers & Qt.ShiftModifier) else 1.0
+            
+            dx, dy = 0.0, 0.0
+            if key in [Qt.Key_W, Qt.Key_Up]:
+                dy = -step
+            elif key in [Qt.Key_S, Qt.Key_Down]:
+                dy = step
+            elif key in [Qt.Key_A, Qt.Key_Left]:
+                dx = -step
+            elif key in [Qt.Key_D, Qt.Key_Right]:
+                dx = step
+                
+            if dx != 0.0 or dy != 0.0:
+                for row in selected_rows:
+                    if 0 <= row < self.path_list.count():
+                        seg = self.path_list.get_all()[row]
+                        seg.points = [[pt[0] + dx, pt[1] + dy] for pt in seg.points]
+                
+                # 刷新表格并恢复选中状态（防止被刷新清空）
+                self.table.blockSignals(True)
+                self.refresh_table()
+                for row in selected_rows:
+                    self.table.selectRow(row)
+                self.table.blockSignals(False)
+                
+                self.update_canvas()
+                event.accept()
+                return
+        
+        # 其它快捷键处理
         if key == Qt.Key_Z:
             # Z: 按顺序撤销（撤销最后一个路径段）
             if self.path_list.count() > 0:
@@ -633,28 +701,43 @@ class MultiColorPathEditor(QDialog):
                 self.refresh_table()
                 self.update_canvas()
         
-        elif key == Qt.Key_D:
-            # D: 删除选中的路径段
-            selected_rows = set()
-            for item in self.table.selectedItems():
-                selected_rows.add(item.row())
-            
+        elif key in [Qt.Key_Delete, Qt.Key_Backspace]:
+            # Delete/Backspace: 删除选中的路径段 (取代原 D 键删除，避免与右移 D 键冲突)
             if selected_rows:
-                # 从后往前删除，避免索引变化
+                target_row = min(selected_rows)
                 for row in sorted(selected_rows, reverse=True):
                     if 0 <= row < self.path_list.count():
                         self.path_list.remove(row)
                 
                 self.refresh_table()
                 self.update_canvas()
-        
+                
+                new_count = self.path_list.count()
+                if new_count > 0:
+                    target_row = min(target_row, new_count - 1)
+                    self.table.selectRow(target_row)
+                    self.table.setCurrentCell(target_row, 0)
+                
+        elif key == Qt.Key_D and not selected_rows:
+            # 如果没有选中任何行，D 键作为备用删除（保持兼容，虽然此时没东西可删）
+            pass
+            
         elif key == Qt.Key_S:
-            # S: 保存
+            # S: 保存（当且仅当没有选中路径时，或者如果选了路径，上面的分支已处理移动并 return）
             self.accept()
         
         elif key == Qt.Key_Escape:
-            # ESC: 取消
-            self.reject()
+            # ESC: 如果有选中路径，或有正在绘制的线，优先清除它们而不退出；否则退出对话框
+            has_drawing = hasattr(self, 'canvas') and self.canvas.current_line
+            if selected_rows or has_drawing:
+                if selected_rows:
+                    self.table.clearSelection()
+                if has_drawing:
+                    self.canvas.current_line = []
+                    self.canvas.update()
+            else:
+                # ESC: 取消
+                self.reject()
             
     def on_color_context_menu(self, pos, btn, color_idx):
         """右键点击颜色按钮：自定义颜色"""
